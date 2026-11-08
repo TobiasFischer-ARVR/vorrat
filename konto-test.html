@@ -66,6 +66,16 @@ async function graph(pfad, optionen = {}) {
   return { status: r.status, ok: r.ok, daten };
 }
 
+// Dateiinhalt lesen wie die UGC-App: /content, fetch folgt der 302 zur
+// Download-Adresse. Das ETag NIE aus dieser Antwort nehmen (gehoert dann dem
+// Speicher-Blob, nicht der Datei) - immer vorher per Metadaten holen.
+async function inhaltLesen(driveId, itemId) {
+  const r = await fetch(`${G}/drives/${driveId}/items/${itemId}/content`, {
+    headers: { Authorization: "Bearer " + (await token()) },
+  });
+  return { ok: r.ok, status: r.status, text: r.ok ? await r.text() : "" };
+}
+
 // Freigabelink -> "u!" + base64url (Graph /shares)
 function teilKennung(url) {
   const b = btoa(unescape(encodeURIComponent(url)));
@@ -151,13 +161,9 @@ async function test() {
   if (!dateien.ok) return zeige("T3 Dateien auflisten fehlgeschlagen", false, dateien.daten);
   const liste = dateien.daten.value.filter((x) => x.file);
   for (const d of liste) {
-    const meta = await graph(`/drives/${o.driveId}/items/${d.id}?$select=id,eTag,@microsoft.graph.downloadUrl`);
-    let inhalt = "(nicht lesbar)";
-    if (meta.ok) {
-      const r = await fetch(meta.daten["@microsoft.graph.downloadUrl"]);
-      inhalt = r.ok ? (await r.text()).slice(0, 300) : "HTTP " + r.status;
-    }
-    zeige("T3 gelesen: " + d.name, meta.ok, `von ${d.lastModifiedBy?.user?.displayName || "?"}, ${d.lastModifiedDateTime}, ${d.size} Byte\n${inhalt}`);
+    const r = await inhaltLesen(o.driveId, d.id);
+    const inhalt = r.ok ? r.text.slice(0, 300) : "HTTP " + r.status;
+    zeige("T3 gelesen: " + d.name, r.ok, `von ${d.lastModifiedBy?.user?.displayName || "?"}, ${d.lastModifiedDateTime}, ${d.size} Byte\n${inhalt}`);
   }
   if (!liste.length) zeige("T3 Noch keine Dateien im Datenordner (ok beim ersten Test)", null);
 
@@ -180,8 +186,9 @@ async function test() {
   // T6 mit altem ETag -> muss 412 geben und darf nichts aendern
   const inhalt3 = { ...inhalt1, zaehler: 999, zeit: "DARF NICHT ANKOMMEN" };
   r = await graph(pfad, { method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etagAlt }, body: JSON.stringify(inhalt3) });
-  const m2 = await graph(`/drives/${o.driveId}/items/${v.id}:/${datei}?$select=id,@microsoft.graph.downloadUrl`);
-  const jetzt = m2.ok ? await (await fetch(m2.daten["@microsoft.graph.downloadUrl"])).json() : null;
+  const lesen = await inhaltLesen(o.driveId, m1.daten.id);
+  let jetzt = null;
+  try { jetzt = JSON.parse(lesen.text); } catch (_) { jetzt = { lesefehler: "HTTP " + lesen.status, anfang: lesen.text.slice(0, 120) }; }
   const unveraendert = jetzt && jetzt.zaehler === 2;
   zeige("T6 altes ETag: HTTP " + r.status + (r.status === 412 ? " (abgelehnt)" : " (NICHT abgelehnt!)") + ", Inhalt " + (unveraendert ? "unverändert" : "VERÄNDERT"), r.status === 412 && unveraendert, jetzt);
 
