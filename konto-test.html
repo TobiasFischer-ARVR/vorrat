@@ -159,7 +159,15 @@ async function test() {
   // T3 alle Dateien lesen
   const dateien = await graph(`/drives/${o.driveId}/items/${v.id}/children?$select=id,name,size,eTag,lastModifiedDateTime,lastModifiedBy,file`);
   if (!dateien.ok) return zeige("T3 Dateien auflisten fehlgeschlagen", false, dateien.daten);
-  const liste = dateien.daten.value.filter((x) => x.file);
+  const APP_DATEI = /^(test|vorgaenge)-[a-z0-9-]+\.json$/i;
+  const alle = dateien.daten.value.filter((x) => x.file);
+  const liste = alle.filter((x) => APP_DATEI.test(x.name));
+  const fremd = alle.length - liste.length;
+  if (fremd > 0) {
+    return zeige(`T3 STOPP: Der Ordner enthält ${fremd} Datei(en), die nicht zur App gehören. ` +
+      "Das ist vermutlich nicht der App-Ordner. Es wird nichts gelesen und nichts geschrieben. " +
+      "Bitte den vollständigen Pfad bis zum App-Ordner eintragen (z. B. Gemeinschaftsordner/Vorrats App).", false);
+  }
   for (const d of liste) {
     const r = await inhaltLesen(o.driveId, d.id);
     const inhalt = r.ok ? r.text.slice(0, 300) : "HTTP " + r.status;
