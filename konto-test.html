@@ -19,8 +19,8 @@
 <body>
 <h1>Vorrats-App · Kontentest</h1>
 <div id="konto" class="schritt info">Lade …</div>
-<label>Grundpfad in OneDrive (Ordner mit / trennen, z. B. Familie/Haushalt). Leer = ganz oben, dann zeigt der Test die Ordner dort.</label>
-<input id="ordnername" placeholder="z. B. Familie/Haushalt">
+<label>Ordner der App in OneDrive (mit / trennen, Windows-Pfad aus dem Explorer geht auch). Leer = ganz oben, dann zeigt der Test die Ordner dort.</label>
+<input id="ordnername" placeholder="z. B. Gemeinschaftsordner/Vorrats App">
 <label>Nur falls der Ordner nicht gefunden wird: Freigabelink</label>
 <input id="link" placeholder="https://1drv.ms/…">
 <button id="start">Test starten</button>
@@ -30,9 +30,9 @@
 <script src="msal-browser.min.js"></script>
 <script>
 // Abschnitt 0, Kontentest (Bauplan Vorrats-App). Prueft mit echtem Konto:
-// Ordner finden (eigener / Verknuepfung / Link), Vorrat/ lesen, eigene Datei
+// Ordner finden (eigener / Verknuepfung / Link), Datenordner lesen, eigene Datei
 // anlegen + aendern, altes ETag wird abgelehnt (412), dauerhafter Speicher,
-// Barcode-Formate. Schreibt NUR die Datei test-<konto>.json in Vorrat/.
+// Barcode-Formate. Schreibt NUR die Datei test-<konto>.json in den Datenordner.
 const CLIENT_ID = "d95d99d1-c6b1-47ce-b533-86ae39816199";
 const SCOPES = ["User.Read", "Files.ReadWrite"];
 const G = "https://graph.microsoft.com/v1.0";
@@ -99,6 +99,16 @@ async function pfadAbgehen(pfad) {
   return ort;
 }
 
+// Windows-Pfad aus dem Explorer erlaubt: alles bis einschliesslich "OneDrive\"
+// weg, Backslashes zu "/".
+// "C:\Users\x\OneDrive\Gemeinschaftsordner\Vorrats App" -> "Gemeinschaftsordner/Vorrats App"
+function pfadNormal(eingabe) {
+  let p = eingabe.trim().replace(/\\/g, "/");
+  const i = p.toLowerCase().indexOf("onedrive/");
+  if (i >= 0) p = p.slice(i + "onedrive/".length);
+  return p.replace(/^\/+|\/+$/g, "");
+}
+
 async function ordnerFinden(name, link) {
   // 1. Grundpfad abgehen (Besitzer: eigene Ordner, Andrea: Verknuepfung unterwegs)
   if (name) {
@@ -121,20 +131,6 @@ async function ordnerFinden(name, link) {
   return null;
 }
 
-async function vorratOrdner(o) {
-  const liste = await graph(`/drives/${o.driveId}/items/${o.id}/children?$select=id,name,folder`);
-  if (!liste.ok) return { fehler: liste };
-  const da = liste.daten.value.find((x) => x.name === "Vorrat" && x.folder);
-  if (da) return { id: da.id, neu: false };
-  const neu = await graph(`/drives/${o.driveId}/items/${o.id}/children`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "Vorrat", folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
-  });
-  if (neu.ok) return { id: neu.daten.id, neu: true };
-  return { fehler: neu };
-}
-
 async function test() {
   $("ausgabe").innerHTML = "";
   localStorage.setItem("vorrat-test-ordner", $("ordnername").value);
@@ -142,14 +138,13 @@ async function test() {
   const kennung = (konto.username || "konto").split("@")[0].replace(/[^a-z0-9]/gi, "").toLowerCase();
 
   // T1 Ordner
-  const o = await ordnerFinden($("ordnername").value.trim(), $("link").value.trim());
+  const o = await ordnerFinden(pfadNormal($("ordnername").value), $("link").value.trim());
   if (!o) return zeige("T1 Ordner nicht gefunden – Test endet hier", false);
   zeige("T1 Ordner gefunden: " + o.art, true, { driveId: o.driveId, itemId: o.id });
 
-  // T2 Vorrat/ finden oder anlegen
-  const v = await vorratOrdner(o);
-  if (v.fehler) return zeige("T2 Unterordner Vorrat/ nicht lesbar/anlegbar (HTTP " + v.fehler.status + ")", false, v.fehler.daten);
-  zeige("T2 Unterordner Vorrat/ " + (v.neu ? "neu angelegt" : "vorhanden"), true);
+  // T2 der Grundpfad selbst ist der Datenordner (Tobias 08.11.: "Vorrats App")
+  const v = { id: o.id };
+  zeige("T2 Datenordner = Grundpfad", true);
 
   // T3 alle Dateien lesen
   const dateien = await graph(`/drives/${o.driveId}/items/${v.id}/children?$select=id,name,size,eTag,lastModifiedDateTime,lastModifiedBy,file`);
@@ -164,7 +159,7 @@ async function test() {
     }
     zeige("T3 gelesen: " + d.name, meta.ok, `von ${d.lastModifiedBy?.user?.displayName || "?"}, ${d.lastModifiedDateTime}, ${d.size} Byte\n${inhalt}`);
   }
-  if (!liste.length) zeige("T3 Noch keine Dateien in Vorrat/ (ok beim ersten Test)", null);
+  if (!liste.length) zeige("T3 Noch keine Dateien im Datenordner (ok beim ersten Test)", null);
 
   // T4 eigene Datei anlegen (nur wenn es sie noch nicht gibt)
   const datei = `test-${kennung}.json`;
