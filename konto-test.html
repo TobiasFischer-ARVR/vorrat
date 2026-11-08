@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vorrats-App · Kontentest</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #1e2a2a; color: #eee; }
+  h1 { font-size: 1.3em; margin: 0 0 12px; }
+  input, button { font-size: 1em; padding: 10px; border-radius: 8px; border: none; margin: 4px 0; width: 100%; box-sizing: border-box; }
+  button { background: #2e9e8f; color: #fff; font-weight: bold; }
+  button.grau { background: #555; }
+  .schritt { background: #2b3a3a; border-radius: 8px; padding: 10px; margin: 8px 0; }
+  .ok { border-left: 6px solid #3c3; } .fehler { border-left: 6px solid #e33; } .info { border-left: 6px solid #888; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: .8em; color: #bbb; margin: 6px 0 0; }
+  label { font-size: .9em; color: #aaa; }
+</style>
+</head>
+<body>
+<h1>Vorrats-App · Kontentest</h1>
+<div id="konto" class="schritt info">Lade …</div>
+<label>Name des freigegebenen OneDrive-Ordners</label>
+<input id="ordnername" placeholder="z. B. Familie">
+<label>Nur falls der Ordner nicht gefunden wird: Freigabelink</label>
+<input id="link" placeholder="https://1drv.ms/…">
+<button id="start">Test starten</button>
+<button id="abmelden" class="grau">Abmelden</button>
+<div id="ausgabe"></div>
+
+<script src="msal-browser.min.js"></script>
+<script>
+// Abschnitt 0, Kontentest (Bauplan Vorrats-App). Prueft mit echtem Konto:
+// Ordner finden (eigener / Verknuepfung / Link), Vorrat/ lesen, eigene Datei
+// anlegen + aendern, altes ETag wird abgelehnt (412), dauerhafter Speicher,
+// Barcode-Formate. Schreibt NUR die Datei test-<konto>.json in Vorrat/.
+const CLIENT_ID = "d95d99d1-c6b1-47ce-b533-86ae39816199";
+const SCOPES = ["User.Read", "Files.ReadWrite"];
+const G = "https://graph.microsoft.com/v1.0";
+const $ = (id) => document.getElementById(id);
+let app;
+
+function zeige(titel, ok, details) {
+  const d = document.createElement("div");
+  d.className = "schritt " + (ok === true ? "ok" : ok === false ? "fehler" : "info");
+  d.innerHTML = (ok === true ? "✅ " : ok === false ? "❌ " : "ℹ️ ") + titel;
+  if (details !== undefined) {
+    const p = document.createElement("pre");
+    p.textContent = typeof details === "string" ? details : JSON.stringify(details, null, 1);
+    d.appendChild(p);
+  }
+  $("ausgabe").appendChild(d);
+}
+
+async function token() {
+  const r = await app.acquireTokenSilent({ scopes: SCOPES, account: app.getActiveAccount() });
+  return r.accessToken;
+}
+
+async function graph(pfad, optionen = {}) {
+  const r = await fetch(G + pfad, {
+    ...optionen,
+    headers: { Authorization: "Bearer " + (await token()), ...(optionen.headers || {}) },
+  });
+  let daten = null;
+  try { daten = await r.clone().json(); } catch (_) {}
+  return { status: r.status, ok: r.ok, daten };
+}
+
+// Freigabelink -> "u!" + base64url (Graph /shares)
+function teilKennung(url) {
+  const b = btoa(unescape(encodeURIComponent(url)));
+  return "u!" + b.replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
+}
+
+async function ordnerFinden(name, link) {
+  // 1. ueber den Namen im eigenen OneDrive (Besitzer: Ordner, Andrea: Verknuepfung)
+  if (name) {
+    const r = await graph("/me/drive/root:/" + encodeURIComponent(name));
+    if (r.ok && r.daten.remoteItem) {
+      const ri = r.daten.remoteItem;
+      return { art: "Verknüpfung (geteilter Ordner eines anderen Kontos)", driveId: ri.parentReference.driveId, id: ri.id };
+    }
+    if (r.ok && r.daten.folder) {
+      return { art: "eigener Ordner", driveId: r.daten.parentReference.driveId, id: r.daten.id };
+    }
+    zeige("Ordner über den Namen nicht gefunden (HTTP " + r.status + ")", null);
+  }
+  // 2. ueber den Freigabelink
+  if (link) {
+    const r = await graph("/shares/" + teilKennung(link) + "/driveItem");
+    if (r.ok) return { art: "Freigabelink", driveId: r.daten.parentReference.driveId, id: r.daten.id };
+    zeige("Freigabelink nicht auflösbar (HTTP " + r.status + ")", false, r.daten);
+  }
+  return null;
+}
+
+async function vorratOrdner(o) {
+  const liste = await graph(`/drives/${o.driveId}/items/${o.id}/children?$select=id,name,folder`);
+  if (!liste.ok) return { fehler: liste };
+  const da = liste.daten.value.find((x) => x.name === "Vorrat" && x.folder);
+  if (da) return { id: da.id, neu: false };
+  const neu = await graph(`/drives/${o.driveId}/items/${o.id}/children`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Vorrat", folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
+  });
+  if (neu.ok) return { id: neu.daten.id, neu: true };
+  return { fehler: neu };
+}
+
+async function test() {
+  $("ausgabe").innerHTML = "";
+  localStorage.setItem("vorrat-test-ordner", $("ordnername").value);
+  const konto = app.getActiveAccount();
+  const kennung = (konto.username || "konto").split("@")[0].replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+  // T1 Ordner
+  const o = await ordnerFinden($("ordnername").value.trim(), $("link").value.trim());
+  if (!o) return zeige("T1 Ordner nicht gefunden – Test endet hier", false);
+  zeige("T1 Ordner gefunden: " + o.art, true, { driveId: o.driveId, itemId: o.id });
+
+  // T2 Vorrat/ finden oder anlegen
+  const v = await vorratOrdner(o);
+  if (v.fehler) return zeige("T2 Unterordner Vorrat/ nicht lesbar/anlegbar (HTTP " + v.fehler.status + ")", false, v.fehler.daten);
+  zeige("T2 Unterordner Vorrat/ " + (v.neu ? "neu angelegt" : "vorhanden"), true);
+
+  // T3 alle Dateien lesen
+  const dateien = await graph(`/drives/${o.driveId}/items/${v.id}/children?$select=id,name,size,eTag,lastModifiedDateTime,lastModifiedBy,file`);
+  if (!dateien.ok) return zeige("T3 Dateien auflisten fehlgeschlagen", false, dateien.daten);
+  const liste = dateien.daten.value.filter((x) => x.file);
+  for (const d of liste) {
+    const meta = await graph(`/drives/${o.driveId}/items/${d.id}?$select=id,eTag,@microsoft.graph.downloadUrl`);
+    let inhalt = "(nicht lesbar)";
+    if (meta.ok) {
+      const r = await fetch(meta.daten["@microsoft.graph.downloadUrl"]);
+      inhalt = r.ok ? (await r.text()).slice(0, 300) : "HTTP " + r.status;
+    }
+    zeige("T3 gelesen: " + d.name, meta.ok, `von ${d.lastModifiedBy?.user?.displayName || "?"}, ${d.lastModifiedDateTime}, ${d.size} Byte\n${inhalt}`);
+  }
+  if (!liste.length) zeige("T3 Noch keine Dateien in Vorrat/ (ok beim ersten Test)", null);
+
+  // T4 eigene Datei anlegen (nur wenn es sie noch nicht gibt)
+  const datei = `test-${kennung}.json`;
+  const pfad = `/drives/${o.driveId}/items/${v.id}:/${datei}:/content`;
+  const inhalt1 = { von: kennung, zeit: new Date().toLocaleString("de-DE"), zaehler: 1 };
+  let r = await graph(pfad, { method: "PUT", headers: { "Content-Type": "application/json", "If-None-Match": "*" }, body: JSON.stringify(inhalt1) });
+  if (r.status === 412) zeige("T4 " + datei + " gibt es schon (Anlegen korrekt abgelehnt, 412)", true);
+  else zeige("T4 " + datei + " angelegt (HTTP " + r.status + ")", r.ok, r.ok ? undefined : r.daten);
+
+  // T5 mit aktuellem ETag aendern
+  const m1 = await graph(`/drives/${o.driveId}/items/${v.id}:/${datei}?$select=id,eTag`);
+  if (!m1.ok) return zeige("T5 eigene Datei nicht lesbar", false, m1.daten);
+  const etagAlt = m1.daten.eTag;
+  const inhalt2 = { ...inhalt1, zaehler: 2, zeit: new Date().toLocaleString("de-DE") };
+  r = await graph(pfad, { method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etagAlt }, body: JSON.stringify(inhalt2) });
+  zeige("T5 mit aktuellem ETag geändert (HTTP " + r.status + ")", r.ok, r.ok ? undefined : r.daten);
+
+  // T6 mit altem ETag -> muss 412 geben und darf nichts aendern
+  const inhalt3 = { ...inhalt1, zaehler: 999, zeit: "DARF NICHT ANKOMMEN" };
+  r = await graph(pfad, { method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etagAlt }, body: JSON.stringify(inhalt3) });
+  const m2 = await graph(`/drives/${o.driveId}/items/${v.id}:/${datei}?$select=id,@microsoft.graph.downloadUrl`);
+  const jetzt = m2.ok ? await (await fetch(m2.daten["@microsoft.graph.downloadUrl"])).json() : null;
+  const unveraendert = jetzt && jetzt.zaehler === 2;
+  zeige("T6 altes ETag: HTTP " + r.status + (r.status === 412 ? " (abgelehnt)" : " (NICHT abgelehnt!)") + ", Inhalt " + (unveraendert ? "unverändert" : "VERÄNDERT"), r.status === 412 && unveraendert, jetzt);
+
+  // T7 dauerhafter Speicher
+  const persist = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null;
+  zeige("T7 dauerhafter Speicher: " + (persist === true ? "gewährt" : persist === false ? "nicht gewährt (als installierte App erneut testen)" : "nicht unterstützt"), persist === true ? true : null);
+
+  // T8 Barcode-Formate
+  if ("BarcodeDetector" in window) {
+    const f = await BarcodeDetector.getSupportedFormats();
+    zeige("T8 Barcode: EAN-13 " + (f.includes("ean_13") ? "ja" : "nein") + ", DataMatrix " + (f.includes("data_matrix") ? "ja" : "nein"), f.includes("ean_13") && f.includes("data_matrix"), f.join(", "));
+  } else zeige("T8 Barcode-Erkennung im Browser nicht vorhanden", false);
+
+  zeige("Fertig. Bitte Screenshot an Claude.", null, navigator.userAgent);
+}
+
+(async () => {
+  $("ordnername").value = localStorage.getItem("vorrat-test-ordner") || "";
+  try {
+    app = new msal.PublicClientApplication({
+      auth: {
+        clientId: CLIENT_ID,
+        authority: "https://login.microsoftonline.com/consumers",
+        redirectUri: new URL("konto-test.html", location.href).href,
+      },
+      cache: { cacheLocation: "localStorage" },
+    });
+    await app.initialize();
+    const antwort = await app.handleRedirectPromise();
+    if (antwort) app.setActiveAccount(antwort.account);
+    else if (!app.getActiveAccount() && app.getAllAccounts().length) app.setActiveAccount(app.getAllAccounts()[0]);
+  } catch (e) {
+    $("konto").textContent = "Login-Fehler: " + e.message;
+    return;
+  }
+  const k = app.getActiveAccount();
+  $("konto").textContent = k ? "Angemeldet: " + (k.name || k.username) : "Nicht angemeldet – „Test starten“ meldet an.";
+  $("start").onclick = async () => {
+    if (!app.getActiveAccount()) return app.loginRedirect({ scopes: SCOPES });
+    $("start").disabled = true;
+    try { await test(); } catch (e) { zeige("Abbruch: " + e.message, false); }
+    $("start").disabled = false;
+  };
+  $("abmelden").onclick = () => app.logoutRedirect();
+})();
+</script>
+</body>
+</html>
