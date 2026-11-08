@@ -19,8 +19,8 @@
 <body>
 <h1>Vorrats-App · Kontentest</h1>
 <div id="konto" class="schritt info">Lade …</div>
-<label>Name des freigegebenen OneDrive-Ordners</label>
-<input id="ordnername" placeholder="z. B. Familie">
+<label>Grundpfad in OneDrive (Ordner mit / trennen, z. B. Familie/Haushalt). Leer = ganz oben, dann zeigt der Test die Ordner dort.</label>
+<input id="ordnername" placeholder="z. B. Familie/Haushalt">
 <label>Nur falls der Ordner nicht gefunden wird: Freigabelink</label>
 <input id="link" placeholder="https://1drv.ms/…">
 <button id="start">Test starten</button>
@@ -72,18 +72,45 @@ function teilKennung(url) {
   return "u!" + b.replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
 }
 
+// Grundpfad Ordner fuer Ordner abgehen statt per Pfad-Adresse: so klappt es
+// auch, wenn unterwegs eine Verknuepfung (remoteItem) liegt - Pfad-Zugriff
+// in eine Verknuepfung hinein endet mit HTTP 422 (UGC-Falle 04.09.).
+async function pfadAbgehen(pfad) {
+  const d = await graph("/me/drive?$select=id");
+  const w = await graph("/me/drive/root?$select=id");
+  if (!d.ok || !w.ok) return { fehler: "Eigenes OneDrive nicht lesbar (HTTP " + d.status + "/" + w.status + ")" };
+  let ort = { driveId: d.daten.id, id: w.daten.id, art: "eigener Ordner" };
+  let bisher = "OneDrive (ganz oben)";
+  for (const teil of pfad.split("/").map((t) => t.trim()).filter(Boolean)) {
+    const liste = await graph(`/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,folder,remoteItem&$top=999`);
+    if (!liste.ok) return { fehler: `${bisher} nicht auflistbar (HTTP ${liste.status})` };
+    const x = liste.daten.value.find((e) => e.name.toLowerCase() === teil.toLowerCase());
+    if (!x) {
+      const namen = liste.daten.value.filter((e) => e.folder || e.remoteItem).map((e) => e.name + (e.remoteItem ? " (geteilt)" : ""));
+      return { fehler: `„${teil}“ nicht gefunden in ${bisher}. Vorhandene Ordner dort:`, namen };
+    }
+    if (x.remoteItem) {
+      ort = { driveId: x.remoteItem.parentReference.driveId, id: x.remoteItem.id, art: "Verknüpfung (geteilter Ordner eines anderen Kontos)" };
+    } else if (x.folder) {
+      ort = { ...ort, id: x.id };
+    } else return { fehler: `„${teil}“ ist eine Datei, kein Ordner` };
+    bisher = bisher === "OneDrive (ganz oben)" ? x.name : bisher + "/" + x.name;
+  }
+  return ort;
+}
+
 async function ordnerFinden(name, link) {
-  // 1. ueber den Namen im eigenen OneDrive (Besitzer: Ordner, Andrea: Verknuepfung)
+  // 1. Grundpfad abgehen (Besitzer: eigene Ordner, Andrea: Verknuepfung unterwegs)
   if (name) {
-    const r = await graph("/me/drive/root:/" + encodeURIComponent(name));
-    if (r.ok && r.daten.remoteItem) {
-      const ri = r.daten.remoteItem;
-      return { art: "Verknüpfung (geteilter Ordner eines anderen Kontos)", driveId: ri.parentReference.driveId, id: ri.id };
-    }
-    if (r.ok && r.daten.folder) {
-      return { art: "eigener Ordner", driveId: r.daten.parentReference.driveId, id: r.daten.id };
-    }
-    zeige("Ordner über den Namen nicht gefunden (HTTP " + r.status + ")", null);
+    const o = await pfadAbgehen(name);
+    if (!o.fehler) return o;
+    zeige(o.fehler, false, o.namen ? o.namen.join("\n") : undefined);
+  } else if (!link) {
+    const o = await pfadAbgehen("");
+    const liste = o.fehler ? null : await graph(`/drives/${o.driveId}/items/${o.id}/children?$select=name,folder,remoteItem&$top=999`);
+    zeige("Kein Grundpfad angegeben. Ordner ganz oben in deinem OneDrive:", null,
+      liste && liste.ok ? liste.daten.value.filter((e) => e.folder || e.remoteItem).map((e) => e.name + (e.remoteItem ? " (geteilt)" : "")).join("\n") : o.fehler);
+    return null;
   }
   // 2. ueber den Freigabelink
   if (link) {
