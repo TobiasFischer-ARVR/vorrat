@@ -1,8 +1,95 @@
 body { margin: 0; font-family: system-ui, sans-serif; background: #f4fbf7; color: #1d2b24; }
-main { padding: 16px; }
-#updateleiste { position: sticky; top: 0; display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: #1d6b49; color: #fff; }
-#updateleiste[hidden] { display: none; }
+main { padding: 12px 16px 96px; }
+[hidden] { display: none !important; }
+#updateleiste { position: sticky; top: 0; z-index: 30; display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: #1d6b49; color: #fff; }
 #updateleiste span { flex: 1; }
-button { font: inherit; padding: 8px 14px; border: 0; border-radius: 8px; background: #fff; color: #1d6b49; }
+button { font: inherit; padding: 8px 14px; border: 0; border-radius: 8px; background: #fff; color: #1d6b49; cursor: pointer; }
 main button { background: #1d6b49; color: #fff; }
+button:disabled { opacity: .5; }
 .hinweis { padding: 8px 16px; background: #fff3d1; }
+input, select { font: inherit; padding: 8px; border: 1px solid #b9cbc1; border-radius: 8px; box-sizing: border-box; width: 100%; background: #fff; color: inherit; }
+input[type=checkbox] { width: 22px; height: 22px; }
+
+/* Kopf, Meldungen */
+.kopf { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 16px; background: #2f9e6e; color: #fff; }
+.kopf h1 { margin: 0; font-size: 1.3rem; }
+.kopf button { background: transparent; color: #fff; font-size: 1.6rem; padding: 2px 12px; }
+#fehler { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 16px; background: #b3261e; color: #fff; }
+#unten { position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 20; display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: 12px; background: #1d2b24; color: #fff; box-shadow: 0 4px 16px #0004; }
+#unten span { flex: 1; font-weight: 600; }
+#unten button { background: transparent; color: #7fe0b0; font-weight: 700; }
+.karte { padding: 12px 14px; border-radius: 12px; margin-bottom: 12px; }
+.karte.warnung { background: #fde7e5; color: #8c1d18; font-weight: 600; }
+.karte.still { background: #eef1f0; color: #44524b; font-size: .9rem; }
+.klein, .unterzeile { color: #5b6b63; font-size: .9rem; }
+.hinweis-rot, .meldung { color: #b3261e; font-weight: 600; }
+.meldung:empty { display: none; }
+
+/* Startseite: Reiter, Knoepfe, Zeichnung */
+.reiter { display: flex; gap: 6px; overflow-x: auto; margin: 0 -16px 12px; padding: 0 16px 4px; }
+main .reiter button { flex: none; background: #dcefe5; color: #1d6b49; border-radius: 999px; }
+main .reiter button.an { background: #1d6b49; color: #fff; }
+.knoepfe { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+main button.ortklaeren { background: #7b5cd6; }
+main button.bestand { background: #e8710a; }
+main button.neben { background: #dcefe5; color: #1d6b49; }
+main button.gross { font-size: 1.15rem; padding: 14px 20px; }
+.ortbild { display: block; width: 100%; height: auto; max-width: 520px; margin: 0 auto; }
+.korpus { fill: #c9d6cf; }
+.boden { fill: #7d8c84; }
+.platz, .frei { cursor: pointer; }
+.platz rect:first-child { stroke: #0003; stroke-width: 1.5; }
+.platz.rot rect:first-child { stroke: #d93025; stroke-width: 4; }
+.griff { fill: #0002; }
+.fname { font-size: 15px; font-weight: 600; }
+.fzahl { font-size: 12px; opacity: .8; }
+.punkt { fill: #d93025; stroke: #fff; stroke-width: 2; }
+.frei rect { fill: #ffffff80; stroke: #6b7d74; stroke-width: 1.5; stroke-dasharray: 6 5; }
+.frei text { font-size: 28px; fill: #6b7d74; }
+
+/* Ansichten, Kacheln (Bring-Look) */
+.ansichtkopf { display: flex; align-items: center; gap: 8px; }
+.ansichtkopf h2 { flex: 1; margin: 8px 0; font-size: 1.3rem; }
+main .ansichtkopf button.zurueck { background: transparent; color: #1d6b49; font-size: 1.5rem; padding: 4px 8px; }
+main button.zeile { display: block; width: 100%; margin-bottom: 6px; text-align: left; background: #fff; color: #1d2b24; border: 1px solid #cfe0d7; }
+.kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin: 8px 0; }
+main button.kachel { position: relative; aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  padding: 6px; border-radius: 6px; background: #4a8572; color: #fff; overflow: hidden;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+main button.kachel.gelb { background: #f2b632; color: #3b2a00; }
+main button.kachel.rot { background: #d9443a; }
+main button.kachel.pruefen { outline: 4px dashed #e8710a; outline-offset: -4px; }
+main button.kachel.neu { background: #dcefe5; color: #1d6b49; }
+.kachel .bild { font-size: 2.4rem; line-height: 1.1; }
+.kachel .name { font-size: .85rem; font-weight: 600; line-height: 1.15; text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.kachel .zahl { position: absolute; top: 4px; right: 7px; font-size: .95rem; font-weight: 800; }
+.kachel .datum { font-size: .75rem; opacity: .9; }
+.kachel .marke { position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 0; background: #0006; color: #fff; font-size: .65rem; }
+
+/* Dialoge */
+.blatt { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; background: #0006; }
+.fenster { box-sizing: border-box; width: 100%; max-width: 520px; max-height: 92vh; overflow: auto; padding: 16px; border-radius: 16px 16px 0 0; background: #fff; }
+.fenster h2 { margin: 0 0 12px; }
+.fenster button { background: #e6f2ec; color: #1d6b49; }
+.fenster button.an, .fenster .knoepfe button:first-child { background: #1d6b49; color: #fff; }
+.fenster button.gefahr { background: #fde7e5; color: #b3261e; }
+.fenster button.zweit { background: #eef1f0; color: #44524b; }
+.feld { display: flex; flex: 1; flex-direction: column; gap: 4px; margin-bottom: 10px; min-width: 0; }
+.feld > span { color: #5b6b63; font-size: .85rem; }
+.zeilen { display: flex; gap: 8px; align-items: flex-end; }
+.zeilen > button { margin-bottom: 10px; }
+.feld:has(.symbol) { flex: none; }
+.symbol { width: 4.2em; font-size: 1.3rem; text-align: center; padding: 4px; }
+.plusminus { display: flex; gap: 16px; align-items: center; }
+.plusminus b { min-width: 2ch; font-size: 1.4rem; text-align: center; }
+.plusminus button { font-size: 1.3rem; padding: 4px 18px; }
+.schalter { display: flex; gap: 10px; align-items: center; margin: 4px 0 12px; font-weight: 600; }
+.jahr { display: flex; gap: 16px; align-items: center; justify-content: center; }
+.monate { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 6px 0 10px; }
+.monate button { padding: 8px 0; }
+
+/* Pruefen */
+table.pruefen th { padding: 4px 12px 4px 0; color: #5b6b63; font-weight: 500; text-align: left; vertical-align: top; }
+button.text { padding: 0; background: none !important; color: inherit !important; text-decoration: underline dotted; }
+pre.ausgabe { white-space: pre-wrap; padding: 8px; border-radius: 8px; background: #fff; }
+pre.ausgabe:empty { display: none; }
