@@ -1,0 +1,8 @@
+body { margin: 0; font-family: system-ui, sans-serif; background: #f4fbf7; color: #1d2b24; }
+main { padding: 16px; }
+#updateleiste { position: sticky; top: 0; display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: #1d6b49; color: #fff; }
+#updateleiste[hidden] { display: none; }
+#updateleiste span { flex: 1; }
+button { font: inherit; padding: 8px 14px; border: 0; border-radius: 8px; background: #fff; color: #1d6b49; }
+main button { background: #1d6b49; color: #fff; }
+.hinweis { padding: 8px 16px; background: #fff3d1; }

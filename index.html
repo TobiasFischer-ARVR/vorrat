@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<!-- UGC #80: nur eigene Skripte. Bewusst KEIN default-src/connect-src:
+     Graph-Downloads leiten auf fremde Speicher-Hosts um, dazu MSAL-Login
+     und Open Food Facts. -->
+<meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f9e6e">
+<title>Vorrat</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="updateleiste" hidden>
+  <span>Neue Version bereit</span>
+  <button id="update-jetzt">Jetzt laden</button>
+  <button id="update-spaeter">Später</button>
+</div>
+<main id="haupt"></main>
+<script src="modell.js"></script>
+<script src="speicher.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
