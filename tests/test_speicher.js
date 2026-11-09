@@ -109,6 +109,38 @@ fall("Halber Zustand (Vorgaenge da, Zaehler weg): neue ID, Uhr dahinter, alte Vo
   sp.schliessen();
 });
 
+fall("Codex R2 #2: Vorgaenge weg, Zaehler noch da -> neue ID, Uhr laeuft weiter", async () => {
+  await loeschen();
+  const alt = await S.oeffnen();
+  for (let i = 0; i < 3; i++) await alt.ausfuehren(ORT);
+  alt.schliessen();
+  const db = await roh();
+  await anfrage(db.transaction("vorgaenge", "readwrite").objectStore("vorgaenge").clear());
+  db.close();
+  const sp = await S.oeffnen();
+  assert.notStrictEqual(sp.inst, alt.inst);
+  assert.strictEqual(sp.neu, true);
+  const v = await sp.ausfuehren(ORT);
+  assert.deepStrictEqual([v.n, v.uhr], [1, 4]);
+  gueltig(sp, await sp.eigeneVorgaenge());
+  sp.schliessen();
+});
+
+fall("Codex R2 #3: offener Tab schreibt nach ID-Wechsel nicht unter fremder ID", async () => {
+  await loeschen();
+  const a = await S.oeffnen();
+  await a.ausfuehren(ORT);
+  const db = await roh();
+  await anfrage(db.transaction("meta", "readwrite").objectStore("meta").delete("zaehler"));
+  db.close();
+  const b = await S.oeffnen(); // legt neue ID an
+  assert.notStrictEqual(b.inst, a.inst);
+  await assert.rejects(a.ausfuehren(ORT), /Installation gewechselt/);
+  const v = await b.ausfuehren(ORT);
+  assert.strictEqual(v.inst, b.inst);
+  a.schliessen(); b.schliessen();
+});
+
 fall("uhrNachziehen: nur vorwaerts, nur ganze Zahlen", async () => {
   const sp = await S.oeffnen();
   await sp.ausfuehren(ORT);

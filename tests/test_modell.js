@@ -129,6 +129,27 @@ fall("Codex #2: beide zaehlen gleichzeitig nach -> doppelt gezaehlt markiert, na
   assert.deepStrictEqual([x.summe, x.sichtbar, x.bestandPruefen], [2, true, true]);
 });
 
+fall("Codex R2 #1/#4: Selbstbezug verdeckt nichts; gleichzeitige '0'-Korrekturen sind kein Widerspruch", () => {
+  const a = handy("aaaaaaaa1"), b = handy("bbbbbbbb2");
+  const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Erbsen" }, menge: 5 });
+  b.sieht(a);
+  // Selbstbezug: jede Korrektur nennt ihre eigene kuenftige Kennung als Vorgaenger.
+  a.tu({ typ: "menge", art: "eintrag", ziel: e.id, delta: -2, grund: "korrektur", kennt: [a.zaehler.inst + "-" + a.zaehler.nr] });
+  b.tu({ typ: "menge", art: "eintrag", ziel: e.id, delta: -2, grund: "korrektur", kennt: [b.zaehler.inst + "-" + b.zaehler.nr, "zzzzzzzz9-1"] });
+  let x = eintrag(stand(a, b), e.id);
+  assert.deepStrictEqual([x.menge, x.doppeltGezaehlt, x.bestandPruefen], [1, true, true]);
+  // Beide zaehlen danach gleichzeitig richtig nach (1 Stueck): zwei 0-Korrekturen -> keine Warnung mehr.
+  a.sieht(b); b.sieht(a);
+  a.tu(M.korrektur(x, 1)); b.tu(M.korrektur(x, 1));
+  x = eintrag(stand(a, b), e.id);
+  assert.deepStrictEqual([x.menge, x.doppeltGezaehlt, x.bestandPruefen, x.korrekturKoepfe.length], [1, false, false, 2]);
+  // Eine spaetere Korrektur kennt beide Koepfe und raeumt auf.
+  a.sieht(b);
+  assert.strictEqual(M.korrektur(x, 1), null); // stimmt, nichts zu tun
+  a.tu(M.korrektur(x, 4));
+  assert.deepStrictEqual(eintrag(stand(a, b), e.id).korrekturKoepfe.length, 1);
+});
+
 fall("Korrektur: stimmt schon -> null, unmoegliche Zaehlung wirft, sehr grosse Korrektur geht durch (Codex #12)", () => {
   const a = handy("aaaaaaaa1");
   const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Nudeln" }, menge: 3 });

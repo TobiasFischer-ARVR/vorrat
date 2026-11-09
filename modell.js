@@ -105,9 +105,9 @@
     if (v.grund === "korrektur") {
       // kennt = die Korrekturen, die beim Zaehlen bekannt waren. Zwei Korrekturen, die sich nicht
       // kennen, heissen "gleichzeitig gezaehlt" -> Bestand pruefen (Codex 1a #2).
-      if (!Array.isArray(v.kennt) || v.kennt.length > 50 || !v.kennt.every(kennung)) return "Korrektur ohne gueltige Vorgaenger";
-      // Grosse Grenze: eine Korrektur muss jede erreichbare negative Summe ausgleichen koennen (Codex 1a #12).
-      return ganzzahl(v.delta, -1e9, 1e9) ? null : "Mengenaenderung ungueltig";
+      if (!Array.isArray(v.kennt) || v.kennt.length > 1000 || !v.kennt.every(kennung)) return "Korrektur ohne gueltige Vorgaenger";
+      // Ohne enge Grenze: eine Korrektur muss jede erreichbare Summe ausgleichen koennen (Codex 1a #12, R2 #6).
+      return ganzzahl(v.delta, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER) ? null : "Mengenaenderung ungueltig";
     }
     if (v.kennt !== undefined) return "Vorgaenger nur bei Korrekturen";
     return ganzzahl(v.delta, -999, 999) && v.delta !== 0 ? null : "Mengenaenderung ungueltig"; // Eingaben begrenzen (UGC #86)
@@ -194,14 +194,14 @@
       if (art === undefined) { verwaist.push(v.id); continue; }
       if (art !== v.art) { widersprueche.push(v.id); continue; } // nicht anwenden, melden ("Daten pruefen")
       let o = objekte.get(v.ziel);
-      if (!o) { o = { id: v.ziel, art, felder: {}, stempel: {}, summe: 0, korrekturen: [], gekannt: new Set() }; objekte.set(v.ziel, o); }
+      if (!o) { o = { id: v.ziel, art, felder: {}, stempel: {}, summe: 0, korrekturen: [] }; objekte.set(v.ziel, o); }
       const st = [v.uhr, v.inst];
       const setze = (f, w) => { if (spaeter(st, o.stempel[f])) { o.felder[f] = w; o.stempel[f] = st; } };
       if (v.typ === "neu") { for (const [f, w] of Object.entries(v.werte)) setze(f, w); o.summe += v.menge || 0; }
       else if (v.typ === "feld") setze(v.feld, v.wert);
       else {
         o.summe += v.delta;
-        if (v.grund === "korrektur") { o.korrekturen.push(v.id); for (const k of v.kennt) o.gekannt.add(k); }
+        if (v.grund === "korrektur") o.korrekturen.push(v);
       }
     }
 
@@ -227,8 +227,15 @@
       const o = objekte.get(e.id);
       const f = e.fach ? fachNach.get(e.fach) : null;
       e.summe = o.summe;
-      e.korrekturKoepfe = o.korrekturen.filter((k) => !o.gekannt.has(k)).sort();
-      e.doppeltGezaehlt = e.korrekturKoepfe.length > 1;
+      // Koepfe = Korrekturen, die keine spaetere Korrektur kennt. Als "gekannt" zaehlt nur eine echte,
+      // frueher gestempelte Korrektur DIESES Eintrags; Selbstbezug oder Fremdes verdeckt nichts (Codex R2 #1).
+      const uhrVon = new Map(o.korrekturen.map((k) => [k.id, k.uhr]));
+      const gekannt = new Set();
+      for (const k of o.korrekturen) for (const id of k.kennt) if (uhrVon.has(id) && uhrVon.get(id) < k.uhr) gekannt.add(id);
+      const koepfe = o.korrekturen.filter((k) => !gekannt.has(k.id));
+      e.korrekturKoepfe = koepfe.map((k) => k.id).sort();
+      // Gleichzeitige Korrekturen verfaelschen die Summe nur, wenn sie etwas veraendern; zwei "stimmt, 0"-Korrekturen nicht (R2 #4).
+      e.doppeltGezaehlt = koepfe.length > 1 && koepfe.some((k) => k.delta !== 0);
       e.menge = Math.max(0, e.summe);
       e.bestandPruefen = !e.geloescht && (e.summe < 0 || e.doppeltGezaehlt); // Geloeschtes zeigt niemand
       e.sichtbar = !e.geloescht && (e.summe !== 0 || e.doppeltGezaehlt);

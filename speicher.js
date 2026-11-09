@@ -42,13 +42,14 @@
     const db = await verbinden();
     // Lesen-oder-Anlegen in EINER Transaktion: zwei gleichzeitig startende Tabs bekommen dieselbe ID.
     const start = await schritt(db, "readwrite", (vs, meta, lauf) => {
-      meta.get("zaehler").onsuccess = lauf((z) => {
-        if (z) return { zaehler: z, neu: false };
-        // Kein Zaehler = erster Start oder Datenverlust -> immer eine NEUE ID, nie die alte (R2 #2, Luecke 4).
-        // Halber Zustand (Vorgaenge da, Zaehler weg): die alten Vorgaenge bleiben unangetastet liegen.
-        // Die neue ID kann keine Nummer doppelt vergeben; die Uhr startet hinter dem groessten alten Stempel.
-        vs.getAll().onsuccess = lauf((alle) => {
-          const uhr = alle.reduce((m, v) => (Number.isSafeInteger(v.uhr) && v.uhr > m ? v.uhr : m), 0);
+      vs.getAll().onsuccess = lauf((alle) => {
+        meta.get("zaehler").onsuccess = lauf((z) => {
+          // Zaehler passt nur, wenn genau die Nummern 1..nr-1 dieser ID vorliegen. Sonst ist etwas verloren
+          // (Zaehler weg ODER Vorgaenge weg, Codex R2 #2) -> immer eine NEUE ID, nie die alte (R2 #2, Luecke 4).
+          if (z && alle.filter((v) => v.inst === z.inst).length === z.nr - 1) return { zaehler: z, neu: false };
+          // Halber Zustand: die alten Vorgaenge bleiben unangetastet liegen (Abschnitt 2 laedt sie unter ihrer alten ID hoch).
+          // Die neue ID kann keine Nummer doppelt vergeben; die Uhr startet hinter dem groessten bekannten Stempel.
+          const uhr = alle.reduce((m, v) => (Number.isSafeInteger(v.uhr) && v.uhr > m ? v.uhr : m), z && Number.isSafeInteger(z.uhr) ? z.uhr : 0);
           const neu = { inst: Modell.neueInstallationsId(), nr: 1, uhr };
           meta.put(neu, "zaehler");
           return { zaehler: neu, neu: true };
@@ -56,8 +57,13 @@
       });
     });
     const inst = start.zaehler.inst;
+    // Hat ein anderer Tab inzwischen eine neue ID angelegt, schreibt dieser Tab nicht unter fremder ID (Codex R2 #3).
     const zaehlerLesen = (meta, lauf, fn) => {
-      meta.get("zaehler").onsuccess = lauf((z) => { if (!z) throw new Error("Zaehler fehlt"); return fn(z); });
+      meta.get("zaehler").onsuccess = lauf((z) => {
+        if (!z) throw new Error("Zaehler fehlt");
+        if (z.inst !== inst) throw new Error("Installation gewechselt - bitte App neu laden");
+        return fn(z);
+      });
     };
 
     return {

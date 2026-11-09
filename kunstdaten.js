@@ -36,7 +36,7 @@
       h.zaehler = e.zaehler; h.liste.push(e.vorgang);
       return e.vorgang;
     };
-    const aendere = (h, id, delta) => { summe.set(id, summe.get(id) + delta); h.ansicht.set(id, h.ansicht.get(id) + delta); };
+    const aendere = (h, id, delta) => { summe.set(id, summe.get(id) + delta); h.ansicht.set(id, (h.ansicht.get(id) || 0) + delta); };
 
     // Grundausstattung (Handy A): 4 Orte, je Platz ein Fach.
     const faecher = [];
@@ -82,6 +82,7 @@
         h.zaehler = M.uhrNachziehen(h.zaehler, max);
         h.ansicht = new Map([...summe].filter(([id, s]) => s !== 0 && !geloescht.has(id)));
       }
+      // Jedes Handy sieht bis zum naechsten Abgleich nur seine EIGENE Korrektur (aendere), nicht die fremde (Codex R2 #7).
       // "Bestand pruefen": A zaehlt nach (Ergebnis 0). Manchmal zaehlt B gleichzeitig -> doppelt gezaehlt,
       // das loest A beim naechsten Abgleich mit einer Korrektur, die beide kennt.
       const jetzt = jetztFuer(1000);
@@ -100,8 +101,6 @@
         }
         koepfe.set(id, neueKoepfe);
       }
-      // Korrekturen gelten ab dem naechsten Abgleich fuer beide.
-      for (const h of handys) h.ansicht = new Map([...summe].filter(([id, s]) => s !== 0 && !geloescht.has(id)));
     }
     return { dateien: handys.map((h) => ({ schema: M.SCHEMA, inst: h.zaehler.inst, vorgaenge: h.liste })), statistik };
   }
