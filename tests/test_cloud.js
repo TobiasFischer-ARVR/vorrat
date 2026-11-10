@@ -617,6 +617,70 @@ fall("Codex #9: Seiten (@odata.nextLink) werden gelesen; Folgeseite auf fremdem 
   x.sp.schliessen();
 });
 
+// ==== Codex Runde 2 ====
+
+fall("Codex2 #1: Reparatur gescheitert -> nur Bekanntes aus dem Cache zaehlt NICHT als abgeglichen, Loeschen gesperrt", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT); await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const eigen = x.f.datei(x.f.daten, eigenName(x.sp.inst));
+  const d = JSON.parse(eigen.inhalt);
+  x.f.aendern(eigen, JSON.stringify(Object.assign(d, { vorgaenge: d.vorgaenge.slice(0, 1) })));
+  x.f.vorher = async (art, pfad) => (art === "PUT" && pfad.includes("vorgaenge-") ? { ok: false, status: 412 } : null);
+  assert.strictEqual((await lauf(x)).ok, false);
+  const ab = await x.sp.abgleich(), lokal = await x.sp.alleVorgaenge();
+  assert.strictEqual(C.offene(ab, lokal), 2, "verkuerzte Datei bestaetigt nichts (Nummer 2 steht nicht in OneDrive)");
+  assert.match(String(C.loeschSperre(ab, lokal)), /kürzer|fehlt/);
+  x.sp.schliessen();
+});
+
+fall("Codex2 #2: lokaler Vorgang mit anderem Inhalt als in OneDrive -> offen + Loeschen gesperrt", async () => {
+  const x = await aufbau();
+  const v1 = await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const db = await anfrage(indexedDB.open(S.DB));
+  await anfrage(db.transaction("vorgaenge", "readwrite").objectStore("vorgaenge").put(Object.assign({}, v1, { werte: { name: "Anders", reihen: 6, spalten: 1 } })));
+  db.close();
+  const ab = await x.sp.abgleich(), lokal = await x.sp.alleVorgaenge();
+  assert.strictEqual(C.offene(ab, lokal), 1);
+  assert.match(String(C.loeschSperre(ab, lokal)), /Widerspruch/);
+  x.sp.schliessen();
+});
+
+fall("Codex2 #3: Fehler nach dem Lesen -> keine Sicherung; Sicherung verwirft nie eine Variante", async () => {
+  const x = await aufbau();
+  const v = M.erzeuge({ inst: x.sp.inst, nr: 1, uhr: 0 }, ORT).vorgang;
+  x.f.neu("D1", x.f.daten.id, eigenName(x.sp.inst), "datei", JSON.stringify({ schema: M.SCHEMA, inst: x.sp.inst, vorgaenge: [v] }));
+  x.sp.uebernehmen = () => Promise.reject(new Error("ConstraintError"));
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(x.f.puts(/:\/sicherung-/).length, 0, "keine Sicherung nach Fehler");
+  const anders = Object.assign({}, v, { werte: { name: "Anders", reihen: 6, spalten: 1 } });
+  assert.throws(() => C.sicherungsInhalt({ a: { inst: x.sp.inst, vorgaenge: [v] } }, [anders], x.sp.inst, new Date()), /Widerspruch/);
+  x.sp.schliessen();
+});
+
+fall("Codex2 #6: Zustand mit Daten, aber ohne Ordnerbindung -> Stopp, nichts geschrieben", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  await x.sp.abgleichSpeichern({ ordner: C.ordnerSchluessel(PFAD), gelesen: x.sp.inst, dateien: { [eigenName(ANDREA)]: { inst: ANDREA, eTag: '"a"', geaendert: new Date().toISOString(), vorgaenge: [] } } }, 0);
+  const r = await lauf(x);
+  assert.match(String(r.fehler), /Ordnerbindung/);
+  assert.strictEqual(x.f.puts().length, 0);
+  x.sp.schliessen();
+});
+
+fall("Codex2 #7: frisch=true loest den Pfad neu auf -> Austausch auch in laufender Sitzung erkannt", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  x.f.daten.name = "Vorrats App alt";
+  x.f.neu("D1", x.f.gemein.id, "Vorrats App", "ordner");
+  assert.strictEqual((await lauf(x)).ok, true, "ohne frisch: Sitzungs-Cache (alter, umbenannter Ordner)");
+  assert.match(String((await lauf(x, { frisch: true })).fehler), /anderer Ordner/);
+  x.sp.schliessen();
+});
+
 (async () => {
   let rot = 0;
   for (const [name, fn] of faelle) {

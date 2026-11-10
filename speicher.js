@@ -10,18 +10,50 @@
   const Modell = typeof module !== "undefined" && module.exports ? require("./modell.js") : wurzel.Modell;
   const DB = "vorrat";
 
-  // Ohne Versionsnummer: leeren() hebt die Version bei jedem Loeschen an, geoeffnet wird immer die aktuelle.
-  function verbinden() {
+  const BLOCKIERT = "Die Datenbank ist von einem anderen Fenster der Vorrats-App belegt – bitte andere Fenster/Tabs der App schließen und erneut versuchen";
+  const WARTEN_MS = 10000;
+  const anlegen = (db) => {
+    if (!db.objectStoreNames.contains("vorgaenge")) db.createObjectStore("vorgaenge", { keyPath: "id" });
+    if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
+  };
+  const vollstaendig = (db) => db.objectStoreNames.contains("vorgaenge") && db.objectStoreNames.contains("meta");
+
+  // DB oeffnen (version 0 = aktuelle). upgrade(r, stopp) laeuft nur bei Versionswechsel; lief sagt, OB er lief.
+  // Haengt die Anfrage (anderer Tab gibt nicht frei), endet sie nach wartenMs mit Klartext; laeuft der
+  // Wechsel spaeter doch noch an, wird er abgebrochen, damit nach der Fehlermeldung nichts mehr passiert (Codex2 #5).
+  function oeffnenAuf(version, upgrade, wartenMs) {
     return new Promise((ok, nein) => {
-      const r = indexedDB.open(DB);
+      let lief = false, aufgegeben = false, abbruch = null;
+      const r = version ? indexedDB.open(DB, version) : indexedDB.open(DB);
+      const uhr = setTimeout(() => { if (!lief) { aufgegeben = true; nein(new Error(BLOCKIERT)); } }, wartenMs || WARTEN_MS);
       r.onupgradeneeded = () => {
-        if (!r.result.objectStoreNames.contains("vorgaenge")) r.result.createObjectStore("vorgaenge", { keyPath: "id" });
-        if (!r.result.objectStoreNames.contains("meta")) r.result.createObjectStore("meta");
+        if (aufgegeben) return r.transaction.abort();
+        lief = true;
+        const stopp = (text) => { abbruch = text; r.transaction.abort(); };
+        try { upgrade(r, stopp); } catch (x) { stopp((x && x.message) || String(x)); }
       };
       // Loescht ein anderer Tab die DB, geben wir sie frei; danach lehnt jeder Aufruf hier ab (nie still weiter).
-      r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); ok(r.result); };
-      r.onerror = () => nein(r.error);
+      r.onsuccess = () => {
+        clearTimeout(uhr);
+        if (aufgegeben) return r.result.close();
+        r.result.onversionchange = () => r.result.close();
+        ok({ db: r.result, lief });
+      };
+      r.onerror = () => { clearTimeout(uhr); if (!aufgegeben) nein(new Error(abbruch || (r.error && r.error.message) || "Datenbank nicht zu öffnen")); };
     });
+  }
+
+  // Ohne Versionsnummer: leeren() hebt die Version bei jedem Loeschen an, geoeffnet wird immer die aktuelle.
+  // Fehlt einer DB ein Speicher, wird er einmal mit Version + 1 nachgelegt (Codex2, Abdeckung).
+  async function verbinden(wartenMs) {
+    let { db } = await oeffnenAuf(0, (r) => anlegen(r.result), wartenMs);
+    if (!vollstaendig(db)) {
+      const v = db.version;
+      db.close();
+      ({ db } = await oeffnenAuf(v + 1, (r) => anlegen(r.result), wartenMs));
+      if (!vollstaendig(db)) { db.close(); throw new Error("Datenbank unvollständig – bitte App neu laden"); }
+    }
+    return db;
   }
 
   // Eine Transaktion ueber beide Speicher. arbeit(vorgaenge, meta, lauf) darf NUR mit Request-Callbacks
@@ -145,27 +177,23 @@
   // Versionswechsel-Transaktion: die beginnt erst, wenn alle anderen Tabs ihre Verbindung geschlossen haben
   // (onversionchange), also kann zwischen Pruefen und Loeschen nichts mehr gespeichert werden (Codex #4).
   // Danach legt oeffnen() eine NEUE ID an. Die geschlossenen Tabs muessen neu laden (ihr Speichern scheitert laut).
-  async function leeren(grund) {
-    const db = await verbinden();
+  async function leeren(grund, wartenMs) {
+    const db = await verbinden(wartenMs);
     const version = db.version;
     db.close();
-    return new Promise((ok, nein) => {
-      let abbruch = null;
-      const r = indexedDB.open(DB, version + 1);
-      r.onupgradeneeded = () => {
-        const t = r.transaction, vs = t.objectStore("vorgaenge"), meta = t.objectStore("meta");
-        const stopp = (text) => { abbruch = text; t.abort(); };
-        vs.getAll().onsuccess = (e1) => { meta.get("abgleich").onsuccess = (e2) => { meta.get("wolke").onsuccess = (e3) => {
-          let g;
-          try { g = grund(e1.target.result, abgleichZusammen(e2.target.result, e3.target.result)); } catch (x) { g = (x && x.message) || String(x); }
-          if (g) return stopp(g);
-          vs.clear();
-          meta.clear();
-        }; }; };
-      };
-      r.onsuccess = () => { r.result.close(); ok(); };
-      r.onerror = () => nein(new Error(abbruch || (r.error && r.error.message) || "Löschen fehlgeschlagen"));
-    });
+    const { db: neu, lief } = await oeffnenAuf(version + 1, (r, stopp) => {
+      const t = r.transaction, vs = t.objectStore("vorgaenge"), meta = t.objectStore("meta");
+      vs.getAll().onsuccess = (e1) => { meta.get("abgleich").onsuccess = (e2) => { meta.get("wolke").onsuccess = (e3) => {
+        let g;
+        try { g = grund(e1.target.result, abgleichZusammen(e2.target.result, e3.target.result)); } catch (x) { g = (x && x.message) || String(x); }
+        if (g) return stopp(g);
+        vs.clear();
+        meta.clear();
+      }; }; };
+    }, wartenMs);
+    neu.close();
+    // Hat ein anderer Tab gleichzeitig die Version angehoben, lief hier weder Pruefung noch Leeren (Codex2 #4).
+    if (!lief) throw new Error("Nicht gelöscht: ein anderes Fenster hat gleichzeitig gelöscht – bitte App neu laden");
   }
 
   const Speicher = { DB, oeffnen, dauerhaft, leeren };

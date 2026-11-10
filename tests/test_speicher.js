@@ -205,6 +205,41 @@ fall("Codex #4: leeren prueft und loescht in einem Schritt - Schreiben eines and
   leer.schliessen();
 });
 
+const zeit = (p, ms) => Promise.race([p, new Promise((_, nein) => setTimeout(() => nein(new Error("haengt")), ms))]);
+
+fall("Codex2 #4: zwei leeren() gleichzeitig -> nur eines meldet Erfolg, keines ohne Pruefung", async () => {
+  const sp = await S.oeffnen();
+  await sp.ausfuehren(ORT);
+  let geprueft = 0;
+  const g = () => { geprueft++; return null; };
+  const erg = await Promise.allSettled([S.leeren(g), S.leeren(g)]);
+  const ok = erg.filter((e) => e.status === "fulfilled").length;
+  assert.strictEqual(ok, geprueft, "jeder Erfolg hat geprueft");
+  assert.ok(ok >= 1);
+});
+
+fall("Codex2 #5: blockierender Tab -> leeren endet mit Klartext statt zu haengen, nichts geloescht", async () => {
+  const sp = await S.oeffnen();
+  const v = await sp.ausfuehren(ORT);
+  sp.schliessen();
+  const stur = await anfrage(indexedDB.open(S.DB)); // reagiert nicht auf versionchange
+  await assert.rejects(zeit(S.leeren(() => null, 200), 2000), /andere Fenster/);
+  stur.close();
+  await new Promise((ok) => setTimeout(ok, 100));
+  const neu = await S.oeffnen();
+  assert.ok((await neu.alleVorgaenge()).some((x) => x.id === v.id), "nichts geloescht");
+  neu.schliessen();
+});
+
+fall("Codex2 Abdeckung: vorhandene DB ohne Speicher 'vorgaenge' wird repariert", async () => {
+  const r = indexedDB.open(S.DB, 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("meta");
+  (await anfrage(r)).close();
+  const sp = await zeit(S.oeffnen(), 2000);
+  assert.strictEqual((await sp.ausfuehren(ORT)).n, 1);
+  sp.schliessen();
+});
+
 fall("abgleichSpeichern zieht die Uhr: nur vorwaerts, nur ganze Zahlen", async () => {
   const sp = await S.oeffnen();
   await sp.ausfuehren(ORT);
@@ -221,6 +256,11 @@ fall("dauerhaft: ohne API null statt Fehler", async () => {
 });
 
 (async () => {
-  for (const [name, fn] of faelle) { await loeschen(); await fn(); console.log("ok  " + name); }
-  console.log("\n" + faelle.length + " Faelle bestanden.");
+  let rot = 0;
+  for (const [name, fn] of faelle) {
+    try { await zeit(loeschen(), 3000); await zeit(fn(), 5000); console.log("ok  " + name); }
+    catch (e) { rot++; console.log("ROT " + name + " -> " + String(e.message).split(String.fromCharCode(10))[0]); }
+  }
+  if (rot) { console.log(rot + " rot"); process.exit(1); }
+  console.log(String.fromCharCode(10) + faelle.length + " Faelle bestanden.");
 })().catch((e) => { console.error(e); process.exit(1); });

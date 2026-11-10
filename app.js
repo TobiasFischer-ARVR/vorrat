@@ -276,10 +276,12 @@ const darfSchreiben = () => !!sp && Cloud.darfSchreiben(ab, sp.inst, einst.daten
 const offen = () => Cloud.offene(ab, lokal); // nur fuer Anzeigen
 // Vor dem Loeschen: frisch aus dem Speicher, nie aus dem Arbeitsspeicher (der kann nach einem Ladefehler
 // leer oder veraltet sein, Review #1). Wirft bei Lesefehler.
-const offenIn = (vs, a) => Cloud.offene(a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null, vs);
+const mitOrdner = (a) => (a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null);
+const offenIn = (vs, a) => Cloud.offene(mitOrdner(a), vs);
+const sperreIn = (vs, a) => Cloud.loeschSperre(mitOrdner(a), vs); // Widerspruch / Datei fehlt (Codex2 #1/#2)
 async function offenFrisch() {
-  const vs = await sp.alleVorgaenge();
-  return { n: offenIn(vs, await sp.abgleich()), gesamt: vs.length };
+  const vs = await sp.alleVorgaenge(), a = await sp.abgleich();
+  return { n: offenIn(vs, a), gesamt: vs.length, sperre: sperreIn(vs, a) };
 }
 // Ist das Geraet nicht lesbar, wird nicht geloescht; stattdessen das Backup aus dem Arbeitsspeicher anbieten.
 function nichtLoeschen(x) {
@@ -290,14 +292,18 @@ const zeitText = (iso) => (iso ? iso.slice(8, 10) + "." + iso.slice(5, 7) + ". "
 
 // UGC #20-#22: bei Start, Rueckkehr, nach jeder Aenderung; nie zwei gleichzeitig (auch nicht in zwei Tabs).
 let abLaeuft = false, abNochmal = false, abUhr = null, abFehler; // abFehler undefined = in dieser Sitzung noch kein Versuch
-async function abgleich() {
+let abFrisch = false; // beim naechsten Lauf den Pfad neu aufloesen (Start, Rueckkehr; Codex2 #7)
+async function abgleich(frisch) {
+  if (frisch === true) abFrisch = true;
   if (!sp || !konto || !konto.name() || !eingerichtet()) return;
   if (abLaeuft) { abNochmal = true; return; }
   abLaeuft = true;
+  const neuAufloesen = abFrisch;
+  abFrisch = false;
   abNochmal = false;
   zeichnen();
   try {
-    const lauf = () => Cloud.abgleichen({ g, sp, datenPfad: einst.datenPfad, sicherPfad: einst.sicherPfad, version: APP_VERSION });
+    const lauf = () => Cloud.abgleichen({ g, sp, datenPfad: einst.datenPfad, sicherPfad: einst.sicherPfad, version: APP_VERSION, frisch: neuAufloesen });
     const r = navigator.locks ? await navigator.locks.request("vorrat-abgleich", lauf) : await lauf();
     abFehler = r.ok ? null : r.fehler;
   } catch (x) { abFehler = (x && x.message) || String(x); }
@@ -306,7 +312,7 @@ async function abgleich() {
   if (abNochmal) abgleich();
 }
 function abgleichBald() { clearTimeout(abUhr); abUhr = setTimeout(abgleich, 3000); }
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") abgleich(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") abgleich(true); });
 
 const fehlerJetzt = () => (abFehler !== undefined ? abFehler : ab && ab.letzter ? ab.letzter.fehler : null);
 // [Text, gut?]. gut = still anzeigen, sonst Warnkarte (UGC #8/#89: nicht wegklickbar).
@@ -339,13 +345,22 @@ function abgleichKarte() {
 }
 
 // Datei-Kopie aller Vorgaenge (UGC #35): Name mit Lokalzeit.
-function backupHerunterladen() {
-  if (!sp || !stand) return hinweis("Keine Daten geladen.");
-  const a = el("a", { download: "vorrat-sicherung-" + Modell.lokalIso().slice(0, 16).replace("T", "-").replace(":", "") + ".json",
-    href: URL.createObjectURL(new Blob([JSON.stringify(Cloud.sicherungsInhalt(ab ? ab.dateien : {}, lokal, sp.inst, new Date()))], { type: "application/json" })) });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+// Geht auch ohne berechneten Stand (Ladefehler, Widerspruch): Daten frisch aus dem Speicher, sonst aus dem
+// Arbeitsspeicher. Passt nicht alles zusammen, kommen die Rohdaten mit BEIDEN Varianten hinein (Codex2 #3).
+async function backupHerunterladen() {
+  let vs = lokal, a = ab;
+  if (sp) { try { vs = await sp.alleVorgaenge(); a = await sp.abgleich(); } catch (_) { /* Arbeitsspeicher nehmen */ } }
+  const dateien = a ? a.dateien : {};
+  if (!vs.length && !Object.keys(dateien).length) { hinweis("Keine Daten zum Sichern."); return false; }
+  let inhalt;
+  try { inhalt = Cloud.sicherungsInhalt(dateien, vs, sp && sp.inst, new Date()); }
+  catch (_) { inhalt = { art: "vorrat-rohdaten", schema: Modell.SCHEMA, erstellt: Modell.lokalIso(), lokal: vs, wolke: dateien }; }
+  const link = el("a", { download: "vorrat-sicherung-" + Modell.lokalIso().slice(0, 16).replace("T", "-").replace(":", "") + ".json",
+    href: URL.createObjectURL(new Blob([JSON.stringify(inhalt)], { type: "application/json" })) });
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
   hinweis("Backup liegt im Download-Ordner.");
+  return true;
 }
 
 // Ganze lokale DB weg -> neue Installation (Testdaten aus Abschnitt 1, Ordnerwechsel). OneDrive bleibt unberuehrt.
@@ -414,14 +429,19 @@ function einstellungenDialog() {
       const a = sp && (await sp.abgleich());
       if (Cloud.ordnerSchluessel(d) !== Cloud.ordnerSchluessel(einst.datenPfad) && a && a.gelesen) {
         // UGC #43: Vorgaenge des alten Ordners wandern nie in den neuen -> nur ohne Offenes, dann frisch starten.
-        let n;
-        try { n = (await offenFrisch()).n; } catch (x) { return nichtLoeschen(x); }
-        if (n) return melde(n + " Änderungen sind noch nicht abgeglichen. Erst abgleichen, dann den Ordner wechseln.");
+        let f;
+        try { f = await offenFrisch(); } catch (x) { return nichtLoeschen(x); }
+        if (f.sperre) {
+          melde(f.sperre + ". Ordnerwechsel gesperrt.");
+          if (confirm(f.sperre + ".\n\nDer Ordnerwechsel ist gesperrt. Backup herunterladen?")) backupHerunterladen();
+          return;
+        }
+        if (f.n) return melde(f.n + " Änderungen sind noch nicht abgeglichen. Erst abgleichen, dann den Ordner wechseln.");
         if (!confirm("Datenordner wechseln?\n\nDieses Gerät löscht dann seine lokale Kopie und startet mit neuer Kennung. " +
           "Alles Bisherige liegt schon im alten Ordner und wandert nicht mit.")) return;
         // Erst loeschen, dann den neuen Pfad speichern (Codex #5): bricht es dazwischen ab, bleibt der alte
         // Ordner mit leerem Geraet - harmlos, das liest erst wieder alles.
-        if (!(await geraetLoeschen((vs, ag) => { const k = offenIn(vs, ag); return k ? k + " Änderungen sind noch nicht abgeglichen" : null; }))) return;
+        if (!(await geraetLoeschen((vs, ag) => { const k = offenIn(vs, ag); return sperreIn(vs, ag) || (k ? k + " Änderungen sind noch nicht abgeglichen" : null); }))) return;
         einstSpeichern({ datenPfad: d, sicherPfad: s });
         return location.reload();
       }
@@ -642,10 +662,15 @@ function pruefenAnsicht(ebene) {
     if (!sp) return nichtLoeschen(ladeFehler || "Speicher nicht geöffnet");
     let f;
     try { f = await offenFrisch(); } catch (x) { return nichtLoeschen(x); }
+    // Widerspruch / fehlende Datei: erst Backup, dann eine zweite, ausdrueckliche Rueckfrage (Codex2 #1/#2).
+    if (f.sperre) {
+      if (!confirm("⚠ " + f.sperre + ".\n\nVor dem Löschen erst ein Backup herunterladen? (Abbrechen = nichts löschen)")) return;
+      if (!(await backupHerunterladen())) return;
+    }
     if (!confirm("Alle Daten auf DIESEM Gerät löschen?\n\n" + f.gesamt + " eigene Vorgänge, davon " + f.n + " noch nicht in OneDrive – die gehen verloren.\n" +
       "OneDrive bleibt unangetastet. Danach startet das Gerät mit neuer Kennung.")) return;
     // Hat ein anderer Tab seit der Rueckfrage etwas gespeichert, wird nicht geloescht (Codex #4).
-    if (await geraetLoeschen((vs, ag) => (vs.length !== f.gesamt || offenIn(vs, ag) !== f.n ? "Inzwischen wurde etwas gespeichert" : null))) location.reload();
+    if (await geraetLoeschen((vs, ag) => (vs.length !== f.gesamt || offenIn(vs, ag) !== f.n || sperreIn(vs, ag) !== f.sperre ? "Inzwischen wurde etwas gespeichert" : null))) location.reload();
   } }, "Gerätedaten löschen (z. B. Testdaten)");
   // UGC #82: 7x auf die Version tippen, Zaehler ab dem 4. sichtbar, gilt nur fuer diese offene Ansicht.
   const ver = el("button", { className: "text" });
@@ -949,4 +974,4 @@ function ortDialog(o) {
 
 zeichnen();
 // UGC #21: Kaltstart wie Rueckkehr behandeln -> nach dem Laden einmal abgleichen.
-Promise.all([laden(), konto && konto.bereit]).then(() => { zeichnen(); abgleich(); });
+Promise.all([laden(), konto && konto.bereit]).then(() => { zeichnen(); abgleich(true); });

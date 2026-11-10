@@ -29,6 +29,7 @@
     (wo === "Datenordner" ? "App-Ordner" : "Sicherungsordner") + ". Es wurde nichts gelesen und nichts geschrieben. " +
     "Bitte den Pfad bis zum App-Ordner eintragen (z. B. Gemeinschaftsordner/Vorrats App).";
   const kurzId = (inst) => String(inst).slice(0, 8) + "…";
+  const gleich = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b) || Modell.kanonisch(a) === Modell.kanonisch(b);
   // Fremddatei-Stopp (Kontentest 08.11.): null = nur App-Dateien, sonst der Text (ohne Dateinamen).
   function fremdStopp(items, istSicherung) {
     const muster = istSicherung ? SICHERUNG : VORGANGSDATEI;
@@ -233,9 +234,15 @@
   }
 
   // Gesamtbestand fuer Sicherung und "Backup herunterladen": je Installation Wolke + lokale Vorgaenge.
+  // Gleiche Kennung mit anderem Inhalt -> Fehler statt still eine Variante zu verwerfen (Codex2 #3).
   function sicherungsInhalt(dateien, lokal, inst, jetzt) {
     const nach = new Map();
-    const dazu = (v) => { if (!nach.has(v.inst)) nach.set(v.inst, new Map()); nach.get(v.inst).set(v.id, v); };
+    const dazu = (v) => {
+      if (!nach.has(v.inst)) nach.set(v.inst, new Map());
+      const alt = nach.get(v.inst).get(v.id);
+      if (alt && !gleich(alt, v)) throw new Error("Widerspruch bei Vorgang " + kurzId(v.id) + " – keine Sicherung geschrieben");
+      nach.get(v.inst).set(v.id, v);
+    };
     for (const d of Object.values(dateien || {})) d.vorgaenge.forEach(dazu);
     lokal.forEach(dazu);
     return { art: "vorrat-sicherung", schema: Modell.SCHEMA, erstellt: Modell.lokalIso(jetzt), von: inst,
@@ -311,7 +318,13 @@
     const alt = await sp.abgleich();
     const ab = alt && alt.ordner === ordner ? alt : { ordner, gelesen: null, dateien: {} };
     let st = null, fehler = null;
+    if (o.frisch && g.orte) g.orte.delete(ordner); // App-Start / Rueckkehr: Pfad neu aufloesen (Codex2 #7)
     try {
+      // Daten, aber keine Ordnerbindung (aeltere Fassung des Zustands): nicht still binden (Codex2 #6).
+      if (!ab.ort && (ab.gelesen || Object.keys(ab.dateien).length)) {
+        throw new Error("Abgleich-Zustand ohne Ordnerbindung – es wurde nichts gelesen und nichts geschrieben. " +
+          "Ausweg: ☰ → Prüfen → 7× auf die Version → Gerätedaten löschen, dann neu abgleichen.");
+      }
       if (o.sicherPfad && ordnerSchluessel(o.sicherPfad) === ordner) throw new Error("Daten- und Sicherungsordner müssen verschieden sein");
       for (let runde = 1; ; runde++) {
         const ort = await ordnerFinden(g, o.datenPfad);
@@ -333,7 +346,7 @@
       letzter: { zeit: Modell.lokalIso(jetzt), fehler }, gesichert: ab.gesichert || null, appStand: ab.appStand || null,
       sicherung: ab.sicherung || null };
     // Sicherung erst, wenn alles gelesen ist (sonst saehe sie wie ein Bestand aus, der keiner ist).
-    if (st && o.sicherPfad) {
+    if (st && !fehler && o.sicherPfad) { // nach jedem Fehler keine Sicherung (Codex2 #3)
       const tag = "sicherung-" + sp.inst + "-" + heute + ".json";
       const vor = o.version ? "sicherung-" + sp.inst + "-vor-" + verTeil(o.version) + "-" + heute + ".json" : null;
       const namen = [];
@@ -400,11 +413,20 @@
     return Modell.vereinige([lokal, ...wolke.map((d) => d.vorgaenge)]);
   }
   const darfSchreiben = (ab, inst, datenPfad) => !!ab && ab.gelesen === inst && ab.ordner === ordnerSchluessel(datenPfad);
-  // Lokale Vorgaenge, die in keiner (zuletzt gelesenen oder hochgeladenen) OneDrive-Fassung stehen.
+  // Lokale Vorgaenge, die nicht nachweislich in OneDrive stehen. Bestaetigt ist nur gleicher Inhalt in einer
+  // Datei, die beim letzten Lesen weder fehlte noch kuerzer als bekannt war (Codex2 #1/#2).
   function offene(ab, lokal) {
-    const da = new Set();
-    for (const d of Object.values(ab ? ab.dateien : {})) for (const v of d.vorgaenge) da.add(v.id);
-    return lokal.filter((v) => !da.has(v.id)).length;
+    const da = new Map();
+    for (const d of Object.values(ab ? ab.dateien : {})) if (!d.fehlt && !d.zurueckgesetzt) for (const v of d.vorgaenge) da.set(v.id, v);
+    return lokal.filter((v) => !da.has(v.id) || !gleich(da.get(v.id), v)).length;
+  }
+  // Warum Loeschen/Ordnerwechsel gerade Daten kosten wuerde (null = nichts). Die bekannten Vorgaenge fehlender
+  // oder verkuerzter Dateien und eine abweichende Variante liegen nur noch auf diesem Geraet (Codex2 #1/#2).
+  function loeschSperre(ab, lokal) {
+    const ds = Object.values(ab ? ab.dateien : {});
+    if (!Modell.vereinige([lokal, ...ds.map((d) => d.vorgaenge)]).ok) return "Widerspruch zwischen diesem Gerät und OneDrive (gleicher Vorgang, anderer Inhalt)";
+    const n = ds.filter((d) => d.fehlt || d.zurueckgesetzt).length;
+    return n ? n + " Datei(en) in OneDrive fehlen oder sind kürzer als bekannt – Teile davon liegen nur noch auf diesem Gerät" : null;
   }
   function vorText(ms) {
     if (!(ms >= 0)) return "unbekannt";
@@ -424,7 +446,7 @@
   }
 
   const Cloud = { pfadNormal, ordnerSchluessel, ordnerFinden, wurzelOrt, unterordner, abgleichen, pruefen,
-    sicherungenAussortieren, sicherungsInhalt, darfSchreiben, offene, zuletzt, vorText, zusammenfuehren };
+    sicherungenAussortieren, sicherungsInhalt, darfSchreiben, offene, loeschSperre, zuletzt, vorText, zusammenfuehren };
   if (typeof module !== "undefined" && module.exports) module.exports = Cloud;
   else wurzel.Cloud = Cloud;
 })(typeof window !== "undefined" ? window : globalThis);
