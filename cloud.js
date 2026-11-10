@@ -16,7 +16,9 @@
   const VORGANGSDATEI = new RegExp("^vorgaenge-(" + ID + ")\\.json$");
   // Eigene Dateien, die nicht gelesen werden: Schreibprobe aus "Pruefen", Kontentest (konto-test.html).
   const NEBENDATEI = new RegExp("^(schreibprobe-" + ID + "|test-[a-z0-9-]+)\\.json$", "i");
-  const SICHERUNG = new RegExp("^sicherung-" + ID + "-(vor-v\\d+-)?\\d{4}-\\d{2}-\\d{2}\\.json$");
+  // Version im Dateinamen nur aus [A-Za-z0-9_] ("v3.1" -> "v3_1"), sonst saehe die eigene Sicherung fremd aus (Review #6).
+  const verTeil = (v) => String(v).replace(/[^A-Za-z0-9]+/g, "_");
+  const SICHERUNG = new RegExp("^sicherung-" + ID + "-(vor-[A-Za-z0-9_]+-)?\\d{4}-\\d{2}-\\d{2}\\.json$");
   const ETAG = /^(W\/)?"/; // echter eTag steht in Anfuehrungszeichen (UGC Audit A4)
   const ZEIT_MS = 120000; // Zeitgrenze je Anfrage: ein haengender Upload haengt nicht den ganzen Abgleich (Luecke 12)
   const LEBENSZEICHEN_MS = 20 * 3600e3; // eigene Datei mind. taeglich neu schreiben, sonst stimmt "zuletzt abgeglichen" nicht
@@ -27,12 +29,18 @@
     (wo === "Datenordner" ? "App-Ordner" : "Sicherungsordner") + ". Es wurde nichts gelesen und nichts geschrieben. " +
     "Bitte den Pfad bis zum App-Ordner eintragen (z. B. Gemeinschaftsordner/Vorrats App).";
   const kurzId = (inst) => String(inst).slice(0, 8) + "…";
+  // Fremddatei-Stopp (Kontentest 08.11.): null = nur App-Dateien, sonst der Text (ohne Dateinamen).
+  function fremdStopp(items, istSicherung) {
+    const muster = istSicherung ? SICHERUNG : VORGANGSDATEI;
+    const n = items.filter((x) => !muster.test(x.name) && !NEBENDATEI.test(x.name)).length;
+    return n ? stoppText(n, istSicherung ? "Sicherungsordner" : "Datenordner") : null;
+  }
 
-  // Windows-Pfad aus dem Explorer erlaubt (wie konto-test.html): alles bis "OneDrive\" weg, \ -> /.
+  // Windows-Pfad aus dem Explorer erlaubt: "C:\...\OneDrive\" oder "C:\...\OneDrive - Firma\" vorne weg, \ -> /.
+  // Nur bei Laufwerksbuchstabe vorn; "Mein OneDrive/Vorrat" bleibt, wie es ist (Review #7).
+  const WINDOWS = /^[a-z]:\/(?:[^/]*\/)*?onedrive(?: - [^/]+)?\//i;
   function pfadNormal(eingabe) {
-    let p = String(eingabe || "").trim().replace(/\\/g, "/");
-    const i = p.toLowerCase().indexOf("onedrive/");
-    if (i >= 0) p = p.slice(i + "onedrive/".length);
+    const p = String(eingabe || "").trim().replace(/\\/g, "/").replace(WINDOWS, "");
     return p.split("/").map((t) => t.trim()).filter(Boolean).join("/");
   }
   const ordnerSchluessel = (p) => pfadNormal(p).toLowerCase();
@@ -119,8 +127,8 @@
   // Alle Vorgangsdateien lesen. Jeder Fehler wirft: ein Lesefehler ist nie ein leerer Vorrat (Bauplan R2 #10).
   async function allesLesen(g, ort, cache, sp) {
     const items = await dateienListen(g, ort, "Datenordner");
-    const fremd = items.filter((x) => !VORGANGSDATEI.test(x.name) && !NEBENDATEI.test(x.name)).length;
-    if (fremd) throw new Error(stoppText(fremd, "Datenordner"));
+    const stopp = fremdStopp(items, false);
+    if (stopp) throw new Error(stopp);
     const lokal = await sp.alleVorgaenge();
     const lokaleInst = new Set(lokal.map((v) => v.inst));
     const dateien = {};
@@ -130,9 +138,19 @@
       if (!ETAG.test(String(x.eTag || ""))) throw new Error("Datei " + kurzId(m[1]) + ": OneDrive liefert keinen eTag");
       const c = cache[x.name];
       // Gleicher eTag = gleicher Inhalt: spart das Herunterladen (bis 3,4 MB je Datei nach 3 Jahren).
-      const vorgaenge = c && !c.fehlt && c.eTag === x.eTag ? c.vorgaenge : await dateiLesen(g, ort, x, m[1]);
+      const gleich = c && !c.fehlt && c.eTag === x.eTag;
+      let vorgaenge = gleich ? c.vorgaenge : await dateiLesen(g, ort, x, m[1]);
+      let zurueck = !!(gleich && c.zurueckgesetzt);
+      // Fremde Datei kuerzer als bekannt (Versionsverlauf, abgeschnitten): nie weniger uebernehmen,
+      // Bekanntes behalten und markieren (Review #4). Eigene Dateien repariert hochladen() selbst.
+      if (c && !gleich && !lokaleInst.has(m[1])) {
+        const da = new Set(vorgaenge.map((v) => v.id));
+        const fehlen = c.vorgaenge.filter((v) => !da.has(v.id));
+        if (fehlen.length) { vorgaenge = vorgaenge.concat(fehlen).sort((a, b) => a.n - b.n); zurueck = true; }
+      }
       dateien[x.name] = { inst: m[1], eTag: x.eTag, geaendert: x.lastModifiedDateTime || null,
         von: (x.lastModifiedBy && x.lastModifiedBy.user && x.lastModifiedBy.user.displayName) || null, vorgaenge };
+      if (zurueck) dateien[x.name].zurueckgesetzt = true;
     }
     // Frueher gesehene Datei fehlt: fremde -> letzten Stand behalten und markieren (nichts verwerfen);
     // eigene (Vorgaenge liegen lokal) -> weglassen, dann wird sie neu hochgeladen.
@@ -145,7 +163,8 @@
 
   // Eigene Datei(en) hochladen: laufende ID + alte IDs dieses Geraets (halber Zustand, jede unter IHRER Datei).
   // Liefert "nochmal", wenn eine Datei sich zwischen Lesen und Schreiben geaendert hat (412) -> neu lesen.
-  async function hochladen(g, inst, st, jetzt) {
+  async function hochladen(g, sp, st, jetzt) {
+    const inst = sp.inst;
     const nachInst = new Map();
     for (const v of st.lokal) { if (!nachInst.has(v.inst)) nachInst.set(v.inst, []); nachInst.get(v.inst).push(v); }
     for (const [i, eigene] of nachInst) {
@@ -154,8 +173,12 @@
       const wolke = c ? c.vorgaenge : [];
       const inWolke = new Set(wolke.map((v) => v.id));
       if (i === inst) {
+        // Die OneDrive-Datei kennt mehr als das Geraet: uebernehmen und Zaehler dahinter setzen, sonst vergaebe
+        // das Geraet eine vorhandene Kennung neu (Review #3). Inhaltsgleichheit hat allesLesen schon geprueft.
+        // ponytail: ein Vorgang, der genau zwischen Lesen und Uebernehmen entsteht, kann kollidieren -> Abbruch, kein Verlust.
         const ids = new Set(eigene.map((v) => v.id));
-        if (wolke.some((v) => !ids.has(v.id))) throw new Error("Die OneDrive-Datei dieses Geräts enthält Vorgänge, die das Gerät nicht kennt – nichts geschrieben");
+        const fehlen = wolke.filter((v) => !ids.has(v.id));
+        if (fehlen.length) { await sp.uebernehmen(fehlen); eigene.push(...fehlen); st.lokal.push(...fehlen); }
       }
       const neu = eigene.filter((v) => !inWolke.has(v.id));
       const lebenszeichen = i === inst && c && !(jetzt - Date.parse(c.geaendert) < LEBENSZEICHEN_MS);
@@ -202,11 +225,11 @@
   function sicherungenAussortieren(dateien, inst, version, max) {
     max = max || SICHERUNGEN_MAX;
     const tagNamen = new RegExp("^sicherung-" + inst + "-(\\d{4})-(\\d{2})-(\\d{2})\\.json$");
-    const vorNamen = new RegExp("^sicherung-" + inst + "-vor-(v\\d+)-\\d{4}-\\d{2}-\\d{2}\\.json$");
+    const vorNamen = new RegExp("^sicherung-" + inst + "-vor-([A-Za-z0-9_]+)-\\d{4}-\\d{2}-\\d{2}\\.json$");
     const datum = (d) => String(d.name).slice(-15, -5);
     const rest = (dateien || []).filter((d) => {
       const v = vorNamen.exec(String(d.name || ""));
-      return v ? v[1] !== version : tagNamen.test(String(d.name || ""));
+      return v ? v[1] !== verTeil(version) : tagNamen.test(String(d.name || ""));
     }).sort((a, b) => datum(b).localeCompare(datum(a)) || String(b.name).localeCompare(String(a.name)));
     const woche = (d) => {
       const m = tagNamen.exec(String(d.name));
@@ -227,25 +250,32 @@
   }
 
   // Sicherung in den Sicherungsordner. Ordner wird nie still angelegt, Fehler sind laut (UGC #32).
+  // Jede Datei wird fuer sich gebucht (Review #5). Liefert { geschafft: [Namen], fehler, weg }.
   async function sichern(g, pfad, inhalt, namen, inst, version) {
     const ort = await ordnerFinden(g, pfad);
     const items = await dateienListen(g, ort, "Sicherungsordner");
-    const fremd = items.filter((x) => !SICHERUNG.test(x.name) && !NEBENDATEI.test(x.name)).length;
-    if (fremd) throw new Error(stoppText(fremd, "Sicherungsordner"));
+    const stopp = fremdStopp(items, true);
+    if (stopp) throw new Error(stopp);
     const text = JSON.stringify(inhalt);
+    const art = (name) => (name.includes("-vor-") ? "Versionssicherung" : "Tagessicherung");
+    const geschafft = [];
+    let fehler = null;
     for (const name of namen) {
       const r = await graph(g, `/drives/${ort.driveId}/items/${ort.id}:/${name}:/content?@microsoft.graph.conflictBehavior=replace`,
         { method: "PUT", headers: { "Content-Type": "application/json" }, body: text });
-      if (!r.ok) throw new Error("Sicherung fehlgeschlagen: " + fehlerText(r.status, "Sicherungsordner") + " – es wurde NICHTS gesichert");
+      if (r.ok) geschafft.push(name);
+      else fehler = art(name) + " fehlgeschlagen: " + fehlerText(r.status, "Sicherungsordner");
     }
+    if (fehler) fehler += geschafft.length ? " (die " + art(geschafft[0]) + " liegt)" : " – es wurde NICHTS gesichert";
+    if (!geschafft.length) return { geschafft, fehler, weg: 0 };
     // Aufraeumen: leise, nur eigene Namen, DELETE landet im OneDrive-Papierkorb.
-    const liste = items.filter((x) => !namen.includes(x.name)).concat(namen.map((name) => ({ name })));
+    const liste = items.filter((x) => !geschafft.includes(x.name)).concat(geschafft.map((name) => ({ name })));
     let weg = 0;
     for (const d of sicherungenAussortieren(liste, inst, version).filter((x) => x.id)) {
       const r = await graph(g, `/drives/${ort.driveId}/items/${d.id}`, { method: "DELETE" });
       if (r.ok) weg++;
     }
-    return weg;
+    return { geschafft, fehler, weg };
   }
 
   // Der ganze Abgleich. Wirft nur, wenn nicht einmal der Zustand gespeichert werden konnte.
@@ -262,7 +292,7 @@
       if (o.sicherPfad && ordnerSchluessel(o.sicherPfad) === ordner) throw new Error("Daten- und Sicherungsordner müssen verschieden sein");
       for (let runde = 1; ; runde++) {
         st = await allesLesen(g, await ordnerFinden(g, o.datenPfad), st ? st.dateien : ab.dateien, sp);
-        if ((await hochladen(g, sp.inst, st, jetzt)) === "fertig") break;
+        if ((await hochladen(g, sp, st, jetzt)) === "fertig") break;
         if (runde >= 3) throw new Error("Eigene Datei hat sich beim Schreiben mehrfach geändert (412) – später erneut");
       }
     } catch (x) {
@@ -274,22 +304,28 @@
       sicherung: ab.sicherung || null };
     // Sicherung erst, wenn alles gelesen ist (sonst saehe sie wie ein Bestand aus, der keiner ist).
     if (st && o.sicherPfad) {
+      const tag = "sicherung-" + sp.inst + "-" + heute + ".json";
+      const vor = o.version ? "sicherung-" + sp.inst + "-vor-" + verTeil(o.version) + "-" + heute + ".json" : null;
       const namen = [];
-      if (neu.gesichert !== heute) namen.push("sicherung-" + sp.inst + "-" + heute + ".json");
-      if (o.version && neu.appStand !== o.version) namen.push("sicherung-" + sp.inst + "-vor-" + o.version + "-" + heute + ".json");
+      if (neu.gesichert !== heute) namen.push(tag);
+      if (vor && neu.appStand !== o.version) namen.push(vor);
       if (namen.length) {
         try {
           const lokal = await sp.alleVorgaenge();
-          const weg = await sichern(g, o.sicherPfad, sicherungsInhalt(neu.dateien, lokal, sp.inst, jetzt), namen, sp.inst, o.version);
-          neu.gesichert = heute;
-          if (o.version) neu.appStand = o.version;
-          neu.sicherung = { zeit: Modell.lokalIso(jetzt), fehler: null, weg };
+          const e = await sichern(g, o.sicherPfad, sicherungsInhalt(neu.dateien, lokal, sp.inst, jetzt), namen, sp.inst, o.version);
+          if (e.geschafft.includes(tag)) neu.gesichert = heute;
+          if (vor && e.geschafft.includes(vor)) neu.appStand = o.version;
+          neu.sicherung = { zeit: Modell.lokalIso(jetzt), fehler: e.fehler, weg: e.weg };
         } catch (x) {
           neu.sicherung = { zeit: Modell.lokalIso(jetzt), fehler: (x && x.message) || String(x), weg: 0 };
         }
       }
     }
-    await sp.abgleichSpeichern(neu, st ? st.maxUhr : 0);
+    // Grosse Daten (bis einige MB) nur schreiben, wenn sich eine Datei geaendert hat oder der Ordner neu ist (Review #8).
+    const sig = (ds) => JSON.stringify(Object.keys(ds).sort().map((n) => [n, ds[n].eTag, ds[n].vorgaenge.length, !!ds[n].fehlt, !!ds[n].zurueckgesetzt]));
+    const { dateien, ...klein } = neu;
+    const geaendert = !alt || alt.ordner !== ordner || sig(dateien) !== sig(alt.dateien);
+    await sp.abgleichSpeichern(geaendert ? neu : klein, st ? st.maxUhr : 0);
     return { ok: !fehler, fehler, zustand: neu };
   }
 
@@ -302,8 +338,8 @@
       z.push([true, "Ordner gefunden" + (ort.verknuepfung ? " (Verknüpfung auf einen geteilten Ordner)" : "")]);
       const items = await dateienListen(g, ort, istSicherung ? "Sicherungsordner" : "Datenordner");
       const muster = istSicherung ? SICHERUNG : VORGANGSDATEI;
-      const fremd = items.filter((x) => !muster.test(x.name) && !NEBENDATEI.test(x.name)).length;
-      if (fremd) { z.push([false, stoppText(fremd, istSicherung ? "Sicherungsordner" : "Datenordner")]); return z; }
+      const stopp = fremdStopp(items, istSicherung);
+      if (stopp) { z.push([false, stopp]); return z; }
       z.push([true, "Lesen ok · " + items.filter((x) => muster.test(x.name)).length + (istSicherung ? " Sicherungen" : " Vorgangsdateien")]);
       const r = await graph(g, `/drives/${ort.driveId}/items/${ort.id}:/schreibprobe-${inst}.json:/content?@microsoft.graph.conflictBehavior=replace`,
         { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ schreibprobe: Modell.lokalIso() }) });
@@ -319,6 +355,20 @@
   }
 
   // ---- reine Helfer fuer die Oberflaeche ----
+  // Lokale Vorgaenge + OneDrive-Stand zum Gesamtstand. Lokale Installationen werden ZUSAMMEN mit ihrer
+  // OneDrive-Datei auf Lueckenlosigkeit geprueft (halber Zustand: lokal nur X-3, OneDrive 1..3, Review #2).
+  // Reine OneDrive-Dateien hat allesLesen schon geprueft, die werden nicht erneut geprueft (Review #8).
+  function zusammenfuehren(lokal, dateien) {
+    const wolke = Object.values(dateien || {});
+    const nachInst = new Map();
+    for (const v of lokal) { const k = v && v.inst; if (!nachInst.has(k)) nachInst.set(k, new Map()); nachInst.get(k).set(v && v.id, v); }
+    for (const d of wolke) if (nachInst.has(d.inst)) for (const v of d.vorgaenge) if (!nachInst.get(d.inst).has(v.id)) nachInst.get(d.inst).set(v.id, v);
+    for (const [inst, m] of nachInst) {
+      const p = Modell.pruefeDatei({ schema: Modell.SCHEMA, inst, vorgaenge: [...m.values()] });
+      if (!p.ok) return { ok: false, fehler: p.fehler, vorgaenge: null };
+    }
+    return Modell.vereinige([lokal, ...wolke.map((d) => d.vorgaenge)]);
+  }
   const darfSchreiben = (ab, inst, datenPfad) => !!ab && ab.gelesen === inst && ab.ordner === ordnerSchluessel(datenPfad);
   // Lokale Vorgaenge, die in keiner (zuletzt gelesenen oder hochgeladenen) OneDrive-Fassung stehen.
   function offene(ab, lokal) {
@@ -339,12 +389,12 @@
       const ms = jetzt - Date.parse(d.geaendert);
       const eigen = d.inst === inst, frueher = !eigen && eigeneInst.has(d.inst);
       return { inst: d.inst, wer: eigen ? "dieses Gerät" : frueher ? "dieses Gerät (frühere Installation)" : d.von || "unbekannt",
-        wann: vorText(ms), alt: !frueher && !(ms < ALT_MS), fehlt: !!d.fehlt };
+        wann: vorText(ms), alt: !frueher && !(ms < ALT_MS), fehlt: !!d.fehlt, zurueck: !!d.zurueckgesetzt };
     }).sort((a, b) => (a.wer === "dieses Gerät" ? -1 : b.wer === "dieses Gerät" ? 1 : a.wer.localeCompare(b.wer, "de")));
   }
 
   const Cloud = { pfadNormal, ordnerSchluessel, ordnerFinden, wurzelOrt, unterordner, abgleichen, pruefen,
-    sicherungenAussortieren, sicherungsInhalt, darfSchreiben, offene, zuletzt, vorText };
+    sicherungenAussortieren, sicherungsInhalt, darfSchreiben, offene, zuletzt, vorText, zusammenfuehren };
   if (typeof module !== "undefined" && module.exports) module.exports = Cloud;
   else wurzel.Cloud = Cloud;
 })(typeof window !== "undefined" ? window : globalThis);

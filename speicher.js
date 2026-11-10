@@ -2,7 +2,7 @@
 // Laeuft im Browser (window.Speicher, braucht window.Modell) und in Node (require, IndexedDB von aussen).
 //
 // DB "vorrat": Speicher "vorgaenge" (Schluessel id) und "meta" (Schluessel "zaehler" = {inst, nr, uhr},
-// "abgleich" = Zustand aus cloud.js).
+// "abgleich" + "wolke" = Zustand aus cloud.js).
 // Grundsatz: Vorgang und Zaehler stehen immer zusammen in EINER Transaktion (Bauplan R2 #2, UGC #45).
 (function (wurzel) {
   "use strict";
@@ -80,35 +80,48 @@
         return e.vorgang;
       })),
 
-      // Alle lokal erzeugten Vorgaenge, im halben Zustand auch die einer frueheren ID dieses Geraets.
-      // Fremde Vorgaenge (anderes Handy) liegen nie hier, sondern im Abgleich-Zustand (meta "abgleich").
+      // Alle lokal gespeicherten Vorgaenge (laufende ID, im halben Zustand auch fruehere IDs dieses Geraets).
+      // Fremde Vorgaenge (anderes Handy) liegen nie hier, sondern im Abgleich-Zustand.
       alleVorgaenge: () => schritt(db, "readonly", (vs, meta, lauf) => { vs.getAll().onsuccess = lauf((a) => a); }),
-      // Nur die der laufenden Installation (Bauplan Abschnitt 2: nach inst filtern).
-      eigeneVorgaenge: () => schritt(db, "readonly", (vs, meta, lauf) => { vs.getAll().onsuccess = lauf((a) => a.filter((v) => v && v.inst === inst)); }),
 
       zaehler: () => schritt(db, "readonly", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => z)),
 
-      // Abgleich-Zustand (cloud.js): Ordner, zuletzt gelesene Dateien, "gelesen" = diese Installation hat
-      // alle Dateien gelesen. null = noch nie abgeglichen.
-      abgleich: () => schritt(db, "readonly", (vs, meta, lauf) => { meta.get("abgleich").onsuccess = lauf((a) => a || null); }),
+      // Abgleich-Zustand (cloud.js): Ordner, "gelesen" = diese Installation hat alle Dateien gelesen, dazu die
+      // zuletzt gelesenen Dateien. Klein ("abgleich") und gross ("wolke", bis einige MB) getrennt gespeichert,
+      // damit nicht jeder Abgleich die grossen Daten neu schreibt. null = noch nie abgeglichen.
+      abgleich: () => schritt(db, "readonly", (vs, meta, lauf) => {
+        meta.get("abgleich").onsuccess = lauf((a) => {
+          if (!a) return null;
+          meta.get("wolke").onsuccess = lauf((w) => Object.assign({}, a, { dateien: w && w.ordner === a.ordner ? w.dateien : {} }));
+        });
+      }),
       // Zustand + Uhr nachziehen in EINER Transaktion: "gelesen" gilt nie ohne nachgezogene Uhr (Abschnitt 2).
+      // Steht zustand.dateien drin, werden auch die grossen Daten geschrieben, sonst bleiben sie stehen.
       abgleichSpeichern: (zustand, maxUhr) => Number.isSafeInteger(maxUhr)
         ? schritt(db, "readwrite", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => {
           const n = Modell.uhrNachziehen(z, maxUhr);
           if (n !== z) meta.put(n, "zaehler");
-          meta.put(zustand, "abgleich");
+          const { dateien, ...klein } = zustand;
+          meta.put(klein, "abgleich");
+          if (dateien !== undefined) meta.put({ ordner: zustand.ordner, dateien }, "wolke");
           return n;
         }))
         : Promise.reject(new Error("Uhr ungueltig")),
 
-      // Nach dem Einlesen fremder Dateien. Nur ganze Zahlen: ein Text als Uhr wuerde jeden weiteren Vorgang sperren.
-      uhrNachziehen: (maxUhr) => Number.isSafeInteger(maxUhr)
-        ? schritt(db, "readwrite", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => {
-          const n = Modell.uhrNachziehen(z, maxUhr);
-          if (n !== z) meta.put(n, "zaehler");
-          return n;
-        }))
-        : Promise.reject(new Error("Uhr ungueltig")),
+      // Vorgaenge der LAUFENDEN ID, die nur in OneDrive stehen, uebernehmen (Code-Review #3): zusammen mit
+      // Zaehler (Nummer + Uhr dahinter) in einer Transaktion, damit keine Kennung doppelt vergeben wird.
+      uebernehmen: (liste) => schritt(db, "readwrite", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => {
+        let nr = z.nr, uhr = z.uhr;
+        for (const v of liste) {
+          if (Modell.pruefeVorgang(v) || v.inst !== inst) throw new Error("Vorgang zum Uebernehmen ungueltig");
+          vs.add(v); // vorhandene Kennung -> Abbruch, nichts uebernommen
+          if (v.n >= nr) nr = v.n + 1;
+          if (v.uhr > uhr) uhr = v.uhr;
+        }
+        const n = { inst, nr, uhr };
+        meta.put(n, "zaehler");
+        return n;
+      })),
 
       schliessen: () => db.close(),
     };

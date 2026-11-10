@@ -28,7 +28,7 @@ fall("Neue Installation bekommt ID, Nummern lueckenlos, Dateien gueltig", async 
   const ort = await sp.ausfuehren(ORT);
   await sp.ausfuehren({ typ: "neu", art: "fach", werte: { name: "Schublade 1", lage: { ort: ort.id, reihe: 0, spalte: 0 } } });
   await sp.ausfuehren({ typ: "feld", art: "ort", ziel: ort.id, feld: "name", wert: "Truhe" });
-  const vs = await sp.eigeneVorgaenge();
+  const vs = await sp.alleVorgaenge();
   assert.deepStrictEqual(vs.map((v) => v.n).sort(), [1, 2, 3]);
   gueltig(sp, vs);
   assert.deepStrictEqual(await sp.zaehler(), { inst: sp.inst, nr: 4, uhr: 3 });
@@ -45,7 +45,7 @@ fall("Zwei Tabs gleichzeitig: dieselbe ID, keine Nummer doppelt", async () => {
   for (let i = 0; i < 20; i++) auftraege.push((i % 2 ? a : b).ausfuehren(ORT));
   const erg = await Promise.all(auftraege);
   assert.strictEqual(new Set(erg.map((v) => v.n)).size, 20);
-  const vs = await a.eigeneVorgaenge();
+  const vs = await a.alleVorgaenge();
   assert.deepStrictEqual(vs.map((v) => v.n).sort((x, y) => x - y), Array.from({ length: 20 }, (_, i) => i + 1));
   gueltig(a, vs);
   a.schliessen(); b.schliessen();
@@ -58,7 +58,7 @@ fall("Ungueltige Eingabe: abgelehnt, nichts gespeichert, Zaehler unveraendert", 
   await assert.rejects(sp.ausfuehren({ typ: "loeschen", art: "eintrag", ziel: "x" }), /unbekannter Vorgangstyp/);
   await assert.rejects(sp.ausfuehren({ typ: "neu", art: "eintrag", werte: { name: "Erbsen" }, menge: 0 }), /Anfangsmenge/);
   assert.deepStrictEqual(await sp.zaehler(), vorher);
-  assert.strictEqual((await sp.eigeneVorgaenge()).length, 1);
+  assert.strictEqual((await sp.alleVorgaenge()).length, 1);
   sp.schliessen();
 });
 
@@ -106,7 +106,6 @@ fall("Halber Zustand (Vorgaenge da, Zaehler weg): neue ID, Uhr dahinter, alte Vo
   const vs = await sp.alleVorgaenge();
   assert.strictEqual(vs.filter((x) => x.inst === alt.inst).length, 3);
   gueltig(sp, vs.filter((x) => x.inst === sp.inst));
-  assert.deepStrictEqual((await sp.eigeneVorgaenge()).map((x) => x.inst), [sp.inst], "eigeneVorgaenge filtert nach inst");
   sp.schliessen();
 });
 
@@ -140,7 +139,7 @@ fall("Codex R2 #2: Vorgaenge weg, Zaehler noch da -> neue ID, Uhr laeuft weiter"
   assert.strictEqual(sp.neu, true);
   const v = await sp.ausfuehren(ORT);
   assert.deepStrictEqual([v.n, v.uhr], [1, 4]);
-  gueltig(sp, await sp.eigeneVorgaenge());
+  gueltig(sp, await sp.alleVorgaenge());
   sp.schliessen();
 });
 
@@ -159,14 +158,44 @@ fall("Codex R2 #3: offener Tab schreibt nach ID-Wechsel nicht unter fremder ID",
   a.schliessen(); b.schliessen();
 });
 
-fall("uhrNachziehen: nur vorwaerts, nur ganze Zahlen", async () => {
+fall("Review #8: grosse Daten getrennt, ohne dateien bleiben sie stehen, anderer Ordner sieht sie nicht", async () => {
   const sp = await S.oeffnen();
   await sp.ausfuehren(ORT);
-  assert.strictEqual((await sp.uhrNachziehen(10)).uhr, 10);
-  assert.strictEqual((await sp.uhrNachziehen(5)).uhr, 10);
-  await assert.rejects(sp.uhrNachziehen("99"), /Uhr ungueltig/);
+  const dateien = { "vorgaenge-x.json": { inst: "x", vorgaenge: [] } };
+  await sp.abgleichSpeichern({ ordner: "a", gelesen: sp.inst, dateien }, 0);
+  await sp.abgleichSpeichern({ ordner: "a", gelesen: sp.inst, letzter: { zeit: "t" } }, 0);
+  assert.deepStrictEqual(await sp.abgleich(), { ordner: "a", gelesen: sp.inst, letzter: { zeit: "t" }, dateien });
+  await sp.abgleichSpeichern({ ordner: "b", gelesen: null }, 0);
+  assert.deepStrictEqual((await sp.abgleich()).dateien, {}, "Daten des alten Ordners nie unter dem neuen");
+  sp.schliessen();
+});
+
+fall("Review #3: uebernehmen setzt Zaehler hinter die Uebernommenen, ID bleibt beim Neustart", async () => {
+  const sp = await S.oeffnen();
+  const v1 = await sp.ausfuehren(ORT);
+  let z = { inst: sp.inst, nr: 2, uhr: v1.uhr };
+  const fremd = [];
+  for (let i = 0; i < 2; i++) { const e = M.erzeuge(z, ORT); z = e.zaehler; fremd.push(e.vorgang); }
+  await assert.rejects(sp.uebernehmen([M.erzeuge({ inst: "andere00001", nr: 1, uhr: 0 }, ORT).vorgang]), /ungueltig/);
+  const n = await sp.uebernehmen(fremd);
+  assert.deepStrictEqual(n, { inst: sp.inst, nr: 4, uhr: 3 });
+  assert.deepStrictEqual(await sp.zaehler(), n);
+  assert.strictEqual((await sp.ausfuehren(ORT)).id, sp.inst + "-4");
+  sp.schliessen();
+  const wieder = await S.oeffnen();
+  assert.deepStrictEqual([wieder.inst, wieder.neu], [sp.inst, false]);
+  gueltig(wieder, await wieder.alleVorgaenge());
+  wieder.schliessen();
+});
+
+fall("abgleichSpeichern zieht die Uhr: nur vorwaerts, nur ganze Zahlen", async () => {
+  const sp = await S.oeffnen();
+  await sp.ausfuehren(ORT);
+  assert.strictEqual((await sp.abgleichSpeichern({ ordner: "a" }, 10)).uhr, 10);
+  assert.strictEqual((await sp.abgleichSpeichern({ ordner: "a" }, 5)).uhr, 10);
+  await assert.rejects(sp.abgleichSpeichern({ ordner: "a" }, "99"), /Uhr ungueltig/);
   assert.strictEqual((await sp.ausfuehren(ORT)).uhr, 11);
-  gueltig(sp, await sp.eigeneVorgaenge());
+  gueltig(sp, await sp.alleVorgaenge());
   sp.schliessen();
 });
 

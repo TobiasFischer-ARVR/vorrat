@@ -222,14 +222,36 @@ fall("Halber Zustand: alte Vorgaenge unter ihrer alten Datei, neue unter der neu
   x.sp.schliessen();
 });
 
-fall("Schrumpf-Schutz: eigene OneDrive-Datei mit unbekannten Vorgaengen -> nichts geschrieben", async () => {
+fall("Review #3: eigene OneDrive-Datei kennt mehr -> uebernehmen, Zaehler dahinter, Abgleich laeuft weiter", async () => {
   const x = await aufbau();
   const v1 = await x.sp.ausfuehren(ORT);
   const v2 = M.erzeuge({ inst: x.sp.inst, nr: 2, uhr: v1.uhr }, ORT).vorgang;
   x.f.neu("D1", x.f.daten.id, eigenName(x.sp.inst), "datei", JSON.stringify({ schema: M.SCHEMA, inst: x.sp.inst, vorgaenge: [v1, v2] }));
   const r = await lauf(x);
-  assert.match(r.fehler, /nicht kennt/);
-  assert.strictEqual(x.f.puts(/vorgaenge-/).length, 0);
+  assert.strictEqual(r.ok, true, r.fehler);
+  assert.deepStrictEqual((await x.sp.alleVorgaenge()).map((v) => v.n).sort(), [1, 2]);
+  const v3 = await x.sp.ausfuehren(ORT);
+  assert.strictEqual(v3.id, x.sp.inst + "-3", "keine vorhandene Kennung neu vergeben");
+  assert.strictEqual((await lauf(x)).ok, true, "naechster Abgleich haengt nicht");
+  assert.deepStrictEqual(x.f.inhalt(x.f.daten, eigenName(x.sp.inst)).vorgaenge.map((v) => v.n), [1, 2, 3]);
+  x.sp.schliessen();
+});
+
+fall("Review #4: fremde Datei schrumpft -> Bekanntes bleibt (auch in der Sicherung), als zurueckgesetzt markiert", async () => {
+  const x = await aufbau();
+  const voll = fremdeDatei(ANDREA, 3);
+  const a = x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(voll));
+  assert.strictEqual((await lauf(x)).ok, true);
+  x.f.aendern(a, JSON.stringify({ schema: M.SCHEMA, inst: ANDREA, vorgaenge: voll.vorgaenge.slice(0, 2) }));
+  const morgen = new Date(Date.now() + 864e5);
+  const r = await lauf(x, { jetzt: morgen });
+  assert.strictEqual(r.ok, true, r.fehler);
+  const ab = await x.sp.abgleich();
+  assert.strictEqual(ab.dateien[eigenName(ANDREA)].vorgaenge.length, 3);
+  assert.strictEqual(ab.dateien[eigenName(ANDREA)].zurueckgesetzt, true);
+  assert.strictEqual(C.zuletzt(ab, x.sp.inst, new Set()).find((z) => z.inst === ANDREA).zurueck, true);
+  const tag = x.f.inhalt(x.f.sicher, "sicherung-" + x.sp.inst + "-" + M.heuteIso(morgen) + ".json");
+  assert.strictEqual(tag.dateien.find((d) => d.inst === ANDREA).vorgaenge.length, 3);
   x.sp.schliessen();
 });
 
@@ -250,6 +272,12 @@ fall("Schrumpf-Schutz alte ID: lokal teilweise verloren -> OneDrive-Fassung + Re
   x.sp = await S.oeffnen();
   assert.strictEqual((await lauf(x)).ok, true);
   assert.deepStrictEqual(x.f.inhalt(x.f.daten, eigenName(alt)).vorgaenge.map((v) => v.n), [1, 2, 3]);
+  // Review #2: die Oberflaeche rechnet lokal (nur Nummer 3) zusammen mit OneDrive (1..3) -> laedt
+  const lokal = await x.sp.alleVorgaenge();
+  const z = C.zusammenfuehren(lokal, (await x.sp.abgleich()).dateien);
+  assert.strictEqual(z.ok, true, z.fehler);
+  assert.strictEqual(z.vorgaenge.length, 3);
+  assert.strictEqual(C.zusammenfuehren(lokal, {}).ok, false, "ohne OneDrive bleibt die Luecke ein Fehler");
   x.sp.schliessen();
 });
 
@@ -285,6 +313,12 @@ fall("Andrea: Pfad ueber Verknuepfung (remoteItem), Windows-Pfad aus dem Explore
   assert.deepStrictEqual([ort.driveId, ort.id, ort.verknuepfung], ["D1", x.f.daten.id, true]);
   assert.strictEqual(C.pfadNormal(" C:\\Users\\x\\OneDrive\\Gemeinschaftsordner\\Vorrats App\\ "), "Gemeinschaftsordner/Vorrats App");
   assert.strictEqual(C.pfadNormal("/Gemeinschaftsordner//Vorrats App/"), "Gemeinschaftsordner/Vorrats App");
+  // Review #7: nur ein Windows-Pfad vorn wird gekuerzt, auch "OneDrive - Firma"
+  const bs = (...t) => t.join(String.fromCharCode(92));
+  assert.strictEqual(C.pfadNormal(bs("C:", "Users", "x", "OneDrive - Firma", "Gemeinschaftsordner", "Vorrats App")), "Gemeinschaftsordner/Vorrats App");
+  assert.strictEqual(C.pfadNormal("Mein OneDrive/Vorrat"), "Mein OneDrive/Vorrat");
+  assert.strictEqual(C.pfadNormal("Archiv/onedrive/Vorrat"), "Archiv/onedrive/Vorrat");
+  assert.strictEqual(C.pfadNormal(bs("D:", "MeinOneDrive", "Vorrat")), "D:/MeinOneDrive/Vorrat");
   await x.sp.ausfuehren(ORT);
   assert.strictEqual((await lauf(x)).ok, true);
   assert.ok(x.f.datei(x.f.daten, eigenName(x.sp.inst)), "Datei in Tobias' Ordner");
@@ -338,6 +372,59 @@ fall("Sicherung: einmal am Tag + vor Version, Inhalt komplett, fremde Datei im S
   assert.strictEqual(x.f.puts(/:\/sicherung-/).length, n, "nichts in den Ordner geschrieben");
   // Daten- und Sicherungsordner gleich -> abgelehnt
   assert.match((await lauf(x, { sicherPfad: PFAD })).fehler, /verschieden/);
+  x.sp.schliessen();
+});
+
+fall("Review #5: zweite Sicherung scheitert -> erste gebucht, Meldung ehrlich, nur die fehlende wird nachgeholt", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  const jetzt = new Date();
+  x.f.vorher = async (art, pfad) => (art === "PUT" && pfad.includes("-vor-") ? { ok: false, status: 503 } : null);
+  const r = await lauf(x, { jetzt });
+  assert.strictEqual(r.zustand.gesichert, M.heuteIso(jetzt));
+  assert.strictEqual(r.zustand.appStand, null);
+  assert.match(r.zustand.sicherung.fehler, /Versionssicherung fehlgeschlagen.*Tagessicherung liegt/);
+  assert.ok(!/NICHTS/.test(r.zustand.sicherung.fehler));
+  x.f.vorher = null;
+  const n = x.f.puts(/:\/sicherung-/).length;
+  const r2 = await lauf(x, { jetzt });
+  assert.strictEqual(r2.zustand.appStand, "v3");
+  assert.deepStrictEqual(x.f.puts(/:\/sicherung-/).slice(n).map(([, p]) => /-vor-/.test(p)), [true], "nur die Versionssicherung nachgeholt");
+  x.sp.schliessen();
+});
+
+fall("Review #6: Version mit Punkt (v3.1) -> eigene Sicherung zaehlt nicht als fremd", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  const r = await lauf(x, { version: "v3.1" });
+  assert.strictEqual(r.zustand.sicherung.fehler, null);
+  assert.ok(x.f.kinder(x.f.sicher).some((d) => d.name.includes("-vor-v3_1-")));
+  const r2 = await lauf(x, { version: "v3.1", jetzt: new Date(Date.now() + 864e5) });
+  assert.strictEqual(r2.zustand.sicherung.fehler, null, "naechster Tag nicht gesperrt");
+  const ich = x.sp.inst;
+  const weg = C.sicherungenAussortieren([{ id: "a", name: "sicherung-" + ich + "-vor-v3_1-2026-01-01.json" }, { id: "b", name: "sicherung-" + ich + "-vor-v2-2026-01-01.json" },
+    { id: "c", name: "sicherung-" + ich + "-2026-02-01.json" }], ich, "v3.1", 1);
+  assert.deepStrictEqual(weg.map((d) => d.id), ["b"], "laufende Version bleibt, alte geht");
+  x.sp.schliessen();
+});
+
+fall("Review #8: ohne Aenderung keine grossen Daten schreiben; Ordnerwechsel mischt nie", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  const mit = [];
+  const echt = x.sp.abgleichSpeichern;
+  x.sp.abgleichSpeichern = (z, u) => { mit.push("dateien" in z); return echt(z, u); };
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.deepStrictEqual(mit, [true, false]);
+  assert.strictEqual(Object.keys((await x.sp.abgleich()).dateien).length, 1, "Daten bleiben stehen");
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(mit[2], true, "neue Fassung hochgeladen -> geschrieben");
+  const r = await lauf(x, { datenPfad: "Gibtesnicht" });
+  assert.strictEqual(r.ok, false);
+  const ab = await x.sp.abgleich();
+  assert.deepStrictEqual([ab.ordner, ab.gelesen, ab.dateien], ["gibtesnicht", null, {}]);
   x.sp.schliessen();
 });
 

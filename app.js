@@ -180,21 +180,10 @@ async function laden() {
     sp = sp || (await Speicher.oeffnen());
     let vs, a, z;
     do { z = aenderungen; vs = await sp.alleVorgaenge(); a = await sp.abgleich(); } while (z !== aenderungen);
-    // Lesefehler nie als leeren Vorrat behandeln (Bauplan R2 #10): jede Installation einzeln pruefen.
-    const nachInst = new Map();
-    for (const v of vs) { const k = v && v.inst; if (!nachInst.has(k)) nachInst.set(k, []); nachInst.get(k).push(v); }
-    for (const [inst, vorgaenge] of nachInst) {
-      const p = Modell.pruefeDatei({ schema: Modell.SCHEMA, inst, vorgaenge });
-      if (!p.ok) throw new Error(p.fehler);
-    }
-    // OneDrive-Stand nur fuer den eingestellten Ordner (nach Ordnerwechsel nie den alten mischen).
+    // Lesefehler nie als leeren Vorrat behandeln (Bauplan R2 #10). OneDrive-Stand nur fuer den eingestellten
+    // Ordner (nach Ordnerwechsel nie den alten mischen).
     const neuAb = a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null;
-    const wolke = neuAb ? Object.values(neuAb.dateien) : [];
-    for (const d of wolke) {
-      const p = Modell.pruefeDatei({ schema: Modell.SCHEMA, inst: d.inst, vorgaenge: d.vorgaenge });
-      if (!p.ok) throw new Error(p.fehler);
-    }
-    const r = Modell.vereinige([vs, ...wolke.map((d) => d.vorgaenge)]);
+    const r = Cloud.zusammenfuehren(vs, neuAb ? neuAb.dateien : {});
     if (!r.ok) throw new Error(r.fehler);
     ab = neuAb;
     lokal = vs;
@@ -284,7 +273,17 @@ const konto = (() => {
 const g = { fetch: (u, o) => fetch(u, o), token: () => konto.token() };
 
 const darfSchreiben = () => !!sp && Cloud.darfSchreiben(ab, sp.inst, einst.datenPfad);
-const offen = () => Cloud.offene(ab, lokal);
+const offen = () => Cloud.offene(ab, lokal); // nur fuer Anzeigen
+// Vor dem Loeschen: frisch aus dem Speicher, nie aus dem Arbeitsspeicher (der kann nach einem Ladefehler
+// leer oder veraltet sein, Review #1). Wirft bei Lesefehler.
+async function offenFrisch() {
+  const vs = await sp.alleVorgaenge(), a = await sp.abgleich();
+  return { n: Cloud.offene(a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null, vs), gesamt: vs.length };
+}
+// Ist das Geraet nicht lesbar, wird nicht geloescht; stattdessen das Backup aus dem Arbeitsspeicher anbieten.
+function nichtLoeschen(x) {
+  if (confirm("Gerätedaten nicht lesbar (" + ((x && x.message) || x) + ") – es wird NICHTS gelöscht.\n\nBackup des angezeigten Stands herunterladen?")) backupHerunterladen();
+}
 const fruehereIds = () => new Set(lokal.map((v) => v.inst).filter((i) => !sp || i !== sp.inst));
 const zeitText = (iso) => (iso ? iso.slice(8, 10) + "." + iso.slice(5, 7) + ". " + iso.slice(11, 16) : "–");
 
@@ -325,8 +324,8 @@ function abgleichStand() {
 }
 function abgleichKarte() {
   const [text, gut] = abgleichStand();
-  const alt = sp ? Cloud.zuletzt(ab, sp.inst, fruehereIds()).filter((r) => r.inst !== sp.inst && (r.alt || r.fehlt))
-    .map((r) => r.wer + ": " + (r.fehlt ? "Datei fehlt in OneDrive" : "zuletzt abgeglichen " + r.wann)) : [];
+  const alt = sp ? Cloud.zuletzt(ab, sp.inst, fruehereIds()).filter((r) => r.inst !== sp.inst && (r.alt || r.fehlt || r.zurueck))
+    .map((r) => r.wer + ": " + (r.fehlt ? "Datei fehlt in OneDrive" : r.zurueck ? "Datei kürzer als bekannt (zurückgesetzt?)" : "zuletzt abgeglichen " + r.wann)) : [];
   if (ab && ab.sicherung && ab.sicherung.fehler) alt.push(ab.sicherung.fehler); // UGC #32: Sicherungsfehler laut
   const einrichten = !konto || !konto.name() || !eingerichtet() || !darfSchreiben();
   return el("div", { className: "karte " + (gut && !alt.length ? "still" : "warnung") },
@@ -409,7 +408,8 @@ function einstellungenDialog() {
       const a = sp && (await sp.abgleich());
       if (Cloud.ordnerSchluessel(d) !== Cloud.ordnerSchluessel(einst.datenPfad) && a && a.gelesen) {
         // UGC #43: Vorgaenge des alten Ordners wandern nie in den neuen -> nur ohne Offenes, dann frisch starten.
-        const n = offen();
+        let n;
+        try { n = (await offenFrisch()).n; } catch (x) { return nichtLoeschen(x); }
         if (n) return melde(n + " Änderungen sind noch nicht abgeglichen. Erst abgleichen, dann den Ordner wechseln.");
         if (!confirm("Datenordner wechseln?\n\nDieses Gerät löscht dann seine lokale Kopie und startet mit neuer Kennung. " +
           "Alles Bisherige liegt schon im alten Ordner und wandert nicht mit.")) return;
@@ -442,8 +442,9 @@ function sicherungAnsicht() {
     el("p", null, text),
     konto && konto.name() && el("button", { className: "zeile", disabled: abLaeuft, onclick: () => abgleich() }, "↻ Jetzt abgleichen"),
     el("h3", null, "Zuletzt abgeglichen"),
-    zeilen.length ? el("table", { className: "pruefen" }, zeilen.map((r) => el("tr", { className: r.alt || r.fehlt ? "alt" : "" },
-      el("th", null, r.wer), el("td", null, r.fehlt ? "Datei fehlt in OneDrive (letzter Stand wird weiter gezeigt)" : r.wann + (r.alt ? " · über eine Woche!" : "")))))
+    zeilen.length ? el("table", { className: "pruefen" }, zeilen.map((r) => el("tr", { className: r.alt || r.fehlt || r.zurueck ? "alt" : "" },
+      el("th", null, r.wer), el("td", null, r.fehlt ? "Datei fehlt in OneDrive (letzter Stand wird weiter gezeigt)"
+        : r.wann + (r.zurueck ? " · Datei kürzer als bekannt (zurückgesetzt?), Bekanntes bleibt" : "") + (r.alt ? " · über eine Woche!" : "")))))
       : el("p", { className: "klein" }, "Noch keine Datei in OneDrive."),
     el("h3", null, "Sicherungen in OneDrive"),
     el("p", { className: s && s.fehler ? "hinweis-rot" : "" }, !s ? "Noch keine angelegt." : s.fehler ? "⚠ " + s.fehler
@@ -628,9 +629,11 @@ function pruefenAnsicht(ebene) {
   dauerhaftP.then((d) => { dauer.textContent = d === true ? "ja" : d === false ? "nein (Browser hat abgelehnt)" : "nicht feststellbar"; });
   const ausgabe = el("pre", { className: "ausgabe" });
   const test = el("button", { onclick: () => dreiJahresTest(ausgabe, test) }, "Drei-Jahres-Test");
-  const loesch = el("button", { className: "gefahr", onclick: () => {
-    if (!sp) return;
-    if (!confirm("Alle Daten auf DIESEM Gerät löschen?\n\n" + lokal.length + " eigene Vorgänge, davon " + offen() + " noch nicht in OneDrive – die gehen verloren.\n" +
+  const loesch = el("button", { className: "gefahr", onclick: async () => {
+    if (!sp) return nichtLoeschen(ladeFehler || "Speicher nicht geöffnet");
+    let f;
+    try { f = await offenFrisch(); } catch (x) { return nichtLoeschen(x); }
+    if (!confirm("Alle Daten auf DIESEM Gerät löschen?\n\n" + f.gesamt + " eigene Vorgänge, davon " + f.n + " noch nicht in OneDrive – die gehen verloren.\n" +
       "OneDrive bleibt unangetastet. Danach startet das Gerät mit neuer Kennung.")) return;
     geraetLoeschen();
   } }, "Gerätedaten löschen (z. B. Testdaten)");
