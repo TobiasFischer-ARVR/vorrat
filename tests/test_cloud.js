@@ -1,0 +1,414 @@
+// Pruefstand Cloud-Abgleich (Abschnitt 2) mit Graph-Attrappe. Aufruf: node tests/test_cloud.js
+// Braucht fake-indexeddb wie test_speicher.js (VORRAT_TESTDEPS, Vorgabe D:/tmp/vorrat-testdeps).
+"use strict";
+const assert = require("assert");
+const deps = process.env.VORRAT_TESTDEPS || "D:/tmp/vorrat-testdeps";
+try { require(require.resolve("fake-indexeddb/auto", { paths: [deps] })); } catch (e) {
+  console.error("fake-indexeddb fehlt in " + deps + "\nEinmalig: npm install --prefix " + deps + " fake-indexeddb");
+  process.exit(1);
+}
+const M = require("../modell.js");
+const S = require("../speicher.js");
+const C = require("../cloud.js");
+
+// ---- Graph-Attrappe: zwei Laufwerke, Ordner, Dateien, eTags, If-Match, Verknuepfung ----
+function attrappe() {
+  const items = new Map(); // id -> { id, drive, parent, name, ordner, inhalt, version, geaendert, von, remote }
+  let nr = 0;
+  const f = { ich: "D1", log: [], vorher: null, items };
+  f.neu = (drive, parent, name, art, inhalt) => {
+    const it = { id: "i" + ++nr, drive, parent, name, ordner: art === "ordner", inhalt, version: 1, geaendert: new Date().toISOString(), von: drive === "D1" ? "Tobias" : "Andrea", remote: null };
+    items.set(it.id, it);
+    return it;
+  };
+  const wurzel = { D1: f.neu("D1", null, "", "ordner"), D2: f.neu("D2", null, "", "ordner") };
+  f.gemein = f.neu("D1", wurzel.D1.id, "Gemeinschaftsordner", "ordner");
+  f.daten = f.neu("D1", f.gemein.id, "Vorrats App", "ordner");
+  f.sicher = f.neu("D1", f.daten.id, "Sicherungen", "ordner");
+  // Andreas Sicht: Verknuepfung in ihrem Laufwerk auf Tobias' Gemeinschaftsordner
+  const kurz = f.neu("D2", wurzel.D2.id, "Gemeinschaftsordner", "datei");
+  kurz.remote = f.gemein;
+  f.kinder = (ordner) => [...items.values()].filter((x) => x.parent === ordner.id);
+  f.datei = (ordner, name) => f.kinder(ordner).find((x) => x.name === name);
+  f.inhalt = (ordner, name) => JSON.parse(f.datei(ordner, name).inhalt);
+  f.aendern = (it, inhalt) => { if (inhalt !== undefined) it.inhalt = inhalt; it.version++; it.geaendert = new Date().toISOString(); };
+  const etag = (it) => '"{' + it.id + "}," + it.version + '"';
+  const meta = (it) => Object.assign({ id: it.id, name: it.name, eTag: etag(it), lastModifiedDateTime: it.geaendert, lastModifiedBy: { user: { displayName: it.von } } },
+    it.remote ? { remoteItem: { id: it.remote.id, parentReference: { driveId: it.remote.drive }, folder: {} } } : it.ordner ? { folder: {} } : { file: {} });
+  const antwort = (status, body) => ({ ok: status >= 200 && status < 300, status,
+    json: async () => (typeof body === "string" ? JSON.parse(body) : body), text: async () => (typeof body === "string" ? body : JSON.stringify(body)) });
+  f.fetch = async (url, opt) => {
+    opt = opt || {};
+    const pfad = url.replace("https://graph.microsoft.com/v1.0", "");
+    const art = opt.method || "GET";
+    f.log.push([art, pfad, opt.headers || {}]);
+    if (f.vorher) { const r = await f.vorher(art, pfad, opt); if (r) return r; }
+    let m;
+    if (pfad === "/me/drive?$select=id") return antwort(200, { id: f.ich });
+    if (pfad === "/me/drive/root?$select=id") return antwort(200, { id: wurzel[f.ich].id });
+    if ((m = /^\/drives\/(\w+)\/items\/(\w+)\/children/.exec(pfad))) {
+      const o = items.get(m[2]);
+      return o && o.ordner ? antwort(200, { value: f.kinder(o).map(meta) }) : antwort(404, {});
+    }
+    if ((m = /^\/drives\/(\w+)\/items\/(\w+)\/content$/.exec(pfad))) {
+      const it = items.get(m[2]);
+      return it && !it.ordner ? antwort(200, it.inhalt) : antwort(404, {});
+    }
+    if ((m = /^\/drives\/(\w+)\/items\/(\w+):\/([^:?]+)(:\/content)?(\?.*)?$/.exec(pfad))) {
+      const o = items.get(m[2]);
+      if (!o || !o.ordner) return antwort(404, {});
+      const it = f.datei(o, m[3]);
+      if (art === "GET") return it ? antwort(200, meta(it)) : antwort(404, {});
+      if (art === "PUT") {
+        const im = opt.headers && opt.headers["If-Match"];
+        if (im && (!it || im !== etag(it))) return antwort(412, {});
+        if (it) { f.aendern(it, opt.body); return antwort(200, meta(it)); }
+        return antwort(201, meta(f.neu(o.drive, o.id, m[3], "datei", opt.body)));
+      }
+    }
+    if ((m = /^\/drives\/(\w+)\/items\/(\w+)$/.exec(pfad)) && art === "DELETE") return items.delete(m[2]) ? antwort(204, "") : antwort(404, {});
+    return antwort(400, {});
+  };
+  f.puts = (muster) => f.log.filter(([a, p]) => a === "PUT" && (!muster || muster.test(p)));
+  f.downloads = () => f.log.filter(([a, p]) => a === "GET" && /\/content$/.test(p));
+  return f;
+}
+
+// Fremdes Handy: gueltige Vorgangsdatei mit n Orten, Uhr ab uhrAb.
+function fremdeDatei(inst, n, uhrAb) {
+  let z = { inst, nr: 1, uhr: uhrAb || 0 };
+  const vorgaenge = [];
+  for (let i = 0; i < n; i++) { const e = M.erzeuge(z, { typ: "neu", art: "ort", werte: { name: "Ort " + i, reihen: 1, spalten: 1 } }); z = e.zaehler; vorgaenge.push(e.vorgang); }
+  return { schema: M.SCHEMA, inst, vorgaenge };
+}
+const ORT = { typ: "neu", art: "ort", werte: { name: "Gefrierschrank", reihen: 6, spalten: 1 } };
+const PFAD = "Gemeinschaftsordner/Vorrats App", SICHER = PFAD + "/Sicherungen";
+const ANDREA = "andrea0000000001";
+const anfrage = (r) => new Promise((ok, nein) => { r.onsuccess = () => ok(r.result); r.onerror = () => nein(r.error); });
+
+async function aufbau() {
+  await S.loeschen();
+  const f = attrappe();
+  return { f, g: { fetch: f.fetch, token: async () => "T" }, sp: await S.oeffnen() };
+}
+const lauf = (x, extra) => C.abgleichen(Object.assign({ g: x.g, sp: x.sp, datenPfad: PFAD, sicherPfad: SICHER, version: "v3" }, extra));
+const eigenName = (inst) => "vorgaenge-" + inst + ".json";
+
+const faelle = [];
+const fall = (name, fn) => faelle.push([name, fn]);
+
+fall("Fremddatei im Datenordner: Stopp, nichts gelesen, nichts geschrieben, Dateiname nie gezeigt", async () => {
+  const x = await aufbau();
+  x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 2)));
+  x.f.neu("D1", x.f.daten.id, "Steuer 2025 Az 4711.pdf", "datei", "geheim");
+  await x.sp.ausfuehren(ORT);
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.fehler, /1 Datei\(en\), die nicht zur App gehören/);
+  assert.ok(!/Steuer|4711|pdf/.test(r.fehler), "fremder Dateiname im Text");
+  assert.strictEqual(x.f.downloads().length, 0, "nichts gelesen");
+  assert.strictEqual(x.f.puts().length, 0, "nichts geschrieben (auch keine Sicherung)");
+  const ab = await x.sp.abgleich();
+  assert.deepStrictEqual([ab.gelesen, ab.dateien], [null, {}]);
+  const p = await C.pruefen(x.g, PFAD, false, x.sp.inst);
+  assert.ok(p.some(([ok, t]) => !ok && /nicht zur App/.test(t)) && !p.some(([, t]) => /Steuer/.test(t)));
+  assert.strictEqual(x.f.puts().length, 0, "Pruefen schreibt bei Stopp nicht");
+  x.sp.schliessen();
+});
+
+fall("Lesefehler ist nie ein leerer Vorrat: letzter Stand bleibt, nichts hochgeladen", async () => {
+  const x = await aufbau();
+  const a = x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 3)));
+  assert.strictEqual((await lauf(x)).ok, true);
+  await x.sp.ausfuehren(ORT);
+  x.f.aendern(a, JSON.stringify(fremdeDatei(ANDREA, 4)));
+  x.f.vorher = async (art, pfad) => (art === "GET" && pfad.endsWith(a.id + "/content") ? { ok: false, status: 500 } : null);
+  const vorher = x.f.puts().length;
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.fehler, /nicht lesbar.*500/);
+  assert.strictEqual(x.f.puts().length, vorher, "nichts hochgeladen");
+  const ab = await x.sp.abgleich();
+  assert.strictEqual(ab.dateien[eigenName(ANDREA)].vorgaenge.length, 3, "alter Stand bleibt");
+  assert.strictEqual(C.offene(ab, await x.sp.alleVorgaenge()), 1);
+  // kaputtes JSON und falsche Schema-Version genauso
+  x.f.vorher = null;
+  x.f.aendern(a, '{"schema":1,"inst":"' + ANDREA + '","vorgaenge":[');
+  assert.match((await lauf(x)).fehler, /kein gültiges JSON/);
+  x.f.aendern(a, JSON.stringify(Object.assign(fremdeDatei(ANDREA, 1), { schema: 2 })));
+  assert.match((await lauf(x)).fehler, /Schema-Version/);
+  x.f.aendern(a, JSON.stringify(fremdeDatei("andrea0000000999", 1)));
+  assert.match((await lauf(x)).fehler, /Dateiname und Inhalt/);
+  assert.strictEqual(x.f.puts().length, vorher);
+  assert.strictEqual((await x.sp.abgleich()).dateien[eigenName(ANDREA)].vorgaenge.length, 3);
+  x.sp.schliessen();
+});
+
+fall("412 bei If-Match: neu lesen, nochmal schreiben; dauerhaft 412 -> Fehler, nichts quittiert", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const eigen = x.f.datei(x.f.daten, eigenName(x.sp.inst));
+  await x.sp.ausfuehren(ORT);
+  let einmal = true;
+  x.f.vorher = async (art, pfad) => { if (art === "PUT" && pfad.includes(eigenName(x.sp.inst)) && einmal) { einmal = false; x.f.aendern(eigen); } };
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, true, r.fehler);
+  const puts = x.f.puts(new RegExp(eigenName(x.sp.inst)));
+  assert.ok(puts.slice(-2).every(([, , k]) => /^"/.test(k["If-Match"])), "beide Versuche mit If-Match");
+  assert.strictEqual(x.f.inhalt(x.f.daten, eigenName(x.sp.inst)).vorgaenge.length, 2);
+  assert.strictEqual(C.offene(await x.sp.abgleich(), await x.sp.alleVorgaenge()), 0);
+  // anderer Tab schreibt jedes Mal dazwischen
+  await x.sp.ausfuehren(ORT);
+  x.f.vorher = async (art, pfad) => { if (art === "PUT" && pfad.includes(eigenName(x.sp.inst))) x.f.aendern(eigen); };
+  const r2 = await lauf(x);
+  assert.match(r2.fehler, /412/);
+  assert.strictEqual(C.offene(await x.sp.abgleich(), await x.sp.alleVorgaenge()), 1, "nicht quittiert");
+  x.sp.schliessen();
+});
+
+fall("Quittung nur fuer Hochgeladenes: was waehrend des Hochladens entsteht, bleibt offen", async () => {
+  const x = await aufbau();
+  for (let i = 0; i < 3; i++) await x.sp.ausfuehren(ORT);
+  x.f.vorher = async (art, pfad) => { if (art === "PUT" && pfad.includes("vorgaenge-")) { x.f.vorher = null; await x.sp.ausfuehren(ORT); } };
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(x.f.inhalt(x.f.daten, eigenName(x.sp.inst)).vorgaenge.length, 3);
+  assert.strictEqual((await x.sp.alleVorgaenge()).length, 4);
+  assert.strictEqual(C.offene(await x.sp.abgleich(), await x.sp.alleVorgaenge()), 1);
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(x.f.inhalt(x.f.daten, eigenName(x.sp.inst)).vorgaenge.length, 4);
+  assert.strictEqual(C.offene(await x.sp.abgleich(), await x.sp.alleVorgaenge()), 0);
+  x.sp.schliessen();
+});
+
+fall("Neue Installation: erst nach vollstaendigem Lesen schreiben, Uhr vorher nachgezogen", async () => {
+  const x = await aufbau();
+  const a = x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 3, 47)));
+  assert.strictEqual(C.darfSchreiben(await x.sp.abgleich(), x.sp.inst, PFAD), false);
+  x.f.vorher = async (art, pfad) => (pfad.endsWith(a.id + "/content") ? { ok: false, status: 0 } : null);
+  assert.strictEqual((await lauf(x)).ok, false);
+  assert.strictEqual(C.darfSchreiben(await x.sp.abgleich(), x.sp.inst, PFAD), false, "Lesefehler -> weiter gesperrt");
+  x.f.vorher = null;
+  assert.strictEqual((await lauf(x)).ok, true);
+  const ab = await x.sp.abgleich();
+  assert.strictEqual(C.darfSchreiben(ab, x.sp.inst, PFAD), true);
+  assert.strictEqual(C.darfSchreiben(ab, x.sp.inst, "Anderer/Ordner"), false, "anderer Ordner = neu lesen");
+  assert.strictEqual((await x.sp.zaehler()).uhr, 50);
+  assert.strictEqual((await x.sp.ausfuehren(ORT)).uhr, 51, "frische Aenderung liegt hinter allem Gelesenen");
+  x.sp.schliessen();
+});
+
+fall("Halber Zustand: alte Vorgaenge unter ihrer alten Datei, neue unter der neuen", async () => {
+  const x = await aufbau();
+  for (let i = 0; i < 3; i++) await x.sp.ausfuehren(ORT);
+  const alt = x.sp.inst;
+  x.sp.schliessen();
+  const db = await anfrage(indexedDB.open(S.DB));
+  await anfrage(db.transaction("meta", "readwrite").objectStore("meta").delete("zaehler"));
+  db.close();
+  x.sp = await S.oeffnen();
+  assert.notStrictEqual(x.sp.inst, alt);
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(x.f.inhalt(x.f.daten, eigenName(alt)).vorgaenge.length, 3);
+  assert.ok(!x.f.datei(x.f.daten, eigenName(x.sp.inst)), "keine leere Datei fuer die neue ID");
+  await x.sp.ausfuehren(ORT);
+  const vorher = x.f.puts(new RegExp(eigenName(alt))).length;
+  assert.strictEqual((await lauf(x)).ok, true);
+  const neu = x.f.inhalt(x.f.daten, eigenName(x.sp.inst)).vorgaenge;
+  assert.deepStrictEqual(neu.map((v) => v.inst), [x.sp.inst]);
+  assert.strictEqual(x.f.puts(new RegExp(eigenName(alt))).length, vorher, "alte Datei nicht erneut geschrieben");
+  const z = C.zuletzt(await x.sp.abgleich(), x.sp.inst, new Set([alt]));
+  assert.deepStrictEqual(z.map((r) => [r.wer, r.alt]), [["dieses Gerät", false], ["dieses Gerät (frühere Installation)", false]]);
+  x.sp.schliessen();
+});
+
+fall("Schrumpf-Schutz: eigene OneDrive-Datei mit unbekannten Vorgaengen -> nichts geschrieben", async () => {
+  const x = await aufbau();
+  const v1 = await x.sp.ausfuehren(ORT);
+  const v2 = M.erzeuge({ inst: x.sp.inst, nr: 2, uhr: v1.uhr }, ORT).vorgang;
+  x.f.neu("D1", x.f.daten.id, eigenName(x.sp.inst), "datei", JSON.stringify({ schema: M.SCHEMA, inst: x.sp.inst, vorgaenge: [v1, v2] }));
+  const r = await lauf(x);
+  assert.match(r.fehler, /nicht kennt/);
+  assert.strictEqual(x.f.puts(/vorgaenge-/).length, 0);
+  x.sp.schliessen();
+});
+
+fall("Schrumpf-Schutz alte ID: lokal teilweise verloren -> OneDrive-Fassung + Rest, nie weniger", async () => {
+  const x = await aufbau();
+  for (let i = 0; i < 2; i++) await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  await x.sp.ausfuehren(ORT); // Nummer 3, noch nicht oben
+  const alt = x.sp.inst;
+  x.sp.schliessen();
+  const db = await anfrage(indexedDB.open(S.DB));
+  const t = db.transaction(["vorgaenge", "meta"], "readwrite");
+  t.objectStore("vorgaenge").delete(alt + "-1");
+  t.objectStore("vorgaenge").delete(alt + "-2");
+  t.objectStore("meta").delete("zaehler");
+  await new Promise((ok) => { t.oncomplete = ok; });
+  db.close();
+  x.sp = await S.oeffnen();
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.deepStrictEqual(x.f.inhalt(x.f.daten, eigenName(alt)).vorgaenge.map((v) => v.n), [1, 2, 3]);
+  x.sp.schliessen();
+});
+
+fall("Widerspruch (gleiche Kennung, anderer Inhalt): anhalten, nichts schreiben", async () => {
+  const x = await aufbau();
+  const v1 = await x.sp.ausfuehren(ORT);
+  const falsch = Object.assign({}, v1, { werte: { name: "Anders", reihen: 6, spalten: 1 } });
+  x.f.neu("D1", x.f.daten.id, eigenName(x.sp.inst), "datei", JSON.stringify({ schema: M.SCHEMA, inst: x.sp.inst, vorgaenge: [falsch] }));
+  assert.match((await lauf(x)).fehler, /Widerspruch/);
+  assert.strictEqual(x.f.puts().length, 0);
+  x.sp.schliessen();
+});
+
+fall("Anlegen nur nach Metadaten-Pruefung: existiert sie inzwischen, kein blindes Ueberschreiben", async () => {
+  const x = await aufbau();
+  const v1 = await x.sp.ausfuehren(ORT);
+  x.f.vorher = async (art, pfad) => {
+    if (art === "GET" && pfad.endsWith(eigenName(x.sp.inst) + "?$select=id")) { // zweiter Tab legt sie genau jetzt an
+      x.f.vorher = null;
+      x.f.neu("D1", x.f.daten.id, eigenName(x.sp.inst), "datei", JSON.stringify({ schema: M.SCHEMA, inst: x.sp.inst, vorgaenge: [v1] }));
+    }
+  };
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, true, r.fehler);
+  assert.ok(x.f.puts(/vorgaenge-/).every(([, , k]) => k["If-Match"]), "kein PUT ohne If-Match auf vorhandene Datei");
+  x.sp.schliessen();
+});
+
+fall("Andrea: Pfad ueber Verknuepfung (remoteItem), Windows-Pfad aus dem Explorer", async () => {
+  const x = await aufbau();
+  x.f.ich = "D2";
+  const ort = await C.ordnerFinden(x.g, "C:\\Users\\andrea\\OneDrive\\Gemeinschaftsordner\\Vorrats App\\");
+  assert.deepStrictEqual([ort.driveId, ort.id, ort.verknuepfung], ["D1", x.f.daten.id, true]);
+  assert.strictEqual(C.pfadNormal(" C:\\Users\\x\\OneDrive\\Gemeinschaftsordner\\Vorrats App\\ "), "Gemeinschaftsordner/Vorrats App");
+  assert.strictEqual(C.pfadNormal("/Gemeinschaftsordner//Vorrats App/"), "Gemeinschaftsordner/Vorrats App");
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.ok(x.f.datei(x.f.daten, eigenName(x.sp.inst)), "Datei in Tobias' Ordner");
+  assert.ok(!x.f.log.some(([, p]) => /root:\//.test(p)), "kein Pfad-Zugriff (HTTP 422 bei Verknuepfung)");
+  x.sp.schliessen();
+});
+
+fall("Pruefen: Schreibprobe angelegt und weggeraeumt; Ordner fehlt -> nur Ordnernamen, nie Dateinamen", async () => {
+  const x = await aufbau();
+  const p = await C.pruefen(x.g, PFAD, false, x.sp.inst);
+  assert.deepStrictEqual(p.map(([ok]) => ok), [true, true, true], JSON.stringify(p));
+  assert.strictEqual(x.f.kinder(x.f.daten).filter((d) => /schreibprobe/.test(d.name)).length, 0);
+  x.f.neu("D1", x.f.gemein.id, "Geheim Kontoauszug.pdf", "datei", "x");
+  const q = await C.pruefen(x.g, "Gemeinschaftsordner/Vorrat", false, x.sp.inst);
+  assert.strictEqual(q[0][0], false);
+  assert.match(q[0][1], /„Vorrat“ nicht gefunden.*Vorrats App/);
+  assert.ok(!/Geheim/.test(q[0][1]));
+  const s = await C.pruefen(x.g, SICHER, true, x.sp.inst);
+  assert.deepStrictEqual(s.map(([ok]) => ok), [true, true, true]);
+  // eine liegengebliebene Schreibprobe stoppt den Abgleich nicht
+  x.f.neu("D1", x.f.daten.id, "schreibprobe-" + x.sp.inst + ".json", "datei", "{}");
+  x.f.neu("D1", x.f.daten.id, "test-tobias.json", "datei", "{}"); // vom Kontentest
+  assert.strictEqual((await lauf(x)).ok, true);
+  x.sp.schliessen();
+});
+
+fall("Sicherung: einmal am Tag + vor Version, Inhalt komplett, fremde Datei im Sicherungsordner -> nichts", async () => {
+  const x = await aufbau();
+  x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 2)));
+  await x.sp.ausfuehren(ORT);
+  const jetzt = new Date();
+  const heute = M.heuteIso(jetzt);
+  const r = await lauf(x, { jetzt });
+  assert.strictEqual(r.ok, true, r.fehler);
+  assert.deepStrictEqual(r.zustand.sicherung.fehler, null);
+  const namen = x.f.kinder(x.f.sicher).map((d) => d.name).sort();
+  assert.deepStrictEqual(namen, ["sicherung-" + x.sp.inst + "-" + heute + ".json", "sicherung-" + x.sp.inst + "-vor-v3-" + heute + ".json"]);
+  const inhalt = x.f.inhalt(x.f.sicher, namen[0]);
+  assert.deepStrictEqual(inhalt.dateien.map((d) => [d.inst, d.vorgaenge.length]).sort(), [[ANDREA, 2], [x.sp.inst, 1]].sort());
+  for (const d of inhalt.dateien) assert.ok(M.pruefeDatei(d).ok);
+  const n = x.f.puts(/Sicherungen|items\/i\d+:\/sicherung-/).length;
+  await lauf(x, { jetzt });
+  assert.strictEqual(x.f.puts(/:\/sicherung-/).length, n, "am selben Tag keine zweite Sicherung");
+  // naechster Tag, aber fremde Datei im Sicherungsordner
+  x.f.neu("D1", x.f.sicher.id, "Urlaub.jpg", "datei", "x");
+  const morgen = new Date(jetzt.getTime() + 864e5);
+  const r2 = await lauf(x, { jetzt: morgen });
+  assert.strictEqual(r2.ok, true, "Abgleich selbst laeuft");
+  assert.match(r2.zustand.sicherung.fehler, /Sicherungsordner/);
+  assert.ok(!/Urlaub/.test(r2.zustand.sicherung.fehler));
+  assert.strictEqual(x.f.puts(/:\/sicherung-/).length, n, "nichts in den Ordner geschrieben");
+  // Daten- und Sicherungsordner gleich -> abgelehnt
+  assert.match((await lauf(x, { sicherPfad: PFAD })).fehler, /verschieden/);
+  x.sp.schliessen();
+});
+
+fall("Aufbewahrung: nur eigene Sicherungen, 4 neueste + 4 Wochen, Versionssicherung bleibt", () => {
+  const ich = "aaaaaaaa11111111";
+  const tag = (i) => new Date(Date.UTC(2026, 10, 30) - i * 864e5).toISOString().slice(0, 10);
+  const liste = [];
+  for (let i = 0; i < 60; i++) liste.push({ id: "t" + i, name: "sicherung-" + ich + "-" + tag(i) + ".json" });
+  liste.push({ id: "v3", name: "sicherung-" + ich + "-vor-v3-" + tag(50) + ".json" }, { id: "v2", name: "sicherung-" + ich + "-vor-v2-" + tag(55) + ".json" },
+    { id: "and", name: "sicherung-" + ANDREA + "-" + tag(59) + ".json" }, { id: "x", name: "sicherung-" + ich + "-" + tag(59) + ".json.bak" },
+    { id: "y", name: "sicherung-" + ich + "-2026-11-01-alt.json" });
+  const weg = new Set(C.sicherungenAussortieren(liste, ich, "v3").map((d) => d.id));
+  const bleibt = liste.filter((d) => !weg.has(d.id)).map((d) => d.id);
+  assert.ok(["t0", "t1", "t2", "t3", "v3", "and", "x", "y"].every((i) => bleibt.includes(i)), bleibt.join());
+  assert.ok(weg.has("v2") && weg.has("t59"));
+  const wochen = bleibt.filter((i) => /^t\d+$/.test(i) && Number(i.slice(1)) > 3);
+  assert.ok(wochen.length >= 3 && wochen.length <= 4, wochen.join());
+  assert.ok(wochen.every((i) => Number(i.slice(1)) < 40), "keine uralten Wochensicherungen");
+});
+
+fall("Fehlende Datei: fremde behaelt letzten Stand (markiert), eigene wird neu hochgeladen; gleicher eTag = kein Download", async () => {
+  const x = await aufbau();
+  const a = x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 2)));
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const dl = x.f.downloads().length;
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(x.f.downloads().length, dl, "unveraendert -> nicht neu geladen");
+  x.f.items.delete(a.id);
+  x.f.items.delete(x.f.datei(x.f.daten, eigenName(x.sp.inst)).id);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const ab = await x.sp.abgleich();
+  assert.strictEqual(ab.dateien[eigenName(ANDREA)].fehlt, true);
+  assert.strictEqual(ab.dateien[eigenName(ANDREA)].vorgaenge.length, 2, "nichts verworfen");
+  assert.ok(x.f.datei(x.f.daten, eigenName(x.sp.inst)), "eigene Datei wieder da");
+  assert.strictEqual(C.zuletzt(ab, x.sp.inst, new Set()).find((r) => r.inst === ANDREA).fehlt, true);
+  x.sp.schliessen();
+});
+
+fall("Lebenszeichen und 'zuletzt abgeglichen': taeglich neu schreiben, ab 7 Tagen markiert", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const n = x.f.puts(/vorgaenge-/).length;
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(x.f.puts(/vorgaenge-/).length, n, "ohne Neues kein Hochladen");
+  const eigen = x.f.datei(x.f.daten, eigenName(x.sp.inst));
+  eigen.geaendert = new Date(Date.now() - 21 * 3600e3).toISOString();
+  eigen.version++;
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual(x.f.puts(/vorgaenge-/).length, n + 1, "nach 20 Std. Lebenszeichen");
+  const jetzt = new Date();
+  const ab = { dateien: {
+    a: { inst: ANDREA, von: "Andrea", geaendert: new Date(jetzt - 8 * 864e5).toISOString(), vorgaenge: [] },
+    b: { inst: "bbbbbbbb", von: "Tobias", geaendert: new Date(jetzt - 2 * 3600e3).toISOString(), vorgaenge: [] } } };
+  const z = C.zuletzt(ab, "ich00000", new Set(), jetzt);
+  assert.deepStrictEqual(z.map((r) => [r.wer, r.wann, r.alt]), [["Andrea", "vor 8 Tagen", true], ["Tobias", "vor 2 Std.", false]]);
+  x.sp.schliessen();
+});
+
+fall("Anmeldung abgelaufen: Klartext, nichts geschrieben, Zustand bleibt", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  x.g.token = async () => { throw new Error("Anmeldung abgelaufen – bitte neu anmelden"); };
+  const r = await lauf(x);
+  assert.match(r.fehler, /neu anmelden/);
+  assert.strictEqual(x.f.log.length, 0);
+  x.sp.schliessen();
+});
+
+(async () => {
+  for (const [name, fn] of faelle) { await fn(); console.log("ok  " + name); }
+  console.log("\n" + faelle.length + " Faelle bestanden.");
+})().catch((e) => { console.error(e); process.exit(1); });

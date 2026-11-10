@@ -1,7 +1,8 @@
 // speicher.js - lokale Speicherschicht der Vorrats-App (Bauabschnitt 1b), IndexedDB.
 // Laeuft im Browser (window.Speicher, braucht window.Modell) und in Node (require, IndexedDB von aussen).
 //
-// DB "vorrat": Speicher "vorgaenge" (Schluessel id) und "meta" (Schluessel "zaehler" = {inst, nr, uhr}).
+// DB "vorrat": Speicher "vorgaenge" (Schluessel id) und "meta" (Schluessel "zaehler" = {inst, nr, uhr},
+// "abgleich" = Zustand aus cloud.js).
 // Grundsatz: Vorgang und Zaehler stehen immer zusammen in EINER Transaktion (Bauplan R2 #2, UGC #45).
 (function (wurzel) {
   "use strict";
@@ -79,10 +80,26 @@
         return e.vorgang;
       })),
 
-      // Alle gespeicherten Vorgaenge (im halben Zustand auch die einer frueheren ID -> v.inst pruefen).
-      eigeneVorgaenge: () => schritt(db, "readonly", (vs, meta, lauf) => { vs.getAll().onsuccess = lauf((a) => a); }),
+      // Alle lokal erzeugten Vorgaenge, im halben Zustand auch die einer frueheren ID dieses Geraets.
+      // Fremde Vorgaenge (anderes Handy) liegen nie hier, sondern im Abgleich-Zustand (meta "abgleich").
+      alleVorgaenge: () => schritt(db, "readonly", (vs, meta, lauf) => { vs.getAll().onsuccess = lauf((a) => a); }),
+      // Nur die der laufenden Installation (Bauplan Abschnitt 2: nach inst filtern).
+      eigeneVorgaenge: () => schritt(db, "readonly", (vs, meta, lauf) => { vs.getAll().onsuccess = lauf((a) => a.filter((v) => v && v.inst === inst)); }),
 
       zaehler: () => schritt(db, "readonly", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => z)),
+
+      // Abgleich-Zustand (cloud.js): Ordner, zuletzt gelesene Dateien, "gelesen" = diese Installation hat
+      // alle Dateien gelesen. null = noch nie abgeglichen.
+      abgleich: () => schritt(db, "readonly", (vs, meta, lauf) => { meta.get("abgleich").onsuccess = lauf((a) => a || null); }),
+      // Zustand + Uhr nachziehen in EINER Transaktion: "gelesen" gilt nie ohne nachgezogene Uhr (Abschnitt 2).
+      abgleichSpeichern: (zustand, maxUhr) => Number.isSafeInteger(maxUhr)
+        ? schritt(db, "readwrite", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => {
+          const n = Modell.uhrNachziehen(z, maxUhr);
+          if (n !== z) meta.put(n, "zaehler");
+          meta.put(zustand, "abgleich");
+          return n;
+        }))
+        : Promise.reject(new Error("Uhr ungueltig")),
 
       // Nach dem Einlesen fremder Dateien. Nur ganze Zahlen: ein Text als Uhr wuerde jeden weiteren Vorgang sperren.
       uhrNachziehen: (maxUhr) => Number.isSafeInteger(maxUhr)
@@ -104,7 +121,15 @@
     try { await s.persist(); return await s.persisted(); } catch (_) { return null; }
   }
 
-  const Speicher = { DB, oeffnen, dauerhaft };
+  // Ganze lokale DB loeschen (Testdaten weg / Ordnerwechsel). Danach bekommt das Geraet eine NEUE ID.
+  // Offene Verbindungen anderer Tabs geben per onversionchange frei.
+  const loeschen = () => new Promise((ok, nein) => {
+    const r = indexedDB.deleteDatabase(DB);
+    r.onsuccess = () => ok();
+    r.onerror = () => nein(r.error);
+  });
+
+  const Speicher = { DB, oeffnen, dauerhaft, loeschen };
   if (typeof module !== "undefined" && module.exports) module.exports = Speicher;
   else wurzel.Speicher = Speicher;
 })(typeof window !== "undefined" ? window : globalThis);

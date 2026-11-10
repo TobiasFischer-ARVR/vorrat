@@ -73,7 +73,7 @@ fall("Abgebrochene Transaktion: Promise abgelehnt, nichts gespeichert", async ()
   db.close();
   await assert.rejects(sp.ausfuehren(ORT), /ConstraintError|already exists/i);
   assert.deepStrictEqual(await sp.zaehler(), vorher);
-  const vs = await sp.eigeneVorgaenge();
+  const vs = await sp.alleVorgaenge();
   assert.strictEqual(vs.length, 2);
   assert.deepStrictEqual(vs.find((v) => v.id === fremd.id), fremd);
   sp.schliessen();
@@ -103,10 +103,28 @@ fall("Halber Zustand (Vorgaenge da, Zaehler weg): neue ID, Uhr dahinter, alte Vo
   assert.deepStrictEqual(await sp.zaehler(), { inst: sp.inst, nr: 1, uhr: 3 });
   const v = await sp.ausfuehren(ORT);
   assert.deepStrictEqual([v.n, v.uhr], [1, 4]);
-  const vs = await sp.eigeneVorgaenge();
+  const vs = await sp.alleVorgaenge();
   assert.strictEqual(vs.filter((x) => x.inst === alt.inst).length, 3);
   gueltig(sp, vs.filter((x) => x.inst === sp.inst));
+  assert.deepStrictEqual((await sp.eigeneVorgaenge()).map((x) => x.inst), [sp.inst], "eigeneVorgaenge filtert nach inst");
   sp.schliessen();
+});
+
+fall("Abgleich-Zustand: mit Uhr in einem Schritt, nur ganze Zahlen, loeschen gibt neue ID", async () => {
+  const sp = await S.oeffnen();
+  assert.strictEqual(await sp.abgleich(), null);
+  await sp.ausfuehren(ORT);
+  const z = { ordner: "x/y", gelesen: sp.inst, dateien: {} };
+  assert.strictEqual((await sp.abgleichSpeichern(z, 40)).uhr, 40);
+  assert.deepStrictEqual(await sp.abgleich(), z);
+  await assert.rejects(sp.abgleichSpeichern({ kaputt: 1 }, "7"), /Uhr ungueltig/);
+  assert.deepStrictEqual(await sp.abgleich(), z, "abgelehnt = nichts geschrieben");
+  assert.strictEqual((await sp.ausfuehren(ORT)).uhr, 41);
+  await S.loeschen();
+  const neu = await S.oeffnen();
+  assert.notStrictEqual(neu.inst, sp.inst);
+  assert.strictEqual(await neu.abgleich(), null);
+  neu.schliessen();
 });
 
 fall("Codex R2 #2: Vorgaenge weg, Zaehler noch da -> neue ID, Uhr laeuft weiter", async () => {

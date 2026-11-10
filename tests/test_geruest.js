@@ -16,7 +16,7 @@ assert.match(sw, /keys\.filter\(\(k\) => k\.startsWith\("vorrat-"\) && k !== CAC
 // #79: jede Datei aus DATEIEN existiert (speicher.js baut ein anderer Agent, daher mitgezaehlt)
 const dateien = JSON.parse(sw.match(/const DATEIEN = (\[[^\]]*\])/)[1]);
 for (const d of dateien) if (d !== "./") assert.ok(fs.existsSync(path.join(app, d)), "fehlt: " + d);
-for (const muss of ["index.html", "app.js", "modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "manifest.webmanifest"])
+for (const muss of ["index.html", "app.js", "modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "msal-browser.min.js", "cloud.js", "manifest.webmanifest"])
   assert.ok(dateien.includes(muss), "nicht in DATEIEN: " + muss);
 assert.ok(!dateien.includes("konto-test.html"), "konto-test.html darf nicht gecacht werden");
 
@@ -29,7 +29,7 @@ for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
 }
 assert.ok(!/\son\w+="/.test(html), "Inline-Eventhandler gefunden");
 const reihe = [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
-assert.deepStrictEqual(reihe, ["modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "app.js"]);
+assert.deepStrictEqual(reihe, ["modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "msal-browser.min.js", "cloud.js", "app.js"]);
 
 // Manifest + Icons (Groesse aus dem PNG-Kopf: Breite/Hoehe ab Byte 16)
 const mf = JSON.parse(lies("manifest.webmanifest"));

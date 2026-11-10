@@ -88,6 +88,15 @@ main button.kachel.neu { background: #dcefe5; color: #1d6b49; }
 .monate { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 6px 0 10px; }
 .monate button { padding: 8px 0; }
 
+/* OneDrive (Abschnitt 2) */
+main button.gefahr { background: #b3261e; }
+.fenster h3 { margin: 14px 0 6px; font-size: 1rem; }
+.krumen { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.krumen button { padding: 4px 10px; font-size: .85rem; }
+.fenster button.zeile { display: block; width: 100%; margin-bottom: 6px; text-align: left; }
+tr.alt th, tr.alt td { color: #b3261e; font-weight: 700; }
+.karte .knoepfe { margin: 8px 0 0; }
+
 /* Pruefen */
 table.pruefen th { padding: 4px 12px 4px 0; color: #5b6b63; font-weight: 500; text-align: left; vertical-align: top; }
 button.text { padding: 0; background: none !important; color: inherit !important; text-decoration: underline dotted; }

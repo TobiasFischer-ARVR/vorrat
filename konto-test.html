@@ -159,7 +159,7 @@ async function test() {
   // T3 alle Dateien lesen
   const dateien = await graph(`/drives/${o.driveId}/items/${v.id}/children?$select=id,name,size,eTag,lastModifiedDateTime,lastModifiedBy,file`);
   if (!dateien.ok) return zeige("T3 Dateien auflisten fehlgeschlagen", false, dateien.daten);
-  const APP_DATEI = /^(test|vorgaenge)-[a-z0-9-]+\.json$/i;
+  const APP_DATEI = /^(test|vorgaenge|schreibprobe)-[a-z0-9-]+\.json$/i; // schreibprobe: aus "Pruefen" der App (v3)
   const alle = dateien.daten.value.filter((x) => x.file);
   const liste = alle.filter((x) => APP_DATEI.test(x.name));
   const fremd = alle.length - liste.length;

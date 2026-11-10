@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v2"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v3"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -94,11 +94,15 @@ if ("serviceWorker" in navigator) {
 
 
 // ==== Abschnitt 1d: Oberflaeche ====
-// Datenfluss: Speicher -> eigene Vorgaenge -> vereinige -> berechne -> zeichnen.
-// Jede Aktion: ausfuehren (loest erst nach dem Schreiben auf) -> neu berechnen -> neu zeichnen.
+// Datenfluss: Speicher (eigene) + Abgleich-Zustand (OneDrive-Dateien) -> vereinige -> berechne -> zeichnen.
+// Jede Aktion: ausfuehren (loest erst nach dem Schreiben auf) -> neu berechnen -> neu zeichnen -> bald abgleichen.
 const H = window.Hilfen;
 let sp = null;          // Speicher-Verbindung
-let liste = [];         // alle eigenen Vorgaenge
+let liste = [];         // alle Vorgaenge: eigene + zuletzt aus OneDrive gelesene
+let lokal = [];         // nur die auf diesem Geraet erzeugten (auch fruehere IDs dieses Geraets)
+let ab = null;          // Abgleich-Zustand fuer den eingestellten Datenordner, null = dort noch nie abgeglichen
+let aenderungen = 0;    // zaehlt gespeicherte Vorgaenge (laden() erkennt so ein tun() dazwischen)
+let nachladen = false;  // laden() wartet, bis kein Dialog offen ist und nichts schreibt (UGC #15)
 let stand = null;       // Ergebnis von Modell.berechne; null = nicht geladen (nie "leerer Vorrat")
 let ladeFehler = null;
 let ortWahl = null;     // gewaehlter Reiter
@@ -142,6 +146,7 @@ addEventListener("popstate", () => {
   const ziel = Math.max(1, Number(history.state) || 1);
   while (stapel.length > ziel) { const e = stapel.pop(); if (e.el) e.el.remove(); }
   zeichnen(); // UGC #15: nach dem Schliessen nachholen
+  if (nachladen) laden();
 });
 const dialogOffen = () => stapel.some((e) => e.el);
 
@@ -167,9 +172,14 @@ function untenZeigen(text, knopf, fn) {
 
 // ---- Daten ----
 async function laden() {
+  // Kein Standtausch unter offenem Dialog oder laufendem Schreiben (UGC #15): der Dialog rechnet
+  // mit dem alten Stand (z. B. Nachzaehlen = gezaehlt minus bekannte Summe). Danach nachholen.
+  if (laeuft || dialogOffen()) { nachladen = true; return; }
+  nachladen = false;
   try {
     sp = sp || (await Speicher.oeffnen());
-    const vs = await sp.eigeneVorgaenge();
+    let vs, a, z;
+    do { z = aenderungen; vs = await sp.alleVorgaenge(); a = await sp.abgleich(); } while (z !== aenderungen);
     // Lesefehler nie als leeren Vorrat behandeln (Bauplan R2 #10): jede Installation einzeln pruefen.
     const nachInst = new Map();
     for (const v of vs) { const k = v && v.inst; if (!nachInst.has(k)) nachInst.set(k, []); nachInst.get(k).push(v); }
@@ -177,10 +187,20 @@ async function laden() {
       const p = Modell.pruefeDatei({ schema: Modell.SCHEMA, inst, vorgaenge });
       if (!p.ok) throw new Error(p.fehler);
     }
-    const r = Modell.vereinige([vs]);
+    // OneDrive-Stand nur fuer den eingestellten Ordner (nach Ordnerwechsel nie den alten mischen).
+    const neuAb = a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null;
+    const wolke = neuAb ? Object.values(neuAb.dateien) : [];
+    for (const d of wolke) {
+      const p = Modell.pruefeDatei({ schema: Modell.SCHEMA, inst: d.inst, vorgaenge: d.vorgaenge });
+      if (!p.ok) throw new Error(p.fehler);
+    }
+    const r = Modell.vereinige([vs, ...wolke.map((d) => d.vorgaenge)]);
     if (!r.ok) throw new Error(r.fehler);
+    ab = neuAb;
+    lokal = vs;
     liste = r.vorgaenge;
     stand = Modell.berechne(liste);
+    ladeFehler = null;
   } catch (x) {
     stand = null;
     ladeFehler = "Daten konnten nicht gelesen werden: " + ((x && x.message) || x) + ". Es wurde nichts verändert.";
@@ -192,10 +212,13 @@ async function laden() {
 // die Fehlerleiste und die Aktion gilt NICHT als erledigt (UGC #5, Bauplan Warteschlange).
 async function tun(datenListe) {
   if (laeuft || !stand) return null;
+  // Bauplan Abschnitt 2: erst alle Dateien gelesen und die Uhr nachgezogen, sonst verliert eine
+  // frische Aenderung gegen aeltere aus OneDrive.
+  if (!darfSchreiben()) { hinweis("Erst mit OneDrive abgleichen (☰ → Einstellungen). Vorher nimmt dieses Gerät nichts an."); return null; }
   laeuft = true;
   const fertig = [];
   try {
-    for (const d of datenListe) { const v = await sp.ausfuehren(d); liste.push(v); fertig.push(v); }
+    for (const d of datenListe) { const v = await sp.ausfuehren(d); liste.push(v); lokal.push(v); aenderungen++; fertig.push(v); }
     return fertig;
   } catch (x) {
     fehlerZeigen("Speichern fehlgeschlagen" + (fertig.length ? " (nur teilweise)" : "") + ": " +
@@ -205,7 +228,228 @@ async function tun(datenListe) {
     laeuft = false;
     stand = Modell.berechne(liste);
     zeichnen();
+    if (fertig.length) abgleichBald();
+    if (nachladen) laden();
   }
+}
+
+// ==== Abschnitt 2: OneDrive (Logik in cloud.js) ====
+const CLIENT_ID = "d95d99d1-c6b1-47ce-b533-86ae39816199"; // Entra "Vorrats-App", kein Geheimnis
+const SCOPES = ["User.Read", "Files.ReadWrite"];
+const EINST_KEY = "vorrat-einst";
+// Offen-Punkt 10 = (a): Sicherungen als Unterordner des Datenordners.
+const STANDARD = { datenPfad: "Gemeinschaftsordner/Vorrats App", sicherPfad: "Gemeinschaftsordner/Vorrats App/Sicherungen" };
+// UGC #42: Ordner stehen im Geraet (localStorage), nie im Datenbestand.
+const einst = (() => {
+  try { return Object.assign({}, STANDARD, JSON.parse(localStorage.getItem(EINST_KEY) || "{}")); } catch { return Object.assign({}, STANDARD); }
+})();
+// Abgeglichen wird erst, wenn die Ordner einmal per "Übernehmen" bestaetigt sind: ein schon angemeldetes
+// Konto (konto-test.html teilt den Login) wuerde sonst sofort die Testdaten aus v2 hochladen.
+const eingerichtet = () => localStorage.getItem(EINST_KEY) !== null;
+function einstSpeichern(neu) { // UGC #45: erst die Kopie schreiben, dann uebernehmen
+  const kopie = Object.assign({}, einst, neu);
+  localStorage.setItem(EINST_KEY, JSON.stringify(kopie));
+  Object.assign(einst, kopie);
+}
+
+// Login wie konto-test.html / UGC (#53-#58): Umleitung nur auf Knopfdruck, im Hintergrund nie.
+let kontoBereit = false, kontoFehler = null;
+const konto = (() => {
+  try {
+    const app = new msal.PublicClientApplication({
+      auth: { clientId: CLIENT_ID, authority: "https://login.microsoftonline.com/consumers", redirectUri: new URL("index.html", location.href).href },
+      cache: { cacheLocation: "localStorage" },
+    });
+    const bereit = app.initialize().then(() => app.handleRedirectPromise()).then((a) => {
+      if (a) app.setActiveAccount(a.account);
+      else if (!app.getActiveAccount() && app.getAllAccounts().length) app.setActiveAccount(app.getAllAccounts()[0]);
+    }).catch((x) => { kontoFehler = (x && x.message) || String(x); }).finally(() => { kontoBereit = true; });
+    return {
+      bereit,
+      name: () => { const k = kontoBereit && !kontoFehler && app.getActiveAccount(); return k ? k.name || k.username : null; },
+      anmelden: () => app.loginRedirect({ scopes: SCOPES, prompt: "select_account" }),
+      // Nur in dieser App abmelden (lokaler Login-Speicher), NICHT bei Microsoft: die UGC-App auf derselben
+      // Domain nutzt dieselbe Microsoft-Sitzung und bliebe sonst ebenfalls ohne Anmeldung.
+      abmelden: () => app.logoutRedirect({ account: app.getActiveAccount(), onRedirectNavigate: () => false }).then(() => location.reload()),
+      async token() { // Luecke 11: abgelaufenes Token laut melden, nicht still "offline"
+        const k = kontoBereit && !kontoFehler && app.getActiveAccount();
+        if (!k) throw new Error("nicht bei Microsoft angemeldet");
+        try { return (await app.acquireTokenSilent({ scopes: SCOPES, account: k })).accessToken; } catch (x) {
+          throw new Error(x instanceof msal.InteractionRequiredAuthError ? "Anmeldung abgelaufen – bitte neu anmelden (☰ → Einstellungen)" : "Anmeldung nicht erreichbar (offline?)");
+        }
+      },
+    };
+  } catch (x) { kontoFehler = (x && x.message) || String(x); return null; }
+})();
+const g = { fetch: (u, o) => fetch(u, o), token: () => konto.token() };
+
+const darfSchreiben = () => !!sp && Cloud.darfSchreiben(ab, sp.inst, einst.datenPfad);
+const offen = () => Cloud.offene(ab, lokal);
+const fruehereIds = () => new Set(lokal.map((v) => v.inst).filter((i) => !sp || i !== sp.inst));
+const zeitText = (iso) => (iso ? iso.slice(8, 10) + "." + iso.slice(5, 7) + ". " + iso.slice(11, 16) : "–");
+
+// UGC #20-#22: bei Start, Rueckkehr, nach jeder Aenderung; nie zwei gleichzeitig (auch nicht in zwei Tabs).
+let abLaeuft = false, abNochmal = false, abUhr = null, abFehler; // abFehler undefined = in dieser Sitzung noch kein Versuch
+async function abgleich() {
+  if (!sp || !konto || !konto.name() || !eingerichtet()) return;
+  if (abLaeuft) { abNochmal = true; return; }
+  abLaeuft = true;
+  abNochmal = false;
+  zeichnen();
+  try {
+    const lauf = () => Cloud.abgleichen({ g, sp, datenPfad: einst.datenPfad, sicherPfad: einst.sicherPfad, version: APP_VERSION });
+    const r = navigator.locks ? await navigator.locks.request("vorrat-abgleich", lauf) : await lauf();
+    abFehler = r.ok ? null : r.fehler;
+  } catch (x) { abFehler = (x && x.message) || String(x); }
+  abLaeuft = false;
+  await laden();
+  if (abNochmal) abgleich();
+}
+function abgleichBald() { clearTimeout(abUhr); abUhr = setTimeout(abgleich, 3000); }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") abgleich(); });
+
+const fehlerJetzt = () => (abFehler !== undefined ? abFehler : ab && ab.letzter ? ab.letzter.fehler : null);
+// [Text, gut?]. gut = still anzeigen, sonst Warnkarte (UGC #8/#89: nicht wegklickbar).
+function abgleichStand() {
+  if (!konto) return ["OneDrive-Anmeldung nicht geladen: " + (kontoFehler || "unbekannt"), false];
+  if (!kontoBereit) return ["Anmeldung wird geprüft …", true];
+  if (kontoFehler) return ["Anmeldung gestört: " + kontoFehler + " – App neu laden, sonst ☰ → Einstellungen → anmelden.", false];
+  if (!konto.name()) return ["Nicht bei Microsoft angemeldet – Änderungen bleiben auf diesem Gerät.", false];
+  if (!eingerichtet()) return ["OneDrive-Ordner noch nicht bestätigt: ☰ → Einstellungen → Übernehmen.", false];
+  const n = offen(), fe = fehlerJetzt();
+  if (abLaeuft) return ["Abgleich läuft …" + (n ? " · " + n + " Änderungen warten" : ""), true];
+  if (fe) return ["⚠ Abgleich fehlgeschlagen: " + fe + (n ? " · " + n + " Änderungen nur auf diesem Gerät" : ""), false];
+  if (!darfSchreiben()) return ["Noch nicht mit OneDrive abgeglichen.", false];
+  if (n) return [n + " Änderungen noch nicht abgeglichen.", true];
+  return ["✓ Gespeichert · zuletzt abgeglichen " + zeitText(ab.letzter && ab.letzter.zeit), true];
+}
+function abgleichKarte() {
+  const [text, gut] = abgleichStand();
+  const alt = sp ? Cloud.zuletzt(ab, sp.inst, fruehereIds()).filter((r) => r.inst !== sp.inst && (r.alt || r.fehlt))
+    .map((r) => r.wer + ": " + (r.fehlt ? "Datei fehlt in OneDrive" : "zuletzt abgeglichen " + r.wann)) : [];
+  if (ab && ab.sicherung && ab.sicherung.fehler) alt.push(ab.sicherung.fehler); // UGC #32: Sicherungsfehler laut
+  const einrichten = !konto || !konto.name() || !eingerichtet() || !darfSchreiben();
+  return el("div", { className: "karte " + (gut && !alt.length ? "still" : "warnung") },
+    el("div", null, text),
+    alt.map((t) => el("div", null, "⚠ " + t)),
+    (!gut || alt.length > 0) && el("div", { className: "knoepfe" },
+      einrichten && konto && el("button", { onclick: einstellungenDialog }, "Einstellungen"),
+      konto && konto.name() && eingerichtet() && !abLaeuft && el("button", { onclick: () => abgleich() }, "Jetzt abgleichen"),
+      alt.length > 0 && el("button", { onclick: () => oeffne({ art: "sicherung" }) }, "Details")));
+}
+
+// Datei-Kopie aller Vorgaenge (UGC #35): Name mit Lokalzeit.
+function backupHerunterladen() {
+  if (!sp || !stand) return hinweis("Keine Daten geladen.");
+  const a = el("a", { download: "vorrat-sicherung-" + Modell.lokalIso().slice(0, 16).replace("T", "-").replace(":", "") + ".json",
+    href: URL.createObjectURL(new Blob([JSON.stringify(Cloud.sicherungsInhalt(ab ? ab.dateien : {}, lokal, sp.inst, new Date()))], { type: "application/json" })) });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  hinweis("Backup liegt im Download-Ordner.");
+}
+
+// Ganze lokale DB weg -> neue Installation (Testdaten aus Abschnitt 1, Ordnerwechsel). OneDrive bleibt unberuehrt.
+async function geraetLoeschen() {
+  if (sp) { sp.schliessen(); sp = null; }
+  stand = null;
+  try { await Speicher.loeschen(); } catch (x) { return fehlerZeigen("Löschen fehlgeschlagen: " + ((x && x.message) || x)); }
+  location.reload();
+}
+
+// Ordner durchklicken (UGC #41). Verknuepfungen (🔗) sind hier anklickbar: es geht ueber remoteItem weiter.
+function ordnerDialog(fertig) {
+  const pfad = []; // [{ name, ort }]
+  const krumen = el("div", { className: "krumen" }), ordner = el("div");
+  let nr = 0;
+  async function zeigen() {
+    const meins = ++nr; // schnelles Tippen: nur die letzte Antwort zaehlt
+    krumen.replaceChildren(el("button", { type: "button", onclick: () => { pfad.length = 0; zeigen(); } }, "OneDrive"),
+      ...pfad.map((p, i) => el("button", { type: "button", onclick: () => { pfad.length = i + 1; zeigen(); } }, p.name)));
+    ordner.replaceChildren(el("p", { className: "klein" }, "Lädt …"));
+    let inhalt;
+    try {
+      const kinder = await Cloud.unterordner(g, pfad.length ? pfad[pfad.length - 1].ort : await Cloud.wurzelOrt(g));
+      inhalt = kinder.length ? kinder.map((k) => el("button", { type: "button", className: "zeile", onclick: () => { pfad.push({ name: k.name, ort: k }); zeigen(); } },
+        (k.verknuepfung ? "🔗 " : "📁 ") + k.name)) : [el("p", { className: "klein" }, "Keine Unterordner.")];
+    } catch (x) { inhalt = [el("p", { className: "meldung" }, (x && x.message) || String(x))]; }
+    if (meins === nr) ordner.replaceChildren(...inhalt);
+  }
+  dialog("Ordner wählen", [krumen, ordner], [["Diesen Ordner nehmen", (melde, schliessen) => {
+    if (!pfad.length) return melde("Bitte erst einen Ordner öffnen.");
+    fertig(pfad.map((p) => p.name).join("/"));
+    schliessen();
+  }]]);
+  zeigen();
+}
+
+// Einstellungen als Dialog: Eingaben ueberleben so jeden Abgleich im Hintergrund.
+function einstellungenDialog() {
+  const name = konto && konto.name();
+  const daten = el("input", { value: einst.datenPfad, autocomplete: "off" });
+  const sicher = el("input", { value: einst.sicherPfad, autocomplete: "off" });
+  const ausgabe = el("div");
+  const waehlen = (eingabe) => name && el("button", { type: "button", onclick: () => ordnerDialog((p) => { eingabe.value = p; }) }, "📁");
+  dialog("Einstellungen", [
+    el("h3", null, "Microsoft-Konto"),
+    !konto ? el("p", { className: "hinweis-rot" }, "Anmeldung nicht geladen: " + (kontoFehler || "unbekannt"))
+      : name ? el("div", { className: "zeilen" }, el("p", null, "Angemeldet: " + name), el("button", { type: "button", onclick: () => konto.abmelden() }, "Abmelden"))
+        : el("button", { type: "button", onclick: () => konto.anmelden() }, "Bei Microsoft anmelden"),
+    el("h3", null, "Ordner in OneDrive"),
+    el("p", { className: "klein" }, "Steht nur in diesem Gerät. Eintippen (Windows-Pfad aus dem Explorer geht auch) oder 📁 durchklicken."),
+    el("div", { className: "zeilen" }, feld("Datenordner", daten), waehlen(daten)),
+    el("div", { className: "zeilen" }, feld("Sicherungsordner", sicher), waehlen(sicher)),
+    !eingerichtet() && lokal.length > 0 && el("p", { className: "hinweis-rot" }, "Auf diesem Gerät liegen schon " + lokal.length +
+      " Vorgänge (z. B. Testdaten aus v2). Mit „Übernehmen“ wandern sie beim ersten Abgleich nach OneDrive. Lieber vorher löschen: ☰ → Prüfen → 7× auf die Version tippen."),
+    ausgabe,
+  ], [
+    ["Übernehmen", async (melde, schliessen) => {
+      const d = Cloud.pfadNormal(daten.value), s = Cloud.pfadNormal(sicher.value);
+      if (!d || !s) return melde("Bitte beide Ordner angeben.");
+      if (Cloud.ordnerSchluessel(d) === Cloud.ordnerSchluessel(s)) return melde("Daten- und Sicherungsordner müssen verschieden sein.");
+      const a = sp && (await sp.abgleich());
+      if (Cloud.ordnerSchluessel(d) !== Cloud.ordnerSchluessel(einst.datenPfad) && a && a.gelesen) {
+        // UGC #43: Vorgaenge des alten Ordners wandern nie in den neuen -> nur ohne Offenes, dann frisch starten.
+        const n = offen();
+        if (n) return melde(n + " Änderungen sind noch nicht abgeglichen. Erst abgleichen, dann den Ordner wechseln.");
+        if (!confirm("Datenordner wechseln?\n\nDieses Gerät löscht dann seine lokale Kopie und startet mit neuer Kennung. " +
+          "Alles Bisherige liegt schon im alten Ordner und wandert nicht mit.")) return;
+        einstSpeichern({ datenPfad: d, sicherPfad: s });
+        return geraetLoeschen();
+      }
+      einstSpeichern({ datenPfad: d, sicherPfad: s });
+      if (g.orte) g.orte.clear();
+      nachladen = true; // nach dem Schliessen mit dem neuen Ordner rechnen
+      schliessen();
+      abgleich();
+    }],
+    name && ["Prüfen", async (melde) => {
+      const d = Cloud.pfadNormal(daten.value), s = Cloud.pfadNormal(sicher.value);
+      ausgabe.replaceChildren(el("p", { className: "klein" }, "Prüfe …"));
+      const zeilen = (titel, z) => [el("b", null, titel), ...z.map(([ok, t]) => el("p", { className: ok ? "" : "hinweis-rot" }, (ok ? "✓ " : "✗ ") + t))];
+      const zd = await Cloud.pruefen(g, d, false, sp ? sp.inst : "pruefen00");
+      const zs = Cloud.ordnerSchluessel(d) === Cloud.ordnerSchluessel(s) ? [[false, "gleich wie der Datenordner – bitte einen anderen wählen"]] : await Cloud.pruefen(g, s, true, sp ? sp.inst : "pruefen00");
+      ausgabe.replaceChildren(...zeilen("Datenordner", zd), ...zeilen("Sicherungsordner", zs));
+      melde("");
+    }],
+  ]);
+}
+
+function sicherungAnsicht() {
+  const zeilen = sp ? Cloud.zuletzt(ab, sp.inst, fruehereIds()) : [];
+  const s = ab && ab.sicherung;
+  const [text] = abgleichStand();
+  return [kopf("Sicherung & Abgleich"),
+    el("p", null, text),
+    konto && konto.name() && el("button", { className: "zeile", disabled: abLaeuft, onclick: () => abgleich() }, "↻ Jetzt abgleichen"),
+    el("h3", null, "Zuletzt abgeglichen"),
+    zeilen.length ? el("table", { className: "pruefen" }, zeilen.map((r) => el("tr", { className: r.alt || r.fehlt ? "alt" : "" },
+      el("th", null, r.wer), el("td", null, r.fehlt ? "Datei fehlt in OneDrive (letzter Stand wird weiter gezeigt)" : r.wann + (r.alt ? " · über eine Woche!" : "")))))
+      : el("p", { className: "klein" }, "Noch keine Datei in OneDrive."),
+    el("h3", null, "Sicherungen in OneDrive"),
+    el("p", { className: s && s.fehler ? "hinweis-rot" : "" }, !s ? "Noch keine angelegt." : s.fehler ? "⚠ " + s.fehler
+      : "Zuletzt " + zeitText(s.zeit) + (s.weg ? " · " + s.weg + " alte in den Papierkorb" : "")),
+    el("p", { className: "klein" }, "Einmal am Tag beim Abgleich, dazu eine vor jeder neuen App-Version. Aufbewahrt: die 4 neuesten und je Woche eine für 4 Wochen. Ordner: " + einst.sicherPfad),
+    el("button", { className: "zeile", onclick: backupHerunterladen }, "⬇ Backup herunterladen")];
 }
 
 const orteSichtbar = () => stand.orte.filter((o) => !o.geloescht)
@@ -221,7 +465,7 @@ const fachWort = (o) => (o && o.spalten === 1 ? "Schublade" : "Kiste");
 const klaeren = () => ({ kisten: stand.faecher.filter((f) => f.ortKlaeren), eintraege: stand.eintraege.filter((e) => e.ortKlaeren).sort(nachAblauf) });
 
 // ---- Ansichten ----
-const ANSICHTEN = { start: startAnsicht, fach: fachAnsicht, ortKlaeren: ortKlaerenAnsicht, bestand: bestandAnsicht, menue: menueAnsicht, pruefen: pruefenAnsicht };
+const ANSICHTEN = { start: startAnsicht, fach: fachAnsicht, ortKlaeren: ortKlaerenAnsicht, bestand: bestandAnsicht, menue: menueAnsicht, pruefen: pruefenAnsicht, sicherung: sicherungAnsicht };
 function zeichnen() {
   if (dialogOffen()) return; // UGC #15: unter einem offenen Dialog nichts austauschen
   const oben = stapel[stapel.length - 1];
@@ -233,6 +477,8 @@ const kopf = (titel, ...extra) => el("div", { className: "ansichtkopf" },
 function startAnsicht() {
   if (!stand) return [el("div", { className: "karte warnung" }, ladeFehler || "Lädt …")];
   const orte = orteSichtbar();
+  if (!orte.length && !darfSchreiben()) // sonst legen beide Handys die Grundausstattung an
+    return [abgleichKarte(), el("p", null, "Noch keine Orte. Erst mit OneDrive abgleichen – vielleicht hat das andere Handy schon alles angelegt.")];
   if (!orte.length) {
     const knopf = el("button", { className: "gross", onclick: async () => {
       if (!confirm("Grundausstattung anlegen?\n\n• Gefrierschrank: 6 Schubladen (2 braun, 4 weiß)\n• Vorrats-Regal: 4 Böden, 8 Kisten\n" +
@@ -243,13 +489,14 @@ function startAnsicht() {
         if (!o || !(await tun(g.faecher(o[0].id)))) return;
       }
     } }, "Grundausstattung anlegen");
-    return [el("p", null, "Noch keine Orte angelegt."), knopf, el("p", { className: "klein" }, "Eigene Orte gehen auch: ☰ → Ort anlegen.")];
+    return [abgleichKarte(), el("p", null, "Noch keine Orte angelegt."), knopf, el("p", { className: "klein" }, "Eigene Orte gehen auch: ☰ → Ort anlegen.")];
   }
   if (!orte.some((o) => o.id === ortWahl)) ortWahl = orte[0].id;
   const k = klaeren(), nKlaeren = k.kisten.length + k.eintraege.length;
   const nPruefen = stand.eintraege.filter((e) => e.bestandPruefen).length;
   const nDaten = stand.widersprueche.length + stand.verwaist.length;
   return [
+    abgleichKarte(),
     el("nav", { className: "reiter" }, orte.map((o) => el("button", { className: o.id === ortWahl ? "an" : "", onclick: () => { ortWahl = o.id; zeichnen(); } }, o.name))),
     nDaten > 0 && el("div", { className: "karte still" }, "Daten prüfen: " + nDaten + " Vorgänge passen nicht zusammen und werden nicht angewendet (☰ → Prüfen). Gelöscht wurde nichts."),
     (nKlaeren > 0 || nPruefen > 0) && el("div", { className: "knoepfe" },
@@ -368,6 +615,9 @@ function menueAnsicht() {
     stand && [el("h3", null, "Orte"),
       orteSichtbar().map((o) => el("button", { className: "zeile", onclick: () => ortDialog(o) }, "✎ " + o.name + " (" + o.reihen + " × " + o.spalten + ")")),
       el("button", { className: "zeile", onclick: () => ortDialog(null) }, "+ Ort anlegen")],
+    el("h3", null, "OneDrive"),
+    el("button", { className: "zeile", onclick: einstellungenDialog }, "⚙ Einstellungen (Konto, Ordner)"),
+    el("button", { className: "zeile", onclick: () => oeffne({ art: "sicherung" }) }, "🛟 Sicherung & Abgleich"),
     el("h3", null, "App"),
     el("button", { className: "zeile", onclick: () => oeffne({ art: "pruefen" }) }, "🔍 Prüfen"),
     suche];
@@ -378,9 +628,15 @@ function pruefenAnsicht(ebene) {
   dauerhaftP.then((d) => { dauer.textContent = d === true ? "ja" : d === false ? "nein (Browser hat abgelehnt)" : "nicht feststellbar"; });
   const ausgabe = el("pre", { className: "ausgabe" });
   const test = el("button", { onclick: () => dreiJahresTest(ausgabe, test) }, "Drei-Jahres-Test");
+  const loesch = el("button", { className: "gefahr", onclick: () => {
+    if (!sp) return;
+    if (!confirm("Alle Daten auf DIESEM Gerät löschen?\n\n" + lokal.length + " eigene Vorgänge, davon " + offen() + " noch nicht in OneDrive – die gehen verloren.\n" +
+      "OneDrive bleibt unangetastet. Danach startet das Gerät mit neuer Kennung.")) return;
+    geraetLoeschen();
+  } }, "Gerätedaten löschen (z. B. Testdaten)");
   // UGC #82: 7x auf die Version tippen, Zaehler ab dem 4. sichtbar, gilt nur fuer diese offene Ansicht.
   const ver = el("button", { className: "text" });
-  const verZeigen = () => { const t = ebene.tipps || 0; ver.textContent = APP_VERSION + (t >= 4 && t < 7 ? " · noch " + (7 - t) + "×" : ""); test.hidden = t < 7; };
+  const verZeigen = () => { const t = ebene.tipps || 0; ver.textContent = APP_VERSION + (t >= 4 && t < 7 ? " · noch " + (7 - t) + "×" : ""); test.hidden = loesch.hidden = t < 7; };
   ver.addEventListener("click", () => { ebene.tipps = (ebene.tipps || 0) + 1; verZeigen(); });
   verZeigen();
   const zeile = (a, b) => el("tr", null, el("th", null, a), el("td", null, b));
@@ -392,8 +648,11 @@ function pruefenAnsicht(ebene) {
       zeile("Bestand", stand ? z("orte") + " Orte · " + z("faecher") + " Kisten · " + z("eintraege") + " Einträge" : ladeFehler || "–"),
       zeile("Nicht angewendet", stand ? stand.widersprueche.length + " widersprüchlich · " + stand.verwaist.length + " ohne Anleger" : "–"),
       zeile("Dauerhafter Speicher", dauer),
+      zeile("Konto", konto ? konto.name() || "nicht angemeldet" : "nicht geladen"),
+      zeile("Abgleich", abgleichStand()[0]),
+      zeile("Noch nicht abgeglichen", String(offen())),
       zeile("Version", ver)),
-    test, ausgabe];
+    test, loesch, ausgabe];
 }
 
 // ---- Wachstumstest (Offen-Punkt 6): nur im Arbeitsspeicher und in einer eigenen Test-DB ----
@@ -676,4 +935,5 @@ function ortDialog(o) {
 }
 
 zeichnen();
-laden();
+// UGC #21: Kaltstart wie Rueckkehr behandeln -> nach dem Laden einmal abgleichen.
+Promise.all([laden(), konto && konto.bereit]).then(() => { zeichnen(); abgleich(); });
