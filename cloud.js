@@ -72,6 +72,22 @@
     try { return await r.json(); } catch (_) { throw new Error("Antwort von OneDrive unlesbar (" + was + ")"); }
   }
 
+  // Alle Eintraege eines Ordners, Seite fuer Seite (@odata.nextLink, Codex #9). Ohne value-Array ist die
+  // Antwort kaputt -> Fehler, nie "leerer Ordner" (Codex #8). Folgeseiten nur auf Graph (sonst ginge das Token fremd).
+  async function eintraege(g, pfad, wo) {
+    const alle = [];
+    for (let seite = 1; ; seite++) {
+      const r = await graphJson(g, pfad, wo);
+      if (!r || !Array.isArray(r.value)) throw new Error(wo + ": Antwort von OneDrive unvollständig – nichts geändert");
+      alle.push(...r.value);
+      const weiter = r["@odata.nextLink"];
+      if (weiter === undefined || weiter === null) return alle;
+      if (typeof weiter !== "string" || !weiter.startsWith(G + "/")) throw new Error(wo + ": Folgeseite zeigt nicht auf Microsoft Graph – abgebrochen");
+      if (seite >= 50) throw new Error(wo + ": zu viele Einträge – Pfad prüfen");
+      pfad = weiter.slice(G.length);
+    }
+  }
+
   // ---- Ordner finden: Pfad Ordner fuer Ordner abgehen, Verknuepfung ueber remoteItem (kein Pfad-Zugriff, HTTP 422) ----
   async function wurzelOrt(g) {
     const d = await graphJson(g, "/me/drive?$select=id", "eigenes OneDrive");
@@ -81,8 +97,8 @@
   const istOrdner = (x) => !!(x.folder || (x.remoteItem && !x.remoteItem.file));
   // Nur Ordner (Namen von Ordnern duerfen angezeigt werden, Dateinamen nie).
   async function unterordner(g, ort) {
-    const r = await graphJson(g, `/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,folder,remoteItem,file&$top=999`, "Ordner");
-    return (r.value || []).filter(istOrdner).map((x) => x.remoteItem
+    const liste = await eintraege(g, `/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,folder,remoteItem,file&$top=999`, "Ordner");
+    return liste.filter(istOrdner).map((x) => x.remoteItem
       ? x.remoteItem.parentReference && { name: x.name, driveId: x.remoteItem.parentReference.driveId, id: x.remoteItem.id, verknuepfung: true }
       : { name: x.name, driveId: ort.driveId, id: x.id, verknuepfung: ort.verknuepfung })
       .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, "de"));
@@ -106,9 +122,8 @@
 
   // Dateien (keine Ordner) eines Ordners, mit Metadaten. eTag kommt von hier, nie aus /content (UGC-Falle).
   async function dateienListen(g, ort, wo) {
-    const r = await graphJson(g, `/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,eTag,lastModifiedDateTime,lastModifiedBy,file,folder,remoteItem&$top=999`, wo);
-    if (r["@odata.nextLink"]) throw new Error(wo + ": zu viele Einträge – Pfad prüfen");
-    return (r.value || []).filter((x) => !istOrdner(x));
+    const liste = await eintraege(g, `/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,eTag,lastModifiedDateTime,lastModifiedBy,file,folder,remoteItem&$top=999`, wo);
+    return liste.filter((x) => !istOrdner(x));
   }
 
   async function dateiLesen(g, ort, x, inst) {
@@ -130,7 +145,6 @@
     const stopp = fremdStopp(items, false);
     if (stopp) throw new Error(stopp);
     const lokal = await sp.alleVorgaenge();
-    const lokaleInst = new Set(lokal.map((v) => v.inst));
     const dateien = {};
     for (const x of items) {
       const m = VORGANGSDATEI.exec(x.name);
@@ -141,9 +155,10 @@
       const gleich = c && !c.fehlt && c.eTag === x.eTag;
       let vorgaenge = gleich ? c.vorgaenge : await dateiLesen(g, ort, x, m[1]);
       let zurueck = !!(gleich && c.zurueckgesetzt);
-      // Fremde Datei kuerzer als bekannt (Versionsverlauf, abgeschnitten): nie weniger uebernehmen,
-      // Bekanntes behalten und markieren (Review #4). Eigene Dateien repariert hochladen() selbst.
-      if (c && !gleich && !lokaleInst.has(m[1])) {
+      // Datei kuerzer als bekannt (Versionsverlauf, abgeschnitten): nie weniger uebernehmen, Bekanntes behalten
+      // und markieren (Review #4). Gilt fuer ALLE Dateien, auch halb lokal vorhandene (Codex #2); eigene
+      // laedt hochladen() danach vollstaendig neu hoch.
+      if (c && !gleich) {
         const da = new Set(vorgaenge.map((v) => v.id));
         const fehlen = c.vorgaenge.filter((v) => !da.has(v.id));
         if (fehlen.length) { vorgaenge = vorgaenge.concat(fehlen).sort((a, b) => a.n - b.n); zurueck = true; }
@@ -152,10 +167,11 @@
         von: (x.lastModifiedBy && x.lastModifiedBy.user && x.lastModifiedBy.user.displayName) || null, vorgaenge };
       if (zurueck) dateien[x.name].zurueckgesetzt = true;
     }
-    // Frueher gesehene Datei fehlt: fremde -> letzten Stand behalten und markieren (nichts verwerfen);
-    // eigene (Vorgaenge liegen lokal) -> weglassen, dann wird sie neu hochgeladen.
-    for (const [n, c] of Object.entries(cache)) if (!dateien[n] && !lokaleInst.has(c.inst)) dateien[n] = Object.assign({}, c, { fehlt: true });
-    const v = Modell.vereinige([lokal, ...Object.values(dateien).map((d) => d.vorgaenge)]);
+    // Frueher gesehene Datei fehlt: letzten Stand behalten und markieren, nichts verwerfen (Codex #2).
+    // Eigene laedt hochladen() mit allem Bekannten neu hoch, fremde bleiben markiert.
+    for (const [n, c] of Object.entries(cache)) if (!dateien[n]) dateien[n] = Object.assign({}, c, { fehlt: true });
+    // Der fruehere Stand geht mit in den Vergleich: dieselbe Kennung mit neuem Inhalt ist ein Widerspruch (Codex #1).
+    const v = Modell.vereinige([lokal, ...Object.values(cache).map((c) => c.vorgaenge), ...Object.values(dateien).map((d) => d.vorgaenge)]);
     if (!v.ok) throw new Error("Widerspruch gefunden: " + v.fehler + " – nichts geändert");
     const maxUhr = v.vorgaenge.reduce((m, x) => (x.uhr > m ? x.uhr : m), 0);
     return { ort, dateien, lokal, maxUhr };
@@ -166,11 +182,14 @@
   async function hochladen(g, sp, st, jetzt) {
     const inst = sp.inst;
     const nachInst = new Map();
+    // Laufende ID immer dabei, auch ohne lokale Vorgaenge (z. B. wiederhergestellter Geraetestand, Codex #3).
+    nachInst.set(inst, []);
     for (const v of st.lokal) { if (!nachInst.has(v.inst)) nachInst.set(v.inst, []); nachInst.get(v.inst).push(v); }
     for (const [i, eigene] of nachInst) {
       const name = "vorgaenge-" + i + ".json";
       const c = st.dateien[name];
-      const wolke = c ? c.vorgaenge : [];
+      const da = c && !c.fehlt; // liegt in OneDrive (sonst neu anlegen)
+      const wolke = c ? c.vorgaenge : []; // alles Bekannte, auch aus einer verschwundenen/verkuerzten Fassung
       const inWolke = new Set(wolke.map((v) => v.id));
       if (i === inst) {
         // Die OneDrive-Datei kennt mehr als das Geraet: uebernehmen und Zaehler dahinter setzen, sonst vergaebe
@@ -181,8 +200,9 @@
         if (fehlen.length) { await sp.uebernehmen(fehlen); eigene.push(...fehlen); st.lokal.push(...fehlen); }
       }
       const neu = eigene.filter((v) => !inWolke.has(v.id));
-      const lebenszeichen = i === inst && c && !(jetzt - Date.parse(c.geaendert) < LEBENSZEICHEN_MS);
-      if (!neu.length && !lebenszeichen) continue;
+      const lebenszeichen = i === inst && da && !(jetzt - Date.parse(c.geaendert) < LEBENSZEICHEN_MS);
+      const reparieren = c && (c.fehlt || c.zurueckgesetzt); // OneDrive-Fassung kuerzer als bekannt (Codex #2)
+      if (!neu.length && !lebenszeichen && !reparieren) continue;
       // Nie weniger hochladen, als in OneDrive steht (Schrumpf-Schutz, Luecke 3): Wolke + Neues.
       const alle = wolke.concat(neu).sort((a, b) => a.n - b.n);
       const p = Modell.pruefeDatei({ schema: Modell.SCHEMA, inst: i, vorgaenge: alle });
@@ -191,9 +211,12 @@
       const text = JSON.stringify({ schema: Modell.SCHEMA, inst: i, geschrieben: Modell.lokalIso(jetzt), vorgaenge: alle });
       const kopf = { "Content-Type": "application/json" };
       const pfad = `/drives/${st.ort.driveId}/items/${st.ort.id}:/${name}`;
-      if (c) kopf["If-Match"] = c.eTag;
+      if (da) kopf["If-Match"] = c.eTag;
       else {
         // If-None-Match beachtet OneDrive nicht (Kontentest 08.11.): direkt vorher per Metadaten pruefen.
+        // ponytail: Pruefen + PUT sind nicht atomar (Codex #7). Zwei Tabs derselben Installation schliesst die
+        // Web-Lock-Sperre in app.js aus (Chrome Android hat sie); ohne Sperre kann ein Tab die neue Datei kurz
+        // mit einer aelteren Fassung ueberschreiben - die lokalen Vorgaenge laden beim naechsten Abgleich nach.
         const m = await graph(g, pfad + "?$select=id");
         if (m.ok) return "nochmal";
         if (m.status !== 404) throw new Error(fehlerText(m.status, "Datenordner"));
@@ -291,7 +314,13 @@
     try {
       if (o.sicherPfad && ordnerSchluessel(o.sicherPfad) === ordner) throw new Error("Daten- und Sicherungsordner müssen verschieden sein");
       for (let runde = 1; ; runde++) {
-        st = await allesLesen(g, await ordnerFinden(g, o.datenPfad), st ? st.dateien : ab.dateien, sp);
+        const ort = await ordnerFinden(g, o.datenPfad);
+        // Gleicher Pfad, anderer Ordner (umbenannt + neu angelegt, anderes Konto): wie ein Ordnerwechsel -> Stopp (Codex #6).
+        if (ab.ort && (ab.ort.driveId !== ort.driveId || ab.ort.id !== ort.id)) {
+          throw new Error("Unter diesem Pfad liegt jetzt ein anderer Ordner als beim letzten Abgleich (umbenannt, neu angelegt oder anderes Konto). " +
+            "Es wurde nichts gelesen und nichts geschrieben. Ist das so gewollt: ☰ → Prüfen → 7× auf die Version → Gerätedaten löschen.");
+        }
+        st = await allesLesen(g, ort, st ? st.dateien : ab.dateien, sp);
         if ((await hochladen(g, sp, st, jetzt)) === "fertig") break;
         if (runde >= 3) throw new Error("Eigene Datei hat sich beim Schreiben mehrfach geändert (412) – später erneut");
       }
@@ -299,7 +328,8 @@
       fehler = (x && x.message) || String(x);
       if (g.orte) g.orte.clear(); // Ordner beim naechsten Mal frisch suchen (umbenannt, verschoben)
     }
-    const neu = { ordner, gelesen: st ? sp.inst : ab.gelesen, dateien: st ? st.dateien : ab.dateien,
+    const neu = { ordner, ort: st ? { driveId: st.ort.driveId, id: st.ort.id } : ab.ort || null,
+      gelesen: st ? sp.inst : ab.gelesen, dateien: st ? st.dateien : ab.dateien,
       letzter: { zeit: Modell.lokalIso(jetzt), fehler }, gesichert: ab.gesichert || null, appStand: ab.appStand || null,
       sicherung: ab.sicherung || null };
     // Sicherung erst, wenn alles gelesen ist (sonst saehe sie wie ein Bestand aus, der keiner ist).

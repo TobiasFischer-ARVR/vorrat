@@ -257,9 +257,9 @@ const konto = (() => {
       bereit,
       name: () => { const k = kontoBereit && !kontoFehler && app.getActiveAccount(); return k ? k.name || k.username : null; },
       anmelden: () => app.loginRedirect({ scopes: SCOPES, prompt: "select_account" }),
-      // Nur in dieser App abmelden (lokaler Login-Speicher), NICHT bei Microsoft: die UGC-App auf derselben
-      // Domain nutzt dieselbe Microsoft-Sitzung und bliebe sonst ebenfalls ohne Anmeldung.
-      abmelden: () => app.logoutRedirect({ account: app.getActiveAccount(), onRedirectNavigate: () => false }).then(() => location.reload()),
+      // Kein "Abmelden": MSAL 4.30 entfernt beim Logout ALLE localStorage-Eintraege mit der homeAccountId,
+      // auch die der UGC-App auf derselben Domain (geprueft im Bibliothekscode, Codex-Frage 7).
+      // Konto wechseln geht ueber anmelden() mit Kontoauswahl.
       async token() { // Luecke 11: abgelaufenes Token laut melden, nicht still "offline"
         const k = kontoBereit && !kontoFehler && app.getActiveAccount();
         if (!k) throw new Error("nicht bei Microsoft angemeldet");
@@ -276,9 +276,10 @@ const darfSchreiben = () => !!sp && Cloud.darfSchreiben(ab, sp.inst, einst.daten
 const offen = () => Cloud.offene(ab, lokal); // nur fuer Anzeigen
 // Vor dem Loeschen: frisch aus dem Speicher, nie aus dem Arbeitsspeicher (der kann nach einem Ladefehler
 // leer oder veraltet sein, Review #1). Wirft bei Lesefehler.
+const offenIn = (vs, a) => Cloud.offene(a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null, vs);
 async function offenFrisch() {
-  const vs = await sp.alleVorgaenge(), a = await sp.abgleich();
-  return { n: Cloud.offene(a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null, vs), gesamt: vs.length };
+  const vs = await sp.alleVorgaenge();
+  return { n: offenIn(vs, await sp.abgleich()), gesamt: vs.length };
 }
 // Ist das Geraet nicht lesbar, wird nicht geloescht; stattdessen das Backup aus dem Arbeitsspeicher anbieten.
 function nichtLoeschen(x) {
@@ -348,11 +349,16 @@ function backupHerunterladen() {
 }
 
 // Ganze lokale DB weg -> neue Installation (Testdaten aus Abschnitt 1, Ordnerwechsel). OneDrive bleibt unberuehrt.
-async function geraetLoeschen() {
-  if (sp) { sp.schliessen(); sp = null; }
+// grund(vorgaenge, abgleich) prueft UNMITTELBAR vor dem Loeschen, exklusiv (andere Tabs zu, Codex #4).
+// Liefert true = geloescht. Danach ist die Verbindung dieses Tabs zu -> neu laden.
+async function geraetLoeschen(grund) {
+  sp = null;
+  try { await Speicher.leeren(grund); } catch (x) {
+    fehlerZeigen("Nichts gelöscht: " + ((x && x.message) || x) + ". Bitte die App neu laden.");
+    return false;
+  }
   stand = null;
-  try { await Speicher.loeschen(); } catch (x) { return fehlerZeigen("Löschen fehlgeschlagen: " + ((x && x.message) || x)); }
-  location.reload();
+  return true;
 }
 
 // Ordner durchklicken (UGC #41). Verknuepfungen (🔗) sind hier anklickbar: es geht ueber remoteItem weiter.
@@ -391,7 +397,7 @@ function einstellungenDialog() {
   dialog("Einstellungen", [
     el("h3", null, "Microsoft-Konto"),
     !konto ? el("p", { className: "hinweis-rot" }, "Anmeldung nicht geladen: " + (kontoFehler || "unbekannt"))
-      : name ? el("div", { className: "zeilen" }, el("p", null, "Angemeldet: " + name), el("button", { type: "button", onclick: () => konto.abmelden() }, "Abmelden"))
+      : name ? el("div", { className: "zeilen" }, el("p", null, "Angemeldet: " + name), el("button", { type: "button", onclick: () => konto.anmelden() }, "Anderes Konto"))
         : el("button", { type: "button", onclick: () => konto.anmelden() }, "Bei Microsoft anmelden"),
     el("h3", null, "Ordner in OneDrive"),
     el("p", { className: "klein" }, "Steht nur in diesem Gerät. Eintippen (Windows-Pfad aus dem Explorer geht auch) oder 📁 durchklicken."),
@@ -413,8 +419,11 @@ function einstellungenDialog() {
         if (n) return melde(n + " Änderungen sind noch nicht abgeglichen. Erst abgleichen, dann den Ordner wechseln.");
         if (!confirm("Datenordner wechseln?\n\nDieses Gerät löscht dann seine lokale Kopie und startet mit neuer Kennung. " +
           "Alles Bisherige liegt schon im alten Ordner und wandert nicht mit.")) return;
+        // Erst loeschen, dann den neuen Pfad speichern (Codex #5): bricht es dazwischen ab, bleibt der alte
+        // Ordner mit leerem Geraet - harmlos, das liest erst wieder alles.
+        if (!(await geraetLoeschen((vs, ag) => { const k = offenIn(vs, ag); return k ? k + " Änderungen sind noch nicht abgeglichen" : null; }))) return;
         einstSpeichern({ datenPfad: d, sicherPfad: s });
-        return geraetLoeschen();
+        return location.reload();
       }
       einstSpeichern({ datenPfad: d, sicherPfad: s });
       if (g.orte) g.orte.clear();
@@ -635,7 +644,8 @@ function pruefenAnsicht(ebene) {
     try { f = await offenFrisch(); } catch (x) { return nichtLoeschen(x); }
     if (!confirm("Alle Daten auf DIESEM Gerät löschen?\n\n" + f.gesamt + " eigene Vorgänge, davon " + f.n + " noch nicht in OneDrive – die gehen verloren.\n" +
       "OneDrive bleibt unangetastet. Danach startet das Gerät mit neuer Kennung.")) return;
-    geraetLoeschen();
+    // Hat ein anderer Tab seit der Rueckfrage etwas gespeichert, wird nicht geloescht (Codex #4).
+    if (await geraetLoeschen((vs, ag) => (vs.length !== f.gesamt || offenIn(vs, ag) !== f.n ? "Inzwischen wurde etwas gespeichert" : null))) location.reload();
   } }, "Gerätedaten löschen (z. B. Testdaten)");
   // UGC #82: 7x auf die Version tippen, Zaehler ab dem 4. sichtbar, gilt nur fuer diese offene Ansicht.
   const ver = el("button", { className: "text" });

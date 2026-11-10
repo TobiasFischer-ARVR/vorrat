@@ -119,7 +119,7 @@ fall("Abgleich-Zustand: mit Uhr in einem Schritt, nur ganze Zahlen, loeschen gib
   await assert.rejects(sp.abgleichSpeichern({ kaputt: 1 }, "7"), /Uhr ungueltig/);
   assert.deepStrictEqual(await sp.abgleich(), z, "abgelehnt = nichts geschrieben");
   assert.strictEqual((await sp.ausfuehren(ORT)).uhr, 41);
-  await S.loeschen();
+  await S.leeren(() => null);
   const neu = await S.oeffnen();
   assert.notStrictEqual(neu.inst, sp.inst);
   assert.strictEqual(await neu.abgleich(), null);
@@ -186,6 +186,23 @@ fall("Review #3: uebernehmen setzt Zaehler hinter die Uebernommenen, ID bleibt b
   assert.deepStrictEqual([wieder.inst, wieder.neu], [sp.inst, false]);
   gueltig(wieder, await wieder.alleVorgaenge());
   wieder.schliessen();
+});
+
+fall("Codex #4: leeren prueft und loescht in einem Schritt - Schreiben eines anderen Tabs dazwischen geht nie verloren", async () => {
+  const a = await S.oeffnen(), b = await S.oeffnen();
+  const gezaehlt = (await a.alleVorgaenge()).length; // Oberflaeche von Tab A hat 0 gezaehlt
+  const v = await b.ausfuehren(ORT);                 // Tab B speichert danach
+  await assert.rejects(S.leeren((vs) => (vs.length !== gezaehlt ? "inzwischen geaendert" : null)), /inzwischen geaendert/);
+  const neu = await S.oeffnen();
+  assert.strictEqual(neu.inst, a.inst, "nichts geloescht, gleiche ID");
+  assert.ok((await neu.alleVorgaenge()).some((x) => x.id === v.id));
+  // ohne Einwand: alles weg, andere Verbindungen geschlossen, neue ID
+  await S.leeren((vs, ab) => { assert.strictEqual(vs.length, 1); assert.strictEqual(ab, null); return null; });
+  await assert.rejects(b.ausfuehren(ORT), "geschlossener Tab speichert nicht still weiter");
+  const leer = await S.oeffnen();
+  assert.notStrictEqual(leer.inst, a.inst);
+  assert.deepStrictEqual([(await leer.alleVorgaenge()).length, await leer.abgleich()], [0, null]);
+  leer.schliessen();
 });
 
 fall("abgleichSpeichern zieht die Uhr: nur vorwaerts, nur ganze Zahlen", async () => {

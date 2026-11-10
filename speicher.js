@@ -10,10 +10,14 @@
   const Modell = typeof module !== "undefined" && module.exports ? require("./modell.js") : wurzel.Modell;
   const DB = "vorrat";
 
+  // Ohne Versionsnummer: leeren() hebt die Version bei jedem Loeschen an, geoeffnet wird immer die aktuelle.
   function verbinden() {
     return new Promise((ok, nein) => {
-      const r = indexedDB.open(DB, 1);
-      r.onupgradeneeded = () => { r.result.createObjectStore("vorgaenge", { keyPath: "id" }); r.result.createObjectStore("meta"); };
+      const r = indexedDB.open(DB);
+      r.onupgradeneeded = () => {
+        if (!r.result.objectStoreNames.contains("vorgaenge")) r.result.createObjectStore("vorgaenge", { keyPath: "id" });
+        if (!r.result.objectStoreNames.contains("meta")) r.result.createObjectStore("meta");
+      };
       // Loescht ein anderer Tab die DB, geben wir sie frei; danach lehnt jeder Aufruf hier ab (nie still weiter).
       r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); ok(r.result); };
       r.onerror = () => nein(r.error);
@@ -92,7 +96,7 @@
       abgleich: () => schritt(db, "readonly", (vs, meta, lauf) => {
         meta.get("abgleich").onsuccess = lauf((a) => {
           if (!a) return null;
-          meta.get("wolke").onsuccess = lauf((w) => Object.assign({}, a, { dateien: w && w.ordner === a.ordner ? w.dateien : {} }));
+          meta.get("wolke").onsuccess = lauf((w) => abgleichZusammen(a, w));
         });
       }),
       // Zustand + Uhr nachziehen in EINER Transaktion: "gelesen" gilt nie ohne nachgezogene Uhr (Abschnitt 2).
@@ -134,15 +138,37 @@
     try { await s.persist(); return await s.persisted(); } catch (_) { return null; }
   }
 
-  // Ganze lokale DB loeschen (Testdaten weg / Ordnerwechsel). Danach bekommt das Geraet eine NEUE ID.
-  // Offene Verbindungen anderer Tabs geben per onversionchange frei.
-  const loeschen = () => new Promise((ok, nein) => {
-    const r = indexedDB.deleteDatabase(DB);
-    r.onsuccess = () => ok();
-    r.onerror = () => nein(r.error);
-  });
+  const abgleichZusammen = (a, w) => (a ? Object.assign({}, a, { dateien: w && w.ordner === a.ordner ? w.dateien : {} }) : null);
 
-  const Speicher = { DB, oeffnen, dauerhaft, loeschen };
+  // Alle lokalen Daten loeschen (Testdaten weg / Ordnerwechsel), aber nur, wenn grund(vorgaenge, abgleich) null
+  // liefert; sonst Abbruch mit diesem Text, nichts geloescht. Pruefen und Leeren laufen in EINER
+  // Versionswechsel-Transaktion: die beginnt erst, wenn alle anderen Tabs ihre Verbindung geschlossen haben
+  // (onversionchange), also kann zwischen Pruefen und Loeschen nichts mehr gespeichert werden (Codex #4).
+  // Danach legt oeffnen() eine NEUE ID an. Die geschlossenen Tabs muessen neu laden (ihr Speichern scheitert laut).
+  async function leeren(grund) {
+    const db = await verbinden();
+    const version = db.version;
+    db.close();
+    return new Promise((ok, nein) => {
+      let abbruch = null;
+      const r = indexedDB.open(DB, version + 1);
+      r.onupgradeneeded = () => {
+        const t = r.transaction, vs = t.objectStore("vorgaenge"), meta = t.objectStore("meta");
+        const stopp = (text) => { abbruch = text; t.abort(); };
+        vs.getAll().onsuccess = (e1) => { meta.get("abgleich").onsuccess = (e2) => { meta.get("wolke").onsuccess = (e3) => {
+          let g;
+          try { g = grund(e1.target.result, abgleichZusammen(e2.target.result, e3.target.result)); } catch (x) { g = (x && x.message) || String(x); }
+          if (g) return stopp(g);
+          vs.clear();
+          meta.clear();
+        }; }; };
+      };
+      r.onsuccess = () => { r.result.close(); ok(); };
+      r.onerror = () => nein(new Error(abbruch || (r.error && r.error.message) || "Löschen fehlgeschlagen"));
+    });
+  }
+
+  const Speicher = { DB, oeffnen, dauerhaft, leeren };
   if (typeof module !== "undefined" && module.exports) module.exports = Speicher;
   else wurzel.Speicher = Speicher;
 })(typeof window !== "undefined" ? window : globalThis);

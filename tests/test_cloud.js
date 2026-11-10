@@ -15,7 +15,7 @@ const C = require("../cloud.js");
 function attrappe() {
   const items = new Map(); // id -> { id, drive, parent, name, ordner, inhalt, version, geaendert, von, remote }
   let nr = 0;
-  const f = { ich: "D1", log: [], vorher: null, items };
+  const f = { ich: "D1", log: [], vorher: null, items, seite: 0 };
   f.neu = (drive, parent, name, art, inhalt) => {
     const it = { id: "i" + ++nr, drive, parent, name, ordner: art === "ordner", inhalt, version: 1, geaendert: new Date().toISOString(), von: drive === "D1" ? "Tobias" : "Andrea", remote: null };
     items.set(it.id, it);
@@ -48,7 +48,12 @@ function attrappe() {
     if (pfad === "/me/drive/root?$select=id") return antwort(200, { id: wurzel[f.ich].id });
     if ((m = /^\/drives\/(\w+)\/items\/(\w+)\/children/.exec(pfad))) {
       const o = items.get(m[2]);
-      return o && o.ordner ? antwort(200, { value: f.kinder(o).map(meta) }) : antwort(404, {});
+      if (!o || !o.ordner) return antwort(404, {});
+      const alle = f.kinder(o).map(meta), ab = Number((/\$skiptoken=(\d+)/.exec(pfad) || [0, 0])[1]);
+      if (!f.seite) return antwort(200, { value: alle });
+      const r = { value: alle.slice(ab, ab + f.seite) };
+      if (ab + f.seite < alle.length) r["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/drives/" + m[1] + "/items/" + m[2] + "/children?$skiptoken=" + (ab + f.seite);
+      return antwort(200, r);
     }
     if ((m = /^\/drives\/(\w+)\/items\/(\w+)\/content$/.exec(pfad))) {
       const it = items.get(m[2]);
@@ -86,8 +91,9 @@ const PFAD = "Gemeinschaftsordner/Vorrats App", SICHER = PFAD + "/Sicherungen";
 const ANDREA = "andrea0000000001";
 const anfrage = (r) => new Promise((ok, nein) => { r.onsuccess = () => ok(r.result); r.onerror = () => nein(r.error); });
 
+const dbWeg = () => anfrage(indexedDB.deleteDatabase(S.DB));
 async function aufbau() {
-  await S.loeschen();
+  await dbWeg();
   const f = attrappe();
   return { f, g: { fetch: f.fetch, token: async () => "T" }, sp: await S.oeffnen() };
 }
@@ -495,7 +501,127 @@ fall("Anmeldung abgelaufen: Klartext, nichts geschrieben, Zustand bleibt", async
   x.sp.schliessen();
 });
 
+// ==== Codex Runde 1 (Abschnitt 2): je Fund ein Fall ====
+
+fall("Codex #1: bekannte fremde Kennung mit neuem Inhalt -> Widerspruch, nichts uebernommen", async () => {
+  const x = await aufbau();
+  const d = fremdeDatei(ANDREA, 2);
+  const a = x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(d));
+  assert.strictEqual((await lauf(x)).ok, true);
+  const falsch = JSON.parse(JSON.stringify(d));
+  falsch.vorgaenge[1].werte.name = "Ganz anders";
+  x.f.aendern(a, JSON.stringify(falsch));
+  const r = await lauf(x);
+  assert.match(String(r.fehler), /Widerspruch/);
+  assert.strictEqual((await x.sp.abgleich()).dateien[eigenName(ANDREA)].vorgaenge[1].werte.name, "Ort 1", "alter Inhalt bleibt");
+  x.sp.schliessen();
+});
+
+async function halberZustand(x) { // alte ID mit 1..3 in OneDrive, lokal davon nur Nummer 1, neue ID laeuft
+  for (let i = 0; i < 3; i++) await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  const alt = x.sp.inst;
+  x.sp.schliessen();
+  const db = await anfrage(indexedDB.open(S.DB));
+  const t = db.transaction(["vorgaenge", "meta"], "readwrite");
+  t.objectStore("vorgaenge").delete(alt + "-2");
+  t.objectStore("vorgaenge").delete(alt + "-3");
+  t.objectStore("meta").delete("zaehler");
+  await new Promise((ok) => { t.oncomplete = ok; });
+  db.close();
+  x.sp = await S.oeffnen();
+  return alt;
+}
+
+fall("Codex #2a: halber Zustand, alte Datei in OneDrive verkuerzt -> Bekanntes bleibt und wird wieder hochgeladen", async () => {
+  const x = await aufbau();
+  const alt = await halberZustand(x);
+  const datei = x.f.datei(x.f.daten, eigenName(alt));
+  const d = JSON.parse(datei.inhalt);
+  x.f.aendern(datei, JSON.stringify(Object.assign(d, { vorgaenge: d.vorgaenge.slice(0, 2) })));
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual((await x.sp.abgleich()).dateien[eigenName(alt)].vorgaenge.length, 3);
+  assert.deepStrictEqual(x.f.inhalt(x.f.daten, eigenName(alt)).vorgaenge.map((v) => v.n), [1, 2, 3]);
+  x.sp.schliessen();
+});
+
+fall("Codex #2b: halber Zustand, alte Datei verschwunden -> mit allen 3 wieder angelegt, nicht nur mit Nummer 1", async () => {
+  const x = await aufbau();
+  const alt = await halberZustand(x);
+  x.f.items.delete(x.f.datei(x.f.daten, eigenName(alt)).id);
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.deepStrictEqual(x.f.inhalt(x.f.daten, eigenName(alt)).vorgaenge.map((v) => v.n), [1, 2, 3]);
+  x.sp.schliessen();
+});
+
+fall("Codex #3: laufende ID lokal leer, OneDrive kennt sie schon -> uebernehmen, keine Kennung doppelt", async () => {
+  const x = await aufbau();
+  const v = M.erzeuge({ inst: x.sp.inst, nr: 1, uhr: 0 }, ORT).vorgang;
+  x.f.neu("D1", x.f.daten.id, eigenName(x.sp.inst), "datei", JSON.stringify({ schema: M.SCHEMA, inst: x.sp.inst, vorgaenge: [v] }));
+  assert.strictEqual((await lauf(x)).ok, true);
+  assert.strictEqual((await x.sp.zaehler()).nr, 2);
+  assert.strictEqual((await x.sp.ausfuehren(ORT)).id, x.sp.inst + "-2");
+  assert.strictEqual((await lauf(x)).ok, true, "naechster Abgleich ohne Widerspruch");
+  x.sp.schliessen();
+});
+
+fall("Codex #6: unter dem alten Pfad liegt ein anderer Ordner -> Stopp, nichts hochgeladen", async () => {
+  const x = await aufbau();
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true);
+  x.f.daten.name = "Vorrats App alt"; // umbenannt, neuer gleichnamiger Ordner
+  const neuer = x.f.neu("D1", x.f.gemein.id, "Vorrats App", "ordner");
+  x.f.neu("D1", neuer.id, "Sicherungen", "ordner");
+  await x.sp.ausfuehren(ORT);
+  x.g = { fetch: x.f.fetch, token: async () => "T" }; // neue Sitzung (Neustart)
+  const r = await lauf(x);
+  assert.match(String(r.fehler), /anderer Ordner/);
+  assert.strictEqual(x.f.kinder(neuer).filter((d) => /^vorgaenge-/.test(d.name)).length, 0, "nichts in den neuen Ordner");
+  x.sp.schliessen();
+});
+
+fall("Codex #8: Liste ohne value-Array -> Fehler, nie leerer Ordner", async () => {
+  const x = await aufbau();
+  x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 1)));
+  x.f.vorher = async (art, pfad) => (pfad.startsWith("/drives/D1/items/" + x.f.daten.id + "/children") ? { ok: true, status: 200, json: async () => ({}) } : null);
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual((await x.sp.abgleich()).gelesen, null, "nicht freigeschaltet");
+  assert.strictEqual(x.f.puts().length, 0, "keine (leere) Sicherung");
+  x.sp.schliessen();
+});
+
+fall("Codex #9: Seiten (@odata.nextLink) werden gelesen; Folgeseite auf fremdem Host -> Fehler ohne Token", async () => {
+  const x = await aufbau();
+  x.f.neu("D1", x.f.gemein.parent, "Aaa", "ordner");
+  x.f.neu("D1", x.f.gemein.parent, "Bbb", "ordner");
+  x.f.neu("D1", x.f.daten.id, eigenName(ANDREA), "datei", JSON.stringify(fremdeDatei(ANDREA, 1)));
+  x.f.seite = 1;
+  await x.sp.ausfuehren(ORT);
+  const r = await lauf(x);
+  assert.strictEqual(r.ok, true, r.fehler);
+  assert.ok(r.zustand.dateien[eigenName(ANDREA)], "Datei auf Folgeseite gelesen");
+  const wurzel = await C.wurzelOrt(x.g);
+  assert.strictEqual((await C.unterordner(x.g, wurzel)).length, 3);
+  const fremd = [];
+  const g2 = { token: async () => "T", fetch: async (u, o) => {
+    if (!u.startsWith("https://graph.microsoft.com/")) fremd.push(u);
+    const r0 = await x.f.fetch(u, o);
+    if (!/children/.test(u)) return r0;
+    const j = await r0.json();
+    if (j["@odata.nextLink"]) j["@odata.nextLink"] = "https://boese.example/naechste";
+    return { ok: true, status: 200, json: async () => j };
+  } };
+  await assert.rejects(C.unterordner(g2, wurzel), /Folgeseite/);
+  assert.deepStrictEqual(fremd, [], "kein Aufruf an fremden Host");
+  x.sp.schliessen();
+});
+
 (async () => {
-  for (const [name, fn] of faelle) { await fn(); console.log("ok  " + name); }
-  console.log("\n" + faelle.length + " Faelle bestanden.");
+  let rot = 0;
+  for (const [name, fn] of faelle) {
+    try { await fn(); console.log("ok  " + name); } catch (e) { rot++; console.log("ROT " + name + " -> " + String(e.message).split(String.fromCharCode(10))[0]); }
+  }
+  if (rot) { console.log(rot + " rot"); process.exit(1); }
+  console.log(String.fromCharCode(10) + faelle.length + " Faelle bestanden.");
 })().catch((e) => { console.error(e); process.exit(1); });
