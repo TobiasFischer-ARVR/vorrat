@@ -244,7 +244,8 @@
     }
     if (t.startsWith("[)>")) return leseIfa(t);
     t = t.replace(/^\x1d+/, ""); // fuehrendes FNC1
-    if (/^(\(?01\)?\d{14}|\(?710\)?\d{8})/.test(t) || t.startsWith("(")) return leseGs1(t);
+    // GS1: Reihenfolge der AIs ist frei (17 kann vor 01 stehen) -> bei DataMatrix immer versuchen.
+    if (format === "data_matrix" || /^\(?01\)?\d{14}/.test(t) || t.startsWith("(")) return leseGs1(t);
     return null;
   }
   // Von Hand eingetippt: EAN/GTIN (mit Pruefziffer) oder PZN ("PZN 1234567", "-12345678", 7/8 Ziffern).

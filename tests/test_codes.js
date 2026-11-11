@@ -50,6 +50,8 @@ fall("GS1-DataMatrix: GTIN + Verfall, Seriennummer und Charge nie im Ergebnis", 
     GS + "01" + "0" + NTIN + "21" + SERIE + GS + "17" + "280331" + "10" + "CH42",  // andere Reihenfolge
     "]d2" + GS + "01" + "0" + NTIN + "17" + "280331" + "21" + SERIE + GS + "10CH42", // mit Symbologie-Kennung
     "(01)0" + NTIN + "(17)280331(10)CH42(21)" + SERIE,                              // Klarschrift-Form
+    "17" + "280331" + "01" + "0" + NTIN + "21" + SERIE + GS + "10CH42",               // Verfall zuerst
+    "710" + PZN + GS + "17" + "280331" + "21" + SERIE,                                // nur AI 710 (ohne GTIN)
   ];
   for (const v of varianten) {
     const r = H.leseCode(v, "data_matrix");

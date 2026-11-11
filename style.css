@@ -146,3 +146,4 @@ main button.kachel.angehoben, main button.baldzeile.angehoben { transform: scale
 .zielchip.hier { opacity: .45; border: 1px dashed #1d6b49; }
 .zielchip.ziel { background: #1d6b49; color: #fff; transform: scale(1.08); }
 .platz.ziel rect:first-child { stroke: #1d6b49; stroke-width: 6; }
+.fenster:focus { outline: none; }

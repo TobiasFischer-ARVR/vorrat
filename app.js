@@ -204,7 +204,8 @@ async function laden() {
 // oder null; bei Fehler steht die Fehlerleiste und NICHTS gilt als erledigt (UGC #5, Bauplan Warteschlange).
 // Eintraege der Liste: Vorgangsdaten oder Funktion (bisher) -> Daten, siehe Speicher.ausfuehrenAlle.
 async function tun(datenListe) {
-  if (laeuft || !stand) return null;
+  if (!stand) return null;
+  if (laeuft) { hinweis("Moment – die letzte Änderung wird noch gespeichert. Bitte nochmal."); return null; } // nie stumm schlucken
   // Bauplan Abschnitt 2: erst alle Dateien gelesen und die Uhr nachgezogen, sonst verliert eine
   // frische Aenderung gegen aeltere aus OneDrive.
   if (!darfSchreiben()) { hinweis("Erst mit OneDrive abgleichen (☰ → Einstellungen). Vorher nimmt dieses Gerät nichts an."); return null; }
@@ -806,7 +807,8 @@ async function entnehmen(e) {
   });
 }
 
-function fachAnsicht({ id, hervor }) {
+function fachAnsicht(ebene) {
+  const { id, hervor } = ebene;
   const f = stand && fachVon(id);
   if (!f || f.geloescht) return [kopf("Kiste"), el("p", null, "Diese Kiste gibt es nicht mehr.")];
   const o = ortVon(f.lage.ort);
@@ -815,7 +817,11 @@ function fachAnsicht({ id, hervor }) {
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
     el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => {
       const k = kachel(e, () => entnehmen(e), () => eintragMenue(e), true);
-      if (e.id === hervor) { k.classList.add("hervor"); requestAnimationFrame(() => k.scrollIntoView({ block: "center", behavior: "smooth" })); }
+      if (e.id === hervor) {
+        k.classList.add("hervor");
+        // nur beim ersten Zeichnen hinscrollen, sonst springt die Ansicht nach jedem Antippen (-1) zurueck
+        if (!ebene.gescrollt) { ebene.gescrollt = true; requestAnimationFrame(() => k.scrollIntoView({ block: "center", behavior: "smooth" })); }
+      }
       return k;
     }),
       el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu"))),
@@ -963,10 +969,15 @@ function dialog(titel, inhalt, knoepfe, weg) {
   const k = knoepfe.filter(Boolean).map(([text, fn, klasse]) => el("button", { className: klasse || "", onclick: () => { if (!ebene.zu) fn(melde, schliessen); } }, text));
   ebene.el = el("div", { className: "blatt" }, el("div", { className: "fenster" }, el("h2", null, titel), inhalt, meldung,
     el("div", { className: "knoepfe" }, k, el("button", { className: "zweit", onclick: () => schliessen() }, "Abbrechen"))));
-  ebene.el.firstChild.setAttribute("role", "dialog");
-  ebene.el.firstChild.setAttribute("aria-modal", "true");
-  ebene.el.firstChild.setAttribute("aria-label", titel);
+  const fenster = ebene.el.firstChild;
+  fenster.setAttribute("role", "dialog");
+  fenster.setAttribute("aria-modal", "true");
+  fenster.setAttribute("aria-label", titel);
+  fenster.tabIndex = -1;
+  ebene.el.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); schliessen(); } });
   oeffne(ebene);
+  // Fokus in den Dialog (Tastatur/Screenreader); ein Dialog, der selbst ein Feld fokussiert, ueberschreibt das danach.
+  if (!fenster.contains(document.activeElement)) fenster.focus({ preventScroll: true });
   return { melde, schliessen };
 }
 
