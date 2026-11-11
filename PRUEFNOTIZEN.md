@@ -9,7 +9,7 @@ Nachtlauf ohne Aufsicht. NICHTS davon ist live: `main` ist unverändert. Diese D
 | A Speichern in einem Schritt | fertig | (siehe git log) |
 | B Läuft bald ab | fertig | (siehe git log) |
 | C Scannen | fertig | (siehe git log) |
-| D Verschieben | offen | – |
+| D Verschieben | fertig | (siehe git log) |
 | E Code-Prüfung | offen | – |
 
 Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TESTDEPS=<ordner>`).
@@ -52,6 +52,19 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 | C8 | Code → Name NUR lokal (`localStorage["vorrat-codes"]`, max. 1000, nur Schlüssel `gtin:`/`pzn:`), gemerkt wird der beim Speichern tatsächlich verwendete Name | Auftrag C, siehe Verdachtsstelle V-C1 |
 | C9 | Tests: neue Datei tests/test_codes.js, 9 Fälle (Prüfziffern, EAN/UPC, GS1 in 4 Schreibweisen, Tag 00, IFA, Eintippen, OFF-Antworten, Gedächtnis, Schema-Abwärtsverträglichkeit) | Auftrag Testen |
 
+### Aufgabe D
+
+| Punkt | Was | Woher |
+|---|---|---|
+| D1 | Lange drücken auf eine Kachel (Fach-Ansicht, „Ort klären“) oder eine „Läuft bald ab“-Zeile → kleines Menü „✎ Bearbeiten“ / „↦ Verschieben nach …“ (vorher: direkt Bearbeiten) | Auftrag D |
+| D2 | Dialog „… verschieben nach …“: Ort + Fach, vorbelegt mit dem jetzigen Platz („(jetzt)“), Hinweis bei Ort ohne Kiste; Fächer ohne gültigen Platz sind kein Ziel mehr | Auftrag D „vorhandenes prüfen und vervollständigen“ |
+| D3 | Bearbeiten-Dialog: Abschnitt „Platz“ nutzt dieselbe Auswahl (`zielWahl`), vorbelegt statt „– bleibt –“; unverändert = kein Vorgang | Auftrag D |
+| D4 | Drag and Drop mit Pointer Events: 0,5 s halten → Kachel „angehoben“ (vibriert kurz); dann ziehen → Fach-Leiste oben (alle Orte/Fächer) + Fächer der Zeichnung sind Ziele (`data-fach`), Ziel wird hervorgehoben; loslassen auf Ziel = verschieben, sonst Abbruch. Loslassen ohne Bewegung = Menü. Wischen vor Ablauf der 0,5 s = normaler Bildlauf (kein preventDefault, `touch-action` unverändert); erst nach dem Anheben sperrt ein `touchmove`-Horcher (passive:false) den Bildlauf | Auftrag D |
+| D5 | Während eines Drucks horcht `document` auf pointermove/up/cancel (nicht die Kachel) – headless zeigte, dass die Kachel beim ersten Zug den Capture verliert. Während des Ziehens wird nicht neu gezeichnet/geladen (`zieht`), danach nachgeholt | Fehlerfund beim Test |
+| D6 | Ein Verschieben = EIN Vorgang (`feld` „fach“ des Eintrags), danach Leiste „Pizza → Gefrierschrank – Schublade 2“ mit „Rückgängig“ (Gegenvorgang auf den alten Wert) | Auftrag D |
+| D7 | Tastatur: Kontextmenü-Taste / Umschalt+F10 = langes Drücken | Barrierefreiheit |
+| D8 | Test: 1 neuer Fall (Verschieben = ein Vorgang, Markierung wandert mit). UI headless per CDP-Touch geprüft: Wischen scrollt (scrollY 272, kein Zug), Halten = Menü, Menü → Folgedialog, Ziehen auf Zeichnung und auf Leiste, Rückgängig, Antippen = −1 | Auftrag Testen |
+
 ## 3. Verdachtsstellen
 
 (Format: ID · Datei:Funktion · Szenario · wie sicher)
@@ -64,7 +77,29 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 - **V-C6 · app.js:scanDialog · Hintergrund.** Geht die App in den Hintergrund, wird die Kamera gestoppt und der Scan-Dialog geschlossen (zurück zum Eintrag). Bei manchen Android-Versionen kommt beim Erlaubnis-Popup selbst ein `visibilitychange`? Dann würde der Dialog beim ersten Mal sofort zugehen. · unsicher → Handy-Test
 - **V-C7 · Datenschutz:** Beim Scannen geht der EAN (nur Lebensmittel, nie PZN) an Open Food Facts. Ohne Cookies/Referrer. · Hinweis
 
+- **V-D1 · app.js:druck · Chrome Android und langes Drücken.** Headless (CDP-Touch) funktioniert Halten → Ziehen ohne `pointercancel`. Auf echtem Android kann Chrome bei langem Drücken auf einen Knopf eigene Gesten auslösen (Textauswahl, Kontextmenü, Drag des Links/Bilds). `contextmenu` wird verhindert, `user-select: none` und `-webkit-touch-callout: none` sind gesetzt. Ob das erste `touchmove` nach 0,5 s Ruhe noch `cancelable` ist (sonst scrollt die Seite und `pointercancel` beendet den Zug), ist nur am Handy zu klären. · mittel → Handy-Test
+- **V-D2 · app.js:zugStart · Ziel unter dem Finger.** Ziel = `elementFromPoint` am Finger; der Geist schwebt bewusst 70 px darüber. Die Fach-Leiste oben deckt den oberen Bildschirmrand ab (max. 40 % Höhe) – liegt ein Fach der Zeichnung dort, ist es während des Ziehens nur über die Leiste erreichbar. Kein automatisches Scrollen während des Ziehens. · sicher, Bedienfrage
+- **V-D3 · app.js:zeichnen/laden · Aufschub während des Ziehens.** Kommt während des Ziehens ein Abgleich mit neuen Daten, wird erst nach dem Loslassen gezeichnet; das Verschieben nutzt den Eintrag von Zugbeginn (nur `e.id` und altes `e.fach` für Rückgängig). Wurde das Ziel-Fach in der Zwischenzeit gelöscht, meldet `verschieben` „Dieses Fach gibt es nicht mehr“. · sicher
+- **V-D4 · app.js:eintragMenue · Folgedialog über `nachZurueck`.** Menü schließt (history.go(-1)), der Folgedialog öffnet erst im popstate. Drückt man sehr schnell zweimal, könnte `nachZurueck` von einem anderen Zurück ausgelöst werden. · unwahrscheinlich
+- **V-D5 · Bedienänderung:** Langes Drücken öffnet jetzt ein Menü statt direkt „Bearbeiten“ (ein Tipp mehr). In „Bestand prüfen“ unverändert (Tippen und Halten = Bearbeiten). · Hinweis für Tobias
+
 ## 4. Prüfliste fürs Handy
+
+### Läuft bald ab (Abschnitt 3)
+1. Startseite öffnen. Erwartet: ganz oben „Läuft bald ab (N)“, zuerst Abgelaufenes (dunkelroter Rand, rosa), dann rot (≤ 7 Tage), dann gelb (≤ 30); nichts ohne Datum, nichts mit 0 Stück. Bei mehr als 5: „Alle N zeigen“.
+2. Eintrag mit MHD nur Monat (z. B. 11/2026) prüfen: Datum 30.11.26, erscheint bis einschließlich 30.11.
+3. Zeile antippen. Erwartet: richtiger Reiter, Fach offen, Kachel schwarz umrandet und sichtbar.
+4. Zeichnung: Fach mit bald Ablaufendem hat Kreis mit Zahl (rot oder gelb) und farbigen Rahmen; Reiter mit Zahl, wenn im Ort etwas bald abläuft.
+5. Neuer Eintrag, „selbst eingefroren“, Name „Omas Spezial“: Frist leer, „Kein Stichwort erkannt“, Speichern → „Bitte Frist wählen“. „6 M“ tippen → essen bis = Einfrierdatum + 6 Monate. Name „Hähnchen“ (ohne Handwahl) → 6 vorbelegt.
+
+### Verschieben (Abschnitt 5)
+1. Fach öffnen, Kachel kurz antippen → −1 wie bisher (Rückgängig).
+2. Kachel 0,5 s halten, NICHT bewegen, loslassen → Menü „Bearbeiten / Verschieben nach …“. „Verschieben nach …“ → Ort + Fach vorbelegt mit jetzigem Platz; anderes Fach wählen → Leiste „… → …“ mit Rückgängig.
+3. **Drag and Drop:** Kachel 0,5 s halten (kurzes Vibrieren, Kachel wird größer), dann ziehen. Erwartet: Leiste mit allen Fächern oben, Kachel-Geist über dem Finger, Ziel färbt sich grün. Über einem Fach loslassen → verschoben, Rückgängig möglich. Neben die Ziele loslassen → nichts passiert.
+4. **Bildlauf:** In einem vollen Fach / auf der Startseite über Kacheln und „Läuft bald ab“-Zeilen normal wischen. Erwartet: Seite scrollt, kein Menü, kein Ziehen, kein −1.
+5. Startseite: „Läuft bald ab“-Zeile halten und auf ein Fach der Zeichnung ziehen. Erwartet: verschoben, Zahl in der Zeichnung wandert mit.
+6. Nach einem Verschieben auf dem anderen Handy abgleichen → Eintrag liegt dort im neuen Fach (ein Vorgang).
+7. Beim Ziehen prüfen: markiert Chrome Text, erscheint ein Kontextmenü oder bricht der Zug nach dem ersten Bewegen ab? (→ V-D1)
 
 ### Scannen (Abschnitt 4)
 1. Fach öffnen → „+ Neu“ → „📷 Scannen“ → Chrome fragt nach Kamera → erlauben. Erwartet: Rückkamera-Bild, Text „Strichcode oder DataMatrix-Code ins Bild halten …“.
@@ -81,6 +116,9 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 
 | Frage | Entscheidung | Grund |
 |---|---|---|
+| Was ist „lange drücken“ jetzt? | Menü (Bearbeiten, Verschieben nach …); halten + ziehen = Drag and Drop | Auftrag D nennt „lange drücken → Verschieben nach …“, Bearbeiten muss erreichbar bleiben |
+| Wohin mit der Fach-Leiste beim Ziehen? | Oben, nur während des Ziehens, alle Orte | Unten verdeckte sie im Test die Zeichnung; alle Orte, damit man auch aus „Läuft bald ab“ oder „Ort klären“ überall hin kann |
+| Fächer (Kisten) per Ziehen umsetzen? | Nein, nur Einträge | Nicht verlangt; Kisten-Platz geht weiter über „✎ Kiste“ |
 | Code→Name in OneDrive teilen? | Nein, nur lokal | v3 stoppt den ganzen Abgleich bei unbekanntem Typ/Feld (V-C1) |
 | Welche Formate scannen? | ean_13, ean_8, upc_a, data_matrix (kein upc_e, kein QR) | UPC-E bräuchte Umrechnung für OFF; QR trägt keine Produktnummer |
 | Was ist der Schlüssel für Code→Name? | `pzn:<8>` für Arzneimittel (aus PPN, AI 710 oder NTIN 4150…), sonst `gtin:<13>` | Strichcode, GS1- und IFA-DataMatrix desselben Medikaments landen beim selben Namen |
@@ -93,4 +131,4 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 
 ## 6. Nächster Schritt
 
-Aufgabe D.
+Aufgabe E.

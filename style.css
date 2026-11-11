@@ -130,3 +130,19 @@ main button.kachel.hervor { outline: 4px solid #1d2b24; outline-offset: 2px; }
 .scanzeile { align-items: center; margin-bottom: 8px; }
 .scanzeile > button { margin: 0; flex: none; }
 .scanzeile p { margin: 0; }
+
+/* Abschnitt 5: Verschieben */
+main button.kachel.angehoben, main button.baldzeile.angehoben { transform: scale(1.06); box-shadow: 0 6px 18px #0005; transition: transform .12s; }
+.zuggeist { position: fixed; left: 0; top: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; width: 100px; padding: 6px;
+  border-radius: 8px; background: #1d6b49e6; color: #fff; font-weight: 600; font-size: .85rem; text-align: center; pointer-events: none; box-shadow: 0 8px 20px #0006; }
+.zuggeist .bild { font-size: 2rem; }
+.zielleiste { position: fixed; left: 0; right: 0; top: 0; z-index: 50; max-height: 40vh; overflow: hidden; padding: 10px 12px 8px;
+  background: #fffffff2; border-bottom: 2px solid #1d6b49; box-shadow: 0 4px 16px #0003; }
+.zielleiste p { margin: 0 0 6px; color: #44524b; font-size: .85rem; }
+.zielort { margin-bottom: 6px; }
+.zielort b { display: block; font-size: .85rem; color: #1d6b49; }
+.zielchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.zielchip { padding: 10px 12px; border-radius: 8px; background: #dcefe5; color: #1d6b49; font-weight: 600; font-size: .9rem; }
+.zielchip.hier { opacity: .45; border: 1px dashed #1d6b49; }
+.zielchip.ziel { background: #1d6b49; color: #fff; transform: scale(1.08); }
+.platz.ziel rect:first-child { stroke: #1d6b49; stroke-width: 6; }

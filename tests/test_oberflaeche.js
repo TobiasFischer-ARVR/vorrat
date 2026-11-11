@@ -159,4 +159,20 @@ fall("Markierung je Fach: Zahl der Eintraege, rot schlaegt gelb, Ort klaeren zae
   assert.deepStrictEqual([-3, -1, 0, 1, 12].map(H.baldText), ["abgelaufen seit 3 Tagen", "seit gestern abgelaufen", "läuft heute ab", "läuft morgen ab", "in 12 Tagen"]);
 });
 
+fall("Verschieben = EIN Vorgang (Feld fach), Markierung wandert mit, Rueckgaengig = Gegenvorgang", () => {
+  const a = aufbau([["Pizza", { mhd: "2026-11-12", fach: "f1" }, 2]]);
+  const st0 = a.stand();
+  const f = (st, name) => st.faecher.find((x) => x.name === name).id;
+  const vorher = H.fachMarken(H.baldAb(st0.eintraege, "2026-11-11"));
+  assert.ok(vorher.has(f(st0, "Schublade 1")));
+  a.tu({ typ: "feld", art: "eintrag", ziel: a.ids.Pizza, feld: "fach", wert: f(st0, "Schublade 3") });
+  const st1 = a.stand();
+  const p = st1.eintraege.find((e) => e.name === "Pizza");
+  assert.deepStrictEqual([p.fach, p.menge, p.ortKlaeren], [f(st1, "Schublade 3"), 2, false]);
+  const nachher = H.fachMarken(H.baldAb(st1.eintraege, "2026-11-11"));
+  assert.deepStrictEqual([...nachher.keys()], [f(st1, "Schublade 3")]);
+  a.tu({ typ: "feld", art: "eintrag", ziel: a.ids.Pizza, feld: "fach", wert: null }); // Rueckgaengig nach "kein Fach"
+  assert.strictEqual(a.stand().eintraege.find((e) => e.name === "Pizza").ortKlaeren, true);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

@@ -148,7 +148,9 @@ addEventListener("popstate", () => {
   while (stapel.length > ziel) { const e = stapel.pop(); if (e.el) e.el.remove(); if (e.weg) try { e.weg(); } catch (_) { /* weiter schliessen */ } }
   zeichnen(); // UGC #15: nach dem Schliessen nachholen
   if (nachladen) laden();
+  if (nachZurueck) { const f = nachZurueck; nachZurueck = null; f(); } // Dialog, der einen anderen ersetzt
 });
+let nachZurueck = null; // laeuft nach dem naechsten Zurueck (erst schliessen, dann den Folgedialog oeffnen)
 const dialogOffen = () => stapel.some((e) => e.el);
 
 // ---- Meldungen ----
@@ -175,7 +177,7 @@ function untenZeigen(text, knopf, fn) {
 async function laden() {
   // Kein Standtausch unter offenem Dialog oder laufendem Schreiben (UGC #15): der Dialog rechnet
   // mit dem alten Stand (z. B. Nachzaehlen = gezaehlt minus bekannte Summe). Danach nachholen.
-  if (laeuft || dialogOffen()) { nachladen = true; return; }
+  if (laeuft || dialogOffen() || zieht) { nachladen = true; return; }
   nachladen = false;
   try {
     sp = sp || (await Speicher.oeffnen());
@@ -502,6 +504,7 @@ const klaeren = () => ({ kisten: stand.faecher.filter((f) => f.ortKlaeren), eint
 const ANSICHTEN = { start: startAnsicht, fach: fachAnsicht, ortKlaeren: ortKlaerenAnsicht, bestand: bestandAnsicht, menue: menueAnsicht, pruefen: pruefenAnsicht, sicherung: sicherungAnsicht };
 function zeichnen() {
   if (dialogOffen()) return; // UGC #15: unter einem offenen Dialog nichts austauschen
+  if (zieht) { nachZeichnen = true; return; } // waehrend Drag and Drop nichts austauschen (gezogene Kachel bliebe sonst haengen)
   const oben = stapel[stapel.length - 1];
   haupt.replaceChildren(...ANSICHTEN[oben.art](oben).flat(Infinity).filter(weg));
 }
@@ -564,12 +567,13 @@ function baldAbTeil() {
 function baldZeile(x) {
   const e = x.e;
   const wort = { abgelaufen: "abgelaufen", rot: "bald", gelb: "demnächst" }[x.stufe];
-  const z = el("button", { className: "baldzeile " + x.stufe, onclick: () => zumFach(e), "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " +
+  const z = el("button", { className: "baldzeile " + x.stufe, "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " +
       H.baldText(x.tage) + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
     el("span", { className: "bild", "aria-hidden": "true" }, e.symbol || H.bildchen(e.name)),
     el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
     el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)), el("span", null, x.stufe === "abgelaufen" ? "abgelaufen" : H.baldText(x.tage))));
   z.dataset.stufe = wort;
+  druck(z, () => zumFach(e), () => eintragMenue(e), zugStart(e)); // Abschnitt 5: lange druecken / ziehen wie bei Kacheln
   return z;
 }
 // Antippen springt zum Fach (Reiter dazu umschalten); ohne gueltigen Platz nach "Ort klaeren".
@@ -627,17 +631,162 @@ function zeichnung(ort) {
 }
 
 // Antippen = kurz, lange druecken (0,5 s) = lang. Scrollen bricht ab (pointercancel).
-function druck(knopf, kurz, lang) {
-  let uhr = null, lange = false;
+// Mit zieh (Abschnitt 5): nach 0,5 s ist die Kachel "angehoben"; loslassen ohne Bewegung = lang(), bewegen = ziehen.
+// Bis zum Anheben bleibt der Bildlauf frei (touch-action bleibt, kein preventDefault); erst danach verhindert
+// touchmove den Bildlauf, damit Chrome den Zug nicht als Scrollen abbricht.
+function druck(knopf, kurz, lang, zieh) {
+  let uhr = null, lange = false, start = null, zug = null, zeiger = null;
   const ab = () => { clearTimeout(uhr); uhr = null; };
-  knopf.addEventListener("pointerdown", () => { lange = false; ab(); uhr = setTimeout(() => { uhr = null; lange = true; lang(); }, 500); });
-  for (const t of ["pointerup", "pointercancel", "pointerleave"]) knopf.addEventListener(t, ab);
+  const weit = (ev, n) => start && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > n;
+  // Waehrend eines Drucks horcht document (nicht die Kachel): so kommen Bewegung und Loslassen auch an, wenn
+  // der Zeiger die Kachel verlaesst, der Capture verloren geht oder die Kachel neu gezeichnet wird.
+  const los = () => {
+    ab();
+    knopf.classList.remove("angehoben");
+    for (const [t, f, o] of horcher) document.removeEventListener(t, f, o);
+    zeiger = null;
+  };
+  const bewegt = (ev) => {
+    if (ev.pointerId !== zeiger) return;
+    if (uhr && weit(ev, 10)) ab(); // vor dem Anheben bewegt = Bildlauf, kein langes Druecken
+    if (zieh && lange && !zug && weit(ev, 8)) zug = zieh(ev);
+    if (zug) zug.bewege(ev);
+  };
+  const hoch = (ev) => {
+    if (ev.pointerId !== zeiger) return;
+    los();
+    if (zug) { const z = zug; zug = null; z.ende(ev); return; } // der folgende click wird ignoriert (lange = true)
+    if (zieh && lange) lang();
+  };
+  const abgebrochen = (ev) => {
+    if (ev.pointerId !== zeiger) return;
+    los();
+    if (zug) { const z = zug; zug = null; z.abbruch(); }
+    lange = false;
+  };
+  // Erst nach dem Anheben den Bildlauf sperren: bis dahin bleibt Wischen ein normaler Bildlauf.
+  const wisch = (ev) => { if (zieh && lange && ev.cancelable) ev.preventDefault(); };
+  const horcher = [["pointermove", bewegt, undefined], ["pointerup", hoch, undefined], ["pointercancel", abgebrochen, undefined],
+    ["touchmove", wisch, { passive: false }]];
+  knopf.addEventListener("pointerdown", (ev) => {
+    if (ev.button > 0 || zeiger !== null) return;
+    lange = false; ab(); start = { x: ev.clientX, y: ev.clientY }; zeiger = ev.pointerId;
+    for (const [t, f, o] of horcher) document.addEventListener(t, f, o);
+    uhr = setTimeout(() => {
+      uhr = null; lange = true;
+      if (!zieh) return lang();
+      knopf.classList.add("angehoben");
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, 500);
+  });
+  knopf.addEventListener("pointerleave", (ev) => { if (ev.pointerType === "mouse" && !lange) ab(); }); // Maus raus = kein langes Druecken
   knopf.addEventListener("contextmenu", (ev) => ev.preventDefault());
   knopf.addEventListener("click", () => { ab(); if (!lange) kurz(); lange = false; });
+  // Tastatur: Kontextmenue-Taste / Umschalt+F10 = langes Druecken (Barrierefreiheit)
+  knopf.addEventListener("keydown", (ev) => { if (ev.key === "ContextMenu" || (ev.shiftKey && ev.key === "F10")) { ev.preventDefault(); lang(); } });
+}
+
+// ==== Abschnitt 5: Verschieben ====
+// Ein Verschieben = EIN Vorgang (Feld "fach" des Eintrags). Ziele: Faecher der Zeichnung (data-fach) und die
+// Fach-Leiste, die waehrend des Ziehens unten eingeblendet wird (alle Orte, so geht es von ueberall).
+let zieht = false, nachZeichnen = false;
+const faecherVonOrt = (ortId) => stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ortId)
+  .sort((a, b) => a.lage.reihe - b.lage.reihe || a.lage.spalte - b.lage.spalte);
+function zielLeiste(e) {
+  return el("div", { className: "zielleiste", "aria-hidden": "true" },
+    el("p", null, "Auf ein Fach ziehen und loslassen · woanders loslassen = abbrechen"),
+    orteSichtbar().map((o) => {
+      const fs = faecherVonOrt(o.id);
+      return fs.length > 0 && el("div", { className: "zielort" }, el("b", null, o.name), el("div", { className: "zielchips" }, fs.map((f) => {
+        const c = el("span", { className: "zielchip" + (f.id === e.fach ? " hier" : "") }, f.name);
+        if (f.id !== e.fach) c.dataset.fach = f.id;
+        return c;
+      })));
+    }));
+}
+function zugStart(e) {
+  return (ev) => {
+    zieht = true;
+    const geist = el("div", { className: "zuggeist", "aria-hidden": "true" }, el("span", { className: "bild" }, e.symbol || H.bildchen(e.name)), el("span", null, e.name));
+    const leiste = zielLeiste(e);
+    document.body.append(leiste, geist);
+    let ziel = null;
+    const setze = (x, y) => {
+      geist.style.transform = "translate(" + (x - 50) + "px," + (y - 70) + "px)";
+      const t = document.elementFromPoint(x, y);
+      const z = t && t.closest ? t.closest("[data-fach]") : null;
+      const neu = z && z.dataset.fach !== e.fach ? z : null;
+      if (neu !== ziel) { if (ziel) ziel.classList.remove("ziel"); ziel = neu; if (ziel) ziel.classList.add("ziel"); }
+    };
+    setze(ev.clientX, ev.clientY);
+    const fertig = () => {
+      geist.remove(); leiste.remove();
+      if (ziel) ziel.classList.remove("ziel");
+      zieht = false;
+      if (nachZeichnen) { nachZeichnen = false; zeichnen(); }
+      if (nachladen) laden();
+    };
+    return {
+      bewege: (m) => setze(m.clientX, m.clientY),
+      ende: (m) => { setze(m.clientX, m.clientY); const z = ziel && ziel.dataset.fach; fertig(); if (z) verschieben(e, z); },
+      abbruch: fertig,
+    };
+  };
+}
+const fachText = (fachId) => { const f = fachVon(fachId), o = f && ortVon(f.lage.ort); return f && o ? o.name + " – " + f.name : "?"; };
+async function verschieben(e, fachId) {
+  const alt = e.fach ?? null;
+  if (fachId === alt) return true;
+  const ziel = fachVon(fachId);
+  if (!ziel || ziel.geloescht || ziel.ortKlaeren) { hinweis("Dieses Fach gibt es nicht mehr."); return false; }
+  if (!(await tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: fachId }]))) return false;
+  untenZeigen(e.name + " → " + fachText(fachId), "Rückgängig", async () => {
+    if (await tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: alt }])) untenZeigen(e.name + " zurück" + (alt ? " nach " + fachText(alt) : ""));
+  });
+  return true;
+}
+// Ziel waehlen: Ort -> Fach. Vorbelegt mit dem jetzigen Platz. wert(): undefined = kein Ort gewaehlt (nichts
+// aendern), "" = Ort ohne Faecher, sonst die Fach-Kennung. Faecher ohne gueltigen Platz sind kein Ziel.
+function zielWahl(aktFach) {
+  const f = aktFach && fachVon(aktFach);
+  const startOrt = f && !f.geloescht && !f.ortKlaeren ? f.lage.ort : "";
+  const fachSel = el("select");
+  const fachFeld = feld("Fach", fachSel);
+  const leer = el("p", { className: "hinweis-rot" }, "Dieser Ort hat noch keine Kiste.");
+  const ortSel = el("select", { onchange: () => fuellen() }, el("option", { value: "" }, "– Ort wählen –"),
+    orteSichtbar().map((o) => el("option", { value: o.id, selected: o.id === startOrt }, o.name)));
+  const fuellen = () => {
+    const fs = ortSel.value ? faecherVonOrt(ortSel.value) : [];
+    fachSel.replaceChildren(...fs.map((x) => el("option", { value: x.id, selected: x.id === aktFach }, x.name + (x.id === aktFach ? " (jetzt)" : ""))));
+    fachFeld.hidden = !fs.length;
+    leer.hidden = !ortSel.value || fs.length > 0;
+  };
+  fuellen();
+  return { teil: [el("div", { className: "zeilen" }, feld("Ort", ortSel), fachFeld), leer], wert: () => (!ortSel.value ? undefined : fachSel.value || "") };
+}
+function verschiebenDialog(e) {
+  const z = zielWahl(e.fach);
+  dialog("„" + kuerze(e.name, 30) + "“ verschieben nach …", [
+    el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), z.teil,
+    el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch."),
+  ], [["Verschieben", async (melde, schliessen) => {
+    const w = z.wert();
+    if (w === undefined) return melde("Bitte Ort wählen.");
+    if (w === "") return melde("Dieser Ort hat noch keine Kiste.");
+    if (w === e.fach || (await verschieben(e, w))) schliessen();
+  }]]);
+}
+// Langes Druecken auf eine Kachel: kleines Menue (Bearbeiten, Verschieben nach ...).
+function eintragMenue(e) {
+  const weiter = (fn) => (melde, schliessen) => { nachZurueck = fn; schliessen(); };
+  dialog(kuerze(e.name, 40), [el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
+    ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
+    ["↦ Verschieben nach …", weiter(() => verschiebenDialog(e))],
+  ]);
 }
 
 // Bring-Kachel. Farbe nach Haltbarkeit; ohne Datum neutral.
-function kachel(e, kurz, lang) {
+function kachel(e, kurz, lang, ziehbar) {
   const st = Modell.stufe(e.ablauf, Modell.heuteIso());
   const k = el("button", { className: "kachel" + (st === "rot" || st === "gelb" ? " " + st : "") + (e.bestandPruefen ? " pruefen" : "") },
     el("span", { className: "bild" }, e.symbol || H.bildchen(e.name)),
@@ -645,7 +794,7 @@ function kachel(e, kurz, lang) {
     e.menge >= 2 && el("span", { className: "zahl" }, "×" + e.menge),
     el("span", { className: "datum" }, H.kurzDatum(e)),
     (e.bestandPruefen || e.ortKlaeren) && el("span", { className: "marke" }, e.bestandPruefen ? "Bestand prüfen" : "Ort klären"));
-  druck(k, kurz, lang);
+  druck(k, kurz, lang, ziehbar ? zugStart(e) : null);
   return k;
 }
 
@@ -665,12 +814,12 @@ function fachAnsicht({ id, hervor }) {
     kopf(f.name, el("button", { className: "neben", onclick: () => fachDialog(f) }, "✎ " + fachWort(o))),
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
     el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => {
-      const k = kachel(e, () => entnehmen(e), () => eintragDialog(e));
+      const k = kachel(e, () => entnehmen(e), () => eintragMenue(e), true);
       if (e.id === hervor) { k.classList.add("hervor"); requestAnimationFrame(() => k.scrollIntoView({ block: "center", behavior: "smooth" })); }
       return k;
     }),
       el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu"))),
-    el("p", { className: "klein" }, "Antippen = eins weniger · lange drücken = bearbeiten"),
+    el("p", { className: "klein" }, "Antippen = eins weniger · lange drücken = Menü (bearbeiten, verschieben) · gedrückt halten und ziehen = auf ein anderes Fach legen"),
   ];
 }
 
@@ -679,7 +828,7 @@ function ortKlaerenAnsicht() {
   return [kopf("Ort klären"),
     el("p", { className: "klein" }, "Diese Sachen haben keinen gültigen Platz. Antippen und Platz wählen."),
     kisten.map((f) => el("button", { className: "zeile", onclick: () => fachDialog(f) }, "📦 " + fachWort(ortVon(f.lage.ort)) + " „" + f.name + "“: Platz wählen")),
-    el("div", { className: "kacheln" }, eintraege.map((e) => kachel(e, () => eintragDialog(e), () => eintragDialog(e)))),
+    el("div", { className: "kacheln" }, eintraege.map((e) => kachel(e, () => eintragDialog(e), () => eintragMenue(e), true))),
     !kisten.length && !eintraege.length && el("p", null, "Alles geklärt.")];
 }
 
@@ -989,22 +1138,11 @@ function eintragDialog(e, fachId) {
   frost.addEventListener("change", frostZeigen);
   frostZeigen();
 
-  // Verschieben nach ... (nur beim Bearbeiten): Ort -> Fach. "bleibt" = nichts aendern.
-  let ortSel = null, fachSel = null, verschieben = null;
+  // Verschieben nach ... (nur beim Bearbeiten): Ort -> Fach, vorbelegt mit dem jetzigen Platz (zielWahl).
+  let ziel = null, verschiebenTeil = null;
   if (e) {
-    const f = fachVon(e.fach);
-    fachSel = el("select");
-    const fachFeld = feld("Fach", fachSel);
-    ortSel = el("select", { onchange: () => fuellen() }, el("option", { value: "" }, "– bleibt –"), orteSichtbar().map((o) => el("option", { value: o.id }, o.name)));
-    const fuellen = () => {
-      fachSel.replaceChildren(...stand.faecher.filter((x) => !x.geloescht && x.lage.ort === ortSel.value)
-        .sort((a, b) => a.lage.reihe - b.lage.reihe || a.lage.spalte - b.lage.spalte)
-        .map((x) => el("option", { value: x.id, selected: x.id === e.fach }, x.name)));
-      fachFeld.hidden = !ortSel.value;
-    };
-    fuellen();
-    verschieben = [el("p", { className: "klein" }, "Liegt in: " + (e.ortKlaeren || !f ? "– unklar (Ort klären) –" : ortVon(f.lage.ort).name + " · " + f.name)),
-      el("div", { className: "zeilen" }, feld("Verschieben nach", ortSel), fachFeld)];
+    ziel = zielWahl(e.fach);
+    verschiebenTeil = [el("h3", null, "Platz"), el("p", { className: "klein" }, "Liegt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), ziel.teil];
   }
 
   // Scannen (nur beim Neuanlegen): Name aus dem Gedaechtnis oder Open Food Facts, MHD aus DataMatrix.
@@ -1044,7 +1182,9 @@ function eintragDialog(e, fachId) {
     let fach = fachId;
     if (e) {
       fach = e.fach ?? null;
-      if (ortSel.value) { if (!fachSel.value) return melde("Dieser Ort hat noch keine Kiste."); fach = fachSel.value; }
+      const z = ziel.wert();
+      if (z === "") return melde("Dieser Ort hat noch keine Kiste.");
+      if (z) fach = z;
     }
     const werte = { name: name.value.trim(), symbol: symbol.value.trim() || null, mhd: fr ? null : mhd,
       eingefroren: fr ? einDatum.value : null, frist: fr ? Number(frist.value) : null, fach };
@@ -1076,7 +1216,7 @@ function eintragDialog(e, fachId) {
     el("div", { className: "zeilen" }, feld("Name", name), feld("Bild", symbol)),
     mengeTeil,
     el("label", { className: "schalter" }, frost, "selbst eingefroren"),
-    mhdTeil, frostTeil, verschieben,
+    mhdTeil, frostTeil, verschiebenTeil,
   ], [
     ["Speichern", speichern],
     e && ["Löschen", async (melde, schliessen) => {
