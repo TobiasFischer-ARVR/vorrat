@@ -670,8 +670,10 @@ function druck(knopf, kurz, lang, zieh) {
   };
   // Erst nach dem Anheben den Bildlauf sperren: bis dahin bleibt Wischen ein normaler Bildlauf.
   const wisch = (ev) => { if (zieh && lange && ev.cancelable) ev.preventDefault(); };
+  // Codex v4 #6: App in den Hintergrund (Anruf, Home) mitten im Druck = Abbruch, sonst haengt zieht = true
+  const hintergrund = () => { if (document.hidden && zeiger !== null) abgebrochen({ pointerId: zeiger }); };
   const horcher = [["pointermove", bewegt, undefined], ["pointerup", hoch, undefined], ["pointercancel", abgebrochen, undefined],
-    ["touchmove", wisch, { passive: false }]];
+    ["touchmove", wisch, { passive: false }], ["visibilitychange", hintergrund, undefined]];
   knopf.addEventListener("pointerdown", (ev) => {
     if (ev.button > 0 || zeiger !== null) return;
     lange = false; ab(); start = { x: ev.clientX, y: ev.clientY }; zeiger = ev.pointerId;
@@ -731,23 +733,31 @@ function zugStart(e) {
       if (ziel) ziel.classList.remove("ziel");
       zieht = false;
       if (nachZeichnen) { nachZeichnen = false; zeichnen(); }
-      if (nachladen) laden();
+      return nachladen ? laden() : null;
     };
     return {
       bewege: (m) => setze(m.clientX, m.clientY),
-      ende: (m) => { setze(m.clientX, m.clientY); const z = ziel && ziel.dataset.fach; fertig(); if (z) verschieben(e, z); },
+      // Codex v4 #1: erst den waehrend des Ziehens aufgeschobenen Stand laden, dann gegen IHN pruefen
+      ende: async (m) => { setze(m.clientX, m.clientY); const z = ziel && ziel.dataset.fach; await fertig(); if (z) verschieben(e, z); },
       abbruch: fertig,
     };
   };
 }
 const fachText = (fachId) => { const f = fachVon(fachId), o = f && ortVon(f.lage.ort); return f && o ? o.name + " – " + f.name : "?"; };
+// Codex v4 #1/#2: Eintrag und Faecher immer im AKTUELLEN Stand pruefen, nicht im Objekt von Zugbeginn.
+const eintragJetzt = (id) => (stand ? stand.eintraege.find((x) => x.id === id && x.sichtbar) : null);
+const fachGueltig = (id) => { const f = id && fachVon(id); return !!f && !f.geloescht && !f.ortKlaeren; };
 async function verschieben(e, fachId) {
-  const alt = e.fach ?? null;
+  const jetzt = eintragJetzt(e.id);
+  if (!jetzt) { hinweis("Diesen Eintrag gibt es nicht mehr."); return false; }
+  const alt = jetzt.fach ?? null;
   if (fachId === alt) return true;
-  const ziel = fachVon(fachId);
-  if (!ziel || ziel.geloescht || ziel.ortKlaeren) { hinweis("Dieses Fach gibt es nicht mehr."); return false; }
+  if (!fachGueltig(fachId)) { hinweis("Dieses Fach gibt es nicht mehr."); return false; }
   if (!(await tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: fachId }]))) return false;
   untenZeigen(e.name + " → " + fachText(fachId), "Rückgängig", async () => {
+    const nun = eintragJetzt(e.id);
+    if (!nun || nun.fach !== fachId) return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
+    if (alt && !fachGueltig(alt)) return hinweis("Das alte Fach gibt es nicht mehr – bitte über „Verschieben nach …“ einordnen.");
     if (await tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: alt }])) untenZeigen(e.name + " zurück" + (alt ? " nach " + fachText(alt) : ""));
   });
   return true;
@@ -1167,8 +1177,12 @@ function eintragDialog(e, fachId) {
   let code = null;
   const scanAnz = el("p", { className: "klein", role: "status" });
   const setzeName = (n) => { name.value = n; name.dispatchEvent(new Event("input")); };
+  let scanMhd = null; // MHD, das der letzte Scan gesetzt hat
   async function codeUebernehmen(c) {
     code = c;
+    // Codex v4 #4: ein MHD vom vorigen Scan nicht an die naechste Packung vererben (von Hand Geaendertes bleibt)
+    if (!c.mhd && scanMhd && mhd === scanMhd) { mhd = null; genau.value = ""; jahrHand = false; mhdZeigen(); }
+    scanMhd = c.mhd || null;
     if (c.mhd) { // Verfall aus dem DataMatrix-Code
       frost.checked = false;
       frostZeigen();
