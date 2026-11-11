@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v3"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v4"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -197,27 +197,30 @@ async function laden() {
   zeichnen();
 }
 
-// Vorgaenge nacheinander ausfuehren. Liefert die gespeicherten Vorgaenge oder null; bei Fehler steht
-// die Fehlerleiste und die Aktion gilt NICHT als erledigt (UGC #5, Bauplan Warteschlange).
+// Vorgaenge in EINEM Schritt ausfuehren (Aufgabe A: ganz oder gar nicht). Liefert die gespeicherten Vorgaenge
+// oder null; bei Fehler steht die Fehlerleiste und NICHTS gilt als erledigt (UGC #5, Bauplan Warteschlange).
+// Eintraege der Liste: Vorgangsdaten oder Funktion (bisher) -> Daten, siehe Speicher.ausfuehrenAlle.
 async function tun(datenListe) {
   if (laeuft || !stand) return null;
   // Bauplan Abschnitt 2: erst alle Dateien gelesen und die Uhr nachgezogen, sonst verliert eine
   // frische Aenderung gegen aeltere aus OneDrive.
   if (!darfSchreiben()) { hinweis("Erst mit OneDrive abgleichen (☰ → Einstellungen). Vorher nimmt dieses Gerät nichts an."); return null; }
   laeuft = true;
-  const fertig = [];
+  let fertig = null;
   try {
-    for (const d of datenListe) { const v = await sp.ausfuehren(d); liste.push(v); lokal.push(v); aenderungen++; fertig.push(v); }
+    fertig = await sp.ausfuehrenAlle(datenListe);
+    for (const v of fertig) { liste.push(v); lokal.push(v); }
+    aenderungen++;
     return fertig;
   } catch (x) {
-    fehlerZeigen("Speichern fehlgeschlagen" + (fertig.length ? " (nur teilweise)" : "") + ": " +
-      ((x && x.message) || x) + ". Diese Änderung ist NICHT gespeichert.");
+    fertig = null;
+    fehlerZeigen("Speichern fehlgeschlagen: " + ((x && x.message) || x) + ". Diese Änderung ist NICHT gespeichert.");
     return null;
   } finally {
     laeuft = false;
     stand = Modell.berechne(liste);
     zeichnen();
-    if (fertig.length) abgleichBald();
+    if (fertig) abgleichBald();
     if (nachladen) laden();
   }
 }
@@ -514,10 +517,7 @@ function startAnsicht() {
       if (!confirm("Grundausstattung anlegen?\n\n• Gefrierschrank: 6 Schubladen (2 braun, 4 weiß)\n• Vorrats-Regal: 4 Böden, 8 Kisten\n" +
         "• Küchenschublade: 1 Schublade\n• Medizinschrank: 3 × 2 Plätze, noch ohne Kisten\n\nDanach ist alles änderbar.")) return;
       knopf.disabled = true;
-      for (const g of H.grundausstattung()) {
-        const o = await tun([g.ort]);
-        if (!o || !(await tun(g.faecher(o[0].id)))) return;
-      }
+      if (!(await tun(H.grundSchritte()))) knopf.disabled = false; // ganz oder gar nicht (Aufgabe A)
     } }, "Grundausstattung anlegen");
     return [abgleichKarte(), el("p", null, "Noch keine Orte angelegt."), knopf, el("p", { className: "klein" }, "Eigene Orte gehen auch: ☰ → Ort anlegen.")];
   }

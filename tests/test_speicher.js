@@ -251,6 +251,52 @@ fall("abgleichSpeichern zieht die Uhr: nur vorwaerts, nur ganze Zahlen", async (
   sp.schliessen();
 });
 
+fall("Aufgabe A: ausfuehrenAlle speichert mehrere Vorgaenge in einem Schritt, Zaehler einmal", async () => {
+  const sp = await S.oeffnen();
+  const erg = await sp.ausfuehrenAlle([ORT, (bisher) => ({ typ: "neu", art: "fach", werte: { name: "S1", lage: { ort: bisher[0].id, reihe: 0, spalte: 0 } } }),
+    (bisher) => [1, 2].map((r) => ({ typ: "neu", art: "fach", werte: { name: "S" + (r + 1), lage: { ort: bisher[0].id, reihe: r, spalte: 0 } } }))]);
+  assert.deepStrictEqual(erg.map((v) => v.n), [1, 2, 3, 4]);
+  assert.deepStrictEqual(erg.map((v) => v.uhr), [1, 2, 3, 4]);
+  assert.deepStrictEqual(await sp.zaehler(), { inst: sp.inst, nr: 5, uhr: 4 });
+  const vs = await sp.alleVorgaenge();
+  assert.strictEqual(vs.length, 4);
+  gueltig(sp, vs);
+  // Schritt-Funktion bekommt Kopien: Veraendern wirkt nicht auf Gespeichertes
+  await sp.ausfuehrenAlle([ORT, (b) => { b[0].werte.name = "VERBOGEN"; return []; }]);
+  assert.ok((await sp.alleVorgaenge()).every((v) => v.werte === undefined || v.werte.name !== "VERBOGEN"));
+  sp.schliessen();
+});
+
+fall("Aufgabe A: ganz oder gar nicht - ein ungueltiger oder werfender Schritt speichert nichts", async () => {
+  const sp = await S.oeffnen();
+  await sp.ausfuehren(ORT);
+  const vorher = await sp.zaehler();
+  await assert.rejects(sp.ausfuehrenAlle([ORT, ORT, { typ: "neu", art: "eintrag", werte: { name: "x" }, menge: 0 }]), /Anfangsmenge/);
+  await assert.rejects(sp.ausfuehrenAlle([ORT, () => { throw new Error("Schritt kaputt"); }]), /Schritt kaputt/);
+  await assert.rejects(sp.ausfuehrenAlle([]), /Keine Vorg/);
+  await assert.rejects(sp.ausfuehrenAlle([ORT, () => []].slice(1)), /Keine Vorg/);
+  assert.deepStrictEqual(await sp.zaehler(), vorher);
+  assert.strictEqual((await sp.alleVorgaenge()).length, 1);
+  sp.schliessen();
+});
+
+fall("Aufgabe A: Grundausstattung in einem Schritt, zwei Tabs gleichzeitig ohne doppelte Nummern", async () => {
+  const H = require("../hilfen.js");
+  const [a, b] = await Promise.all([S.oeffnen(), S.oeffnen()]);
+  const [x, y] = await Promise.all([a.ausfuehrenAlle(H.grundSchritte()), b.ausfuehrenAlle(H.grundSchritte())]);
+  assert.strictEqual(x.length, 19);
+  assert.strictEqual(y.length, 19);
+  const vs = await a.alleVorgaenge();
+  assert.strictEqual(new Set(vs.map((v) => v.n)).size, 38);
+  gueltig(a, vs);
+  // jedes Fach zeigt auf einen Ort aus DEMSELBEN Schritt
+  for (const teil of [x, y]) {
+    const orte = new Set(teil.filter((v) => v.art === "ort").map((v) => v.id));
+    assert.ok(teil.filter((v) => v.art === "fach").every((v) => orte.has(v.werte.lage.ort)));
+  }
+  a.schliessen(); b.schliessen();
+});
+
 fall("dauerhaft: ohne API null statt Fehler", async () => {
   assert.strictEqual(await S.dauerhaft(), null);
 });

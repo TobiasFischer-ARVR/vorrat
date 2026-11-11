@@ -103,20 +103,45 @@
       });
     };
 
+    const MAX_SCHRITT = 500; // Schutz gegen versehentlich riesige Listen in einer Transaktion
+    const alle = (schritte, jetzt) => {
+      if (!Array.isArray(schritte) || !schritte.length) return Promise.reject(new Error("Keine Vorgänge zum Speichern"));
+      return schritt(db, "readwrite", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z0) => {
+        let z = z0;
+        const fertig = [];
+        for (const s of schritte) {
+          // Kopien: ein Schritt kann nichts Gespeichertes verbiegen.
+          const daten = typeof s === "function" ? s(fertig.map((v) => JSON.parse(JSON.stringify(v)))) : s;
+          for (const d of Array.isArray(daten) ? daten : [daten]) {
+            if (fertig.length >= MAX_SCHRITT) throw new Error("Zu viele Vorgänge in einem Schritt");
+            const e = Modell.erzeuge(z, d, jetzt);
+            vs.add(e.vorgang); // add statt put: ein vorhandener Vorgang wird nie ueberschrieben
+            z = e.zaehler;
+            fertig.push(e.vorgang);
+          }
+        }
+        if (!fertig.length) throw new Error("Keine Vorgänge zum Speichern");
+        meta.put(z, "zaehler"); // einmal, am Ende
+        return fertig;
+      }));
+    };
+
     return {
       inst,
       neu: start.neu, // true = diese Installation wurde gerade neu angelegt (auch nach Datenverlust)
 
       // Vorgang erzeugen und mit dem neuen Zaehler speichern. Promise = der gespeicherte Vorgang.
       // Ungueltige Eingabe oder Speicherfehler -> abgelehnt, nichts gespeichert, Zaehler unveraendert.
-      ausfuehren: (daten, jetzt) => schritt(db, "readwrite", (vs, meta, lauf) => zaehlerLesen(meta, lauf, (z) => {
-        const e = Modell.erzeuge(z, daten, jetzt);
-        vs.add(e.vorgang); // add statt put: ein vorhandener Vorgang wird nie ueberschrieben
-        meta.put(e.zaehler, "zaehler");
-        return e.vorgang;
-      })),
+      ausfuehren: (daten, jetzt) => alle([daten], jetzt).then((a) => a[0]),
+
+      // Mehrere Vorgaenge in EINEM Schritt (Abschnitt 3-5, Aufgabe A): ganz oder gar nicht, eine Transaktion,
+      // Zaehler einmal gelesen und einmal geschrieben. Ein Schritt ist Vorgangsdaten ODER eine Funktion
+      // (bisher) -> Daten | [Daten], die die schon erzeugten Vorgaenge dieses Aufrufs sieht (Grundausstattung:
+      // Faecher brauchen die Kennung ihres Orts). Wirft ein Schritt oder ist einer ungueltig: nichts gespeichert.
+      ausfuehrenAlle: (schritte, jetzt) => alle(schritte, jetzt),
 
       // Alle lokal gespeicherten Vorgaenge (laufende ID, im halben Zustand auch fruehere IDs dieses Geraets).
+
       // Fremde Vorgaenge (anderes Handy) liegen nie hier, sondern im Abgleich-Zustand.
       alleVorgaenge: () => schritt(db, "readonly", (vs, meta, lauf) => { vs.getAll().onsuccess = lauf((a) => a); }),
 
