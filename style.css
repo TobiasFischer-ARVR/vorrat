@@ -102,3 +102,25 @@ table.pruefen th { padding: 4px 12px 4px 0; color: #5b6b63; font-weight: 500; te
 button.text { padding: 0; background: none !important; color: inherit !important; text-decoration: underline dotted; }
 pre.ausgabe { white-space: pre-wrap; padding: 8px; border-radius: 8px; background: #fff; }
 pre.ausgabe:empty { display: none; }
+
+/* Abschnitt 3: Laeuft bald ab */
+.bald { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid #f0c9c5; }
+.bald h2 { margin: 0 0 8px; font-size: 1.15rem; color: #8c1d18; }
+.bald ul { list-style: none; margin: 0 0 6px; padding: 0; }
+main button.baldzeile { display: flex; gap: 10px; align-items: center; width: 100%; margin-bottom: 6px; padding: 8px 10px; text-align: left;
+  background: #fff; color: #1d2b24; border: 1px solid #cfe0d7; border-left: 8px solid #f2b632;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+main button.baldzeile.rot { border-left-color: #d9443a; }
+main button.baldzeile.abgelaufen { border-left-color: #7a1410; background: #fde7e5; }
+.baldzeile .bild { font-size: 1.8rem; }
+.baldzeile .was { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.baldzeile .was b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.baldzeile .wann { display: flex; flex-direction: column; align-items: flex-end; font-size: .85rem; text-align: right; }
+.platz.gelb rect:first-child { stroke: #e0a100; stroke-width: 4; }
+.punkt.gelb { fill: #f2b632; }
+.punktzahl { font-size: 13px; font-weight: 800; fill: #fff; pointer-events: none; }
+.punktzahl.gelb { fill: #3b2a00; }
+.platz:focus-visible rect:first-child, .frei:focus-visible rect { stroke: #1d6b49; stroke-width: 5; outline: none; }
+main button.kachel.hervor { outline: 4px solid #1d2b24; outline-offset: 2px; }
+:focus-visible { outline: 3px solid #1d6b49; outline-offset: 2px; }
+.reiterzahl { display: inline-block; min-width: 1.4em; margin-left: 6px; padding: 0 4px; border-radius: 999px; background: #d9443a; color: #fff; font-size: .8rem; font-weight: 800; }

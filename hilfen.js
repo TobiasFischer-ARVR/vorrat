@@ -58,8 +58,57 @@
     geflügel: 1, hähnchen: 1, huhn: 1, pute: 1, schwein: 1, lamm: 1, fertig: 1, pizza: 1, lasagne: 1,
     rind: 2, wild: 2, obst: 2, gemüse: 2, beere: 2, erbse: 2, bohne: 2, apfel: 2,
   });
-  // Index in FRISTEN; ohne Treffer die kuerzeste Frist (vorsichtig, nur Vorbelegung).
-  const fristKategorie = (name) => finde(name, FRIST_WOERTER) ?? 0;
+  // Index in FRISTEN, ohne Treffer null. Entscheidung Tobias (Abschnitt 3): ohne passendes Stichwort KEINE
+  // Vorbelegung mehr (bisher 3 Monate) -> die Frist ist dann Pflicht und wird per Schnellauswahl gewaehlt.
+  const fristKategorie = (name) => finde(name, FRIST_WOERTER);
+  const FRIST_SCHNELL = [1, 2, 3, 6, 9, 12]; // Monate
+  const fristVorschlag = (name) => { const k = fristKategorie(name); return k === null ? null : FRISTEN[k].monate; };
+
+  // ---- Abschnitt 3: "Laeuft bald ab" ----
+  // Grenzen fest (Entscheidung Tobias, keine Einstellung): rot <= 7 Tage, gelb <= 30 Tage, davor abgelaufen.
+  const BALD = { rot: 7, gelb: 30 };
+  // "abgelaufen" (gestern oder frueher), "rot", "gelb" oder null (spaeter / ohne Datum).
+  function baldStufe(ablauf, heute) {
+    if (!ablauf) return null;
+    const t = Modell.tageBis(ablauf, heute);
+    return t < 0 ? "abgelaufen" : t <= BALD.rot ? "rot" : t <= BALD.gelb ? "gelb" : null;
+  }
+  // Alle Eintraege mit Stueckzahl > 0 und Datum (MHD bzw. "essen bis", Monats-MHD bis Monatsende = e.ablauf
+  // aus Modell.berechne), die abgelaufen sind oder in <= 30 Tagen ablaufen. Sortiert nach Datum (damit
+  // automatisch abgelaufen -> rot -> gelb), bei Gleichstand nach Name, dann Kennung (feste Reihenfolge).
+  function baldAb(eintraege, heute) {
+    return eintraege.filter((e) => e.sichtbar && e.menge > 0 && e.ablauf)
+      .map((e) => ({ e, stufe: baldStufe(e.ablauf, heute), tage: Modell.tageBis(e.ablauf, heute) }))
+      .filter((x) => x.stufe)
+      .sort((a, b) => a.e.ablauf.localeCompare(b.e.ablauf) || a.e.name.localeCompare(b.e.name, "de") || (a.e.id < b.e.id ? -1 : 1));
+  }
+  // Markierung je Fach fuer die Zeichnung: Map fachId -> { n, farbe }. n = Zahl der bald ablaufenden Eintraege
+  // (nicht Stueck), farbe "rot", wenn mindestens einer abgelaufen/rot ist, sonst "gelb".
+  // Eintraege mit "Ort klaeren" zaehlen nicht (ihr Fach ist weg oder hat keinen Platz).
+  function fachMarken(liste) {
+    const m = new Map();
+    for (const x of liste) {
+      if (!x.e.fach || x.e.ortKlaeren) continue;
+      const alt = m.get(x.e.fach) || { n: 0, farbe: "gelb" };
+      m.set(x.e.fach, { n: alt.n + 1, farbe: alt.farbe === "rot" || x.stufe !== "gelb" ? "rot" : "gelb" });
+    }
+    return m;
+  }
+  // "Gefrierschrank – Schublade 3"; ohne gueltigen Platz "Ort klären".
+  function fundort(e, orte, faecher) {
+    const f = e.fach ? faecher.find((x) => x.id === e.fach) : null;
+    const o = f ? orte.find((x) => x.id === f.lage.ort) : null;
+    if (e.ortKlaeren || !f || !o) return "Ort klären";
+    return o.name + " – " + f.name;
+  }
+  // Text fuer die Liste: "abgelaufen seit 3 Tagen", "heute", "morgen", "in 5 Tagen".
+  function baldText(tage) {
+    if (tage < -1) return "abgelaufen seit " + -tage + " Tagen";
+    if (tage === -1) return "seit gestern abgelaufen";
+    if (tage === 0) return "läuft heute ab";
+    if (tage === 1) return "läuft morgen ab";
+    return "in " + tage + " Tagen";
+  }
 
   // MHD-Schnellauswahl Monat/Jahr -> "JJJJ-MM" (gilt bis Monatsende, siehe Modell.ablaufdatum).
   const mhdMonat = (jahr, monat) => jahr + "-" + String(monat).padStart(2, "0");
@@ -109,7 +158,7 @@
     return null;
   }
 
-  const Hilfen = { bildchen, FRISTEN, fristKategorie, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe };
+  const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

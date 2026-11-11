@@ -525,9 +525,19 @@ function startAnsicht() {
   const k = klaeren(), nKlaeren = k.kisten.length + k.eintraege.length;
   const nPruefen = stand.eintraege.filter((e) => e.bestandPruefen).length;
   const nDaten = stand.widersprueche.length + stand.verwaist.length;
+  const baldJeOrt = new Map();
+  for (const [fid, m] of H.fachMarken(H.baldAb(stand.eintraege, Modell.heuteIso()))) {
+    const f = fachVon(fid);
+    if (f) baldJeOrt.set(f.lage.ort, (baldJeOrt.get(f.lage.ort) || 0) + m.n);
+  }
   return [
+    baldAbTeil(),
     abgleichKarte(),
-    el("nav", { className: "reiter" }, orte.map((o) => el("button", { className: o.id === ortWahl ? "an" : "", onclick: () => { ortWahl = o.id; zeichnen(); } }, o.name))),
+    el("nav", { className: "reiter" }, orte.map((o) => {
+      const n = baldJeOrt.get(o.id) || 0; // Abschnitt 3: auch im Reiter sehen, wo etwas bald ablaeuft
+      return el("button", { className: o.id === ortWahl ? "an" : "", "aria-current": o.id === ortWahl ? "true" : "false", onclick: () => { ortWahl = o.id; zeichnen(); } },
+        o.name, n > 0 && el("span", { className: "reiterzahl", "aria-label": n + " laufen bald ab" }, String(n)));
+    })),
     nDaten > 0 && el("div", { className: "karte still" }, "Daten prüfen: " + nDaten + " Vorgänge passen nicht zusammen und werden nicht angewendet (☰ → Prüfen). Gelöscht wurde nichts."),
     (nKlaeren > 0 || nPruefen > 0) && el("div", { className: "knoepfe" },
       nKlaeren > 0 && el("button", { className: "ortklaeren", onclick: () => oeffne({ art: "ortKlaeren" }) }, "Ort klären (" + nKlaeren + ")"),
@@ -536,14 +546,47 @@ function startAnsicht() {
   ];
 }
 
+// ---- Abschnitt 3: "Laeuft bald ab" (Kernfunktion), ganz oben auf der Startseite ----
+// Bis 5 Zeilen, der Rest auf Knopfdruck: eine lange Liste soll die Abgleich-Warnung darunter nicht wegschieben.
+let baldAlle = false;
+const BALD_KURZ = 5;
+function baldAbTeil() {
+  const l = H.baldAb(stand.eintraege, Modell.heuteIso());
+  if (!l.length) return null;
+  const zeigen = baldAlle ? l : l.slice(0, BALD_KURZ);
+  return el("section", { className: "bald", "aria-labelledby": "bald-titel" },
+    el("h2", { id: "bald-titel" }, "Läuft bald ab (" + l.length + ")"),
+    el("ul", null, zeigen.map((x) => el("li", null, baldZeile(x)))),
+    l.length > BALD_KURZ && el("button", { className: "neben", "aria-expanded": String(baldAlle), onclick: () => { baldAlle = !baldAlle; zeichnen(); } },
+      baldAlle ? "Weniger zeigen" : "Alle " + l.length + " zeigen"));
+}
+function baldZeile(x) {
+  const e = x.e;
+  const wort = { abgelaufen: "abgelaufen", rot: "bald", gelb: "demnächst" }[x.stufe];
+  const z = el("button", { className: "baldzeile " + x.stufe, onclick: () => zumFach(e), "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " +
+      H.baldText(x.tage) + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
+    el("span", { className: "bild", "aria-hidden": "true" }, e.symbol || H.bildchen(e.name)),
+    el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
+    el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)), el("span", null, x.stufe === "abgelaufen" ? "abgelaufen" : H.baldText(x.tage))));
+  z.dataset.stufe = wort;
+  return z;
+}
+// Antippen springt zum Fach (Reiter dazu umschalten); ohne gueltigen Platz nach "Ort klaeren".
+function zumFach(e) {
+  const f = e.fach && fachVon(e.fach);
+  if (e.ortKlaeren || !f) return oeffne({ art: "ortKlaeren" });
+  ortWahl = f.lage.ort;
+  oeffne({ art: "fach", id: f.id, hervor: e.id });
+}
+
 // Digitales Bild des Orts: 1 Spalte = Schubladen uebereinander, sonst Boeden mit Kisten.
 // Jeder feste Platz zeigt seine Kiste oder ist frei (gestrichelt, "+").
 function zeichnung(ort) {
   const W = 360, rand = 12, luft = 8, schub = ort.spalten === 1, rh = schub ? 62 : 84;
   const cw = (W - 2 * rand - (ort.spalten - 1) * luft) / ort.spalten;
   const hoehe = 2 * rand + ort.reihen * rh + (ort.reihen - 1) * luft;
-  const heute = Modell.heuteIso();
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${hoehe}`, class: "ortbild", role: "img", "aria-label": ort.name },
+  const marken = H.fachMarken(H.baldAb(stand.eintraege, Modell.heuteIso())); // Abschnitt 3
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${hoehe}`, class: "ortbild", role: "group", "aria-label": ort.name },
     sv("rect", { width: W, height: hoehe, rx: 14, class: "korpus" }));
   for (let r = 0; r < ort.reihen; r++) {
     const y = rand + r * (rh + luft);
@@ -553,23 +596,28 @@ function zeichnung(ort) {
       const x = rand + c * (cw + luft);
       const hier = faecherAn(ort.id, r, c);
       if (!hier.length) {
-        const g = sv("g", { class: "frei" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
+        const g = sv("g", { class: "frei", tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
         g.addEventListener("click", () => fachDialog(null, { ort: ort.id, reihe: r, spalte: c }));
+        g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fachDialog(null, { ort: ort.id, reihe: r, spalte: c }); } });
         svg.append(g);
       }
       // ponytail: zwei Kisten auf einem Platz (gleichzeitig angelegt) teilen sich die Breite.
       const w = cw / Math.max(1, hier.length);
       hier.forEach((f, i) => {
         const es = imFach(f.id);
-        const rot = es.some((e) => Modell.stufe(e.ablauf, heute) === "rot");
+        const mk = marken.get(f.id); // { n, farbe } oder undefined
         const xi = x + i * w, mitte = xi + w / 2;
-        const g = sv("g", { class: "platz" + (rot ? " rot" : "") },
+        const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
+          "aria-label": f.name + ", " + (es.length ? es.length + (es.length === 1 ? " Sache" : " Sachen") : "leer") +
+            (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
           sv("rect", { x: xi, y, width: w, height: rh, rx: 8, fill: fuell }),
           sv("rect", { x: mitte - 22, y: y + 7, width: 44, height: 6, rx: 3, class: "griff" }),
           sv("text", { x: mitte, y: y + rh * 0.55, "text-anchor": "middle", fill: schrift, class: "fname" }, kuerze(f.name, Math.max(3, Math.floor(w / 9)))),
           sv("text", { x: mitte, y: y + rh * 0.84, "text-anchor": "middle", fill: schrift, class: "fzahl" }, es.length ? es.length + (es.length === 1 ? " Sache" : " Sachen") : "leer"),
-          rot && sv("circle", { cx: xi + w - 13, cy: y + 13, r: 8, class: "punkt" }));
+          mk && sv("circle", { cx: xi + w - 15, cy: y + 15, r: 11, class: "punkt " + mk.farbe }),
+          mk && sv("text", { x: xi + w - 15, y: y + 19.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
         g.addEventListener("click", () => oeffne({ art: "fach", id: f.id }));
+        g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
         svg.append(g);
       });
     }
@@ -608,14 +656,18 @@ async function entnehmen(e) {
   });
 }
 
-function fachAnsicht({ id }) {
+function fachAnsicht({ id, hervor }) {
   const f = stand && fachVon(id);
   if (!f || f.geloescht) return [kopf("Kiste"), el("p", null, "Diese Kiste gibt es nicht mehr.")];
   const o = ortVon(f.lage.ort);
   return [
     kopf(f.name, el("button", { className: "neben", onclick: () => fachDialog(f) }, "✎ " + fachWort(o))),
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
-    el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => kachel(e, () => entnehmen(e), () => eintragDialog(e))),
+    el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => {
+      const k = kachel(e, () => entnehmen(e), () => eintragDialog(e));
+      if (e.id === hervor) { k.classList.add("hervor"); requestAnimationFrame(() => k.scrollIntoView({ block: "center", behavior: "smooth" })); }
+      return k;
+    }),
       el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu"))),
     el("p", { className: "klein" }, "Antippen = eins weniger · lange drücken = bearbeiten"),
   ];
@@ -814,25 +866,39 @@ function eintragDialog(e, fachId) {
       el("button", { type: "button", className: "zweit", onclick: () => { mhd = null; genau.value = ""; mhdZeigen(); } }, "kein MHD")));
   mhdZeigen();
 
-  // Selbst eingefroren: Einfrierdatum + Frist (Kategorie nur zum Vorbelegen) -> "essen bis"
+  // Selbst eingefroren: Einfrierdatum + Frist -> "essen bis". Stichwort im Namen belegt die Frist vor
+  // (Fisch 3, Gefluegel 6, Rind 9 ...); ohne Stichwort bleibt sie leer und ist Pflicht (Entscheidung Tobias, Abschnitt 3).
   const frost = el("input", { type: "checkbox", checked: !!(e && e.eingefroren) });
   const einDatum = el("input", { type: "date", value: (e && e.eingefroren) || heute });
-  const kat = el("select", null, H.FRISTEN.map((f, i) => el("option", { value: String(i) }, f.name + " (" + f.monate + " Mon.)")));
-  kat.value = String(H.fristKategorie(e ? e.name : ""));
-  const frist = el("input", { type: "number", min: 1, max: 60, inputMode: "numeric", value: String((e && e.frist) || H.FRISTEN[Number(kat.value)].monate) });
+  let fristHand = !!(e && e.frist); // von Hand gewaehlt oder vorhanden -> Namensaenderung laesst sie stehen
+  const frist = el("input", { type: "number", min: 1, max: 60, inputMode: "numeric", placeholder: "Monate", value: e && e.frist ? String(e.frist) : "" });
+  const schnell = el("div", { className: "monate", role: "group", "aria-label": "Frist in Monaten" });
+  const vorschlagAnz = el("p", { className: "klein" });
   const essenAnz = el("b");
   const essenZeigen = () => {
     const w = { eingefroren: einDatum.value, frist: Number(frist.value) };
-    essenAnz.textContent = H.pruefe("eintrag", w) ? "–" : H.deDatum(Modell.ablaufdatum(w));
+    essenAnz.textContent = !einDatum.value || H.pruefe("eintrag", w) ? "– (Frist wählen)" : H.deDatum(Modell.ablaufdatum(w));
   };
-  const katSetzen = () => { kat.value = String(H.fristKategorie(name.value)); frist.value = String(H.FRISTEN[Number(kat.value)].monate); };
-  kat.addEventListener("change", () => { frist.value = String(H.FRISTEN[Number(kat.value)].monate); essenZeigen(); });
+  const fristZeigen = () => {
+    const jetzt = Number(frist.value);
+    schnell.replaceChildren(...H.FRIST_SCHNELL.map((m) => el("button", { type: "button", className: jetzt === m ? "an" : "", "aria-pressed": String(jetzt === m),
+      onclick: () => { frist.value = String(m); fristHand = true; fristZeigen(); } }, m + " M")));
+    essenZeigen();
+  };
+  const vorschlagen = () => {
+    const k = H.fristKategorie(name.value);
+    vorschlagAnz.textContent = k === null ? "Kein Stichwort erkannt – bitte Frist wählen." : "Vorschlag nach Stichwort: " + H.FRISTEN[k].name + " (" + H.FRISTEN[k].monate + " Monate)";
+    if (!fristHand) frist.value = k === null ? "" : String(H.FRISTEN[k].monate);
+    fristZeigen();
+  };
   einDatum.addEventListener("input", essenZeigen);
-  frist.addEventListener("input", essenZeigen);
-  const frostTeil = el("div", null, el("div", { className: "zeilen" }, feld("eingefroren am", einDatum), feld("Frist (Monate)", frist)),
-    feld("Art", kat), el("div", { className: "feld" }, el("span", null, "essen bis"), essenAnz));
-  const frostZeigen = () => { frostTeil.hidden = !frost.checked; mhdTeil.hidden = frost.checked; essenZeigen(); };
-  frost.addEventListener("change", () => { if (frost.checked && !(e && e.eingefroren)) katSetzen(); frostZeigen(); });
+  frist.addEventListener("input", () => { fristHand = frist.value !== ""; fristZeigen(); });
+  name.addEventListener("input", () => { if (frost.checked) vorschlagen(); });
+  const frostTeil = el("div", null, feld("eingefroren am", einDatum),
+    el("div", { className: "feld" }, el("span", null, "Frist bis „essen bis“ (Pflicht)"), schnell), feld("oder Monate eintippen (1–60)", frist),
+    vorschlagAnz, el("div", { className: "feld" }, el("span", null, "essen bis"), essenAnz));
+  const frostZeigen = () => { frostTeil.hidden = !frost.checked; mhdTeil.hidden = frost.checked; if (frost.checked) vorschlagen(); };
+  frost.addEventListener("change", frostZeigen);
   frostZeigen();
 
   // Verschieben nach ... (nur beim Bearbeiten): Ort -> Fach. "bleibt" = nichts aendern.
@@ -856,6 +922,7 @@ function eintragDialog(e, fachId) {
   async function speichern(melde, schliessen) {
     const fr = frost.checked;
     if (fr && !einDatum.value) return melde("Einfrierdatum fehlt");
+    if (fr && frist.value === "") return melde("Bitte Frist wählen (Monate bis „essen bis“)");
     let fach = fachId;
     if (e) {
       fach = e.fach ?? null;

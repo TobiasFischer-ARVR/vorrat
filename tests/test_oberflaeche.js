@@ -63,7 +63,12 @@ fall("Frist-Kategorien laut Aufdruck, Vorschlag nach Name, essen bis", () => {
   assert.strictEqual(k("Hähnchenschenkel"), 6);
   assert.strictEqual(k("Rinderbraten"), 9);
   assert.strictEqual(k("Erbsen aus dem Garten"), 9);
-  assert.strictEqual(k("Unbekanntes"), 3, "ohne Treffer die kuerzeste Frist");
+  assert.strictEqual(H.fristKategorie("Unbekanntes"), null, "ohne Treffer keine Vorbelegung (Entscheidung Tobias)");
+  assert.strictEqual(H.fristVorschlag("Unbekanntes"), null);
+  assert.strictEqual(H.fristVorschlag(""), null);
+  assert.strictEqual(H.fristVorschlag("Lammkeule"), 6);
+  assert.deepStrictEqual(H.FRIST_SCHNELL, [1, 2, 3, 6, 9, 12]);
+  assert.ok(H.FRIST_SCHNELL.every((m) => M.FELDER.eintrag.frist(m)));
   assert.strictEqual(M.ablaufdatum({ eingefroren: "2026-11-09", frist: k("Schweinebraten") }), "2027-05-09");
 });
 
@@ -85,6 +90,73 @@ fall("Eingabepruefung nutzt Modell.FELDER und meldet verstaendlich", () => {
   assert.match(H.pruefe("ort", { name: "Truhe", reihen: 21, spalten: 1 }), /Reihen/);
   assert.match(H.pruefe("ort", { name: "Truhe", reihen: 2, spalten: 2.5 }), /Spalten/);
   assert.strictEqual(H.pruefe("fach", { name: "Kiste", lage: { ort: "testgeraet1-1", reihe: 0, spalte: 1 } }), null);
+});
+
+// Hilfsaufbau: Ort + 2 Faecher + Eintraege -> berechneter Stand
+function aufbau(eintraege) {
+  let z = { inst: "testgeraet1", nr: 1, uhr: 0 };
+  const vs = [];
+  const tu = (d) => { const e = M.erzeuge(z, d); z = e.zaehler; vs.push(e.vorgang); return e.vorgang; };
+  const o = tu({ typ: "neu", art: "ort", werte: { name: "Gefrierschrank", reihen: 6, spalten: 1 } });
+  const f1 = tu(H.fachNeu("Schublade 1", o.id, 0, 0)), f3 = tu(H.fachNeu("Schublade 3", o.id, 2, 0));
+  const fach = { f1: f1.id, f3: f3.id, keins: null };
+  const ids = {};
+  for (const [name, werte, menge] of eintraege) ids[name] = tu({ typ: "neu", art: "eintrag", werte: Object.assign({ name }, werte, { fach: fach[werte.fach || "f1"] }), menge: menge || 1 }).id;
+  return { tu, ids, stand: () => M.berechne(vs) };
+}
+
+fall("Laeuft bald ab: Filter, Sortierung abgelaufen -> rot -> gelb, ohne Datum nicht dabei", () => {
+  const heute = "2026-11-11";
+  const a = aufbau([
+    ["Gelb spaet", { mhd: "2026-12-11" }],          // 30 Tage -> gelb
+    ["Zu spaet", { mhd: "2026-12-12" }],            // 31 Tage -> nicht dabei
+    ["Abgelaufen", { mhd: "2026-11-01" }],
+    ["Rot", { mhd: "2026-11-18" }],                 // 7 Tage -> rot
+    ["Gelb frueh", { mhd: "2026-11-19" }],          // 8 Tage -> gelb
+    ["Ohne Datum", { mhd: null }],
+    ["Monat", { mhd: "2026-11" }],                  // bis 30.11. -> 19 Tage -> gelb
+    ["Essen bis", { eingefroren: "2026-08-15", frist: 3 }], // 15.11. -> rot
+    ["Leer", { mhd: "2026-11-01" }],
+  ]);
+  a.tu({ typ: "menge", art: "eintrag", ziel: a.ids.Leer, delta: -1, grund: "entnahme" });
+  const l = H.baldAb(a.stand().eintraege, heute);
+  assert.deepStrictEqual(l.map((x) => [x.e.name, x.stufe]), [
+    ["Abgelaufen", "abgelaufen"], ["Essen bis", "rot"], ["Rot", "rot"], ["Gelb frueh", "gelb"], ["Monat", "gelb"], ["Gelb spaet", "gelb"]]);
+  assert.deepStrictEqual(l.map((x) => x.tage), [-10, 4, 7, 8, 19, 30]);
+});
+
+fall("Laeuft bald ab: Monats-MHD zaehlt bis Monatsende (auch Februar im Schaltjahr)", () => {
+  const a = aufbau([["Nov", { mhd: "2026-11" }], ["Feb", { mhd: "2028-02" }]]);
+  const st = a.stand().eintraege;
+  const s = (name, heute) => H.baldStufe(st.find((e) => e.name === name).ablauf, heute);
+  assert.strictEqual(s("Nov", "2026-11-30"), "rot", "letzter Tag des Monats gilt noch");
+  assert.strictEqual(s("Nov", "2026-12-01"), "abgelaufen");
+  assert.strictEqual(s("Nov", "2026-10-31"), "gelb", "genau 30 Tage vorher");
+  assert.strictEqual(s("Nov", "2026-10-30"), null, "31 Tage vorher");
+  assert.strictEqual(s("Feb", "2028-02-29"), "rot");
+  assert.strictEqual(s("Feb", "2028-03-01"), "abgelaufen");
+  assert.strictEqual(H.baldStufe(null, "2026-11-11"), null);
+});
+
+fall("Markierung je Fach: Zahl der Eintraege, rot schlaegt gelb, Ort klaeren zaehlt nicht", () => {
+  const a = aufbau([
+    ["A", { mhd: "2026-11-20", fach: "f1" }, 5], // gelb, 5 Stueck = 1 Eintrag
+    ["B", { mhd: "2026-11-25", fach: "f1" }],    // gelb
+    ["C", { mhd: "2026-11-12", fach: "f3" }],    // rot
+    ["D", { mhd: "2026-11-30", fach: "f3" }],    // gelb
+    ["E", { mhd: "2026-11-01", fach: "keins" }], // abgelaufen, aber ohne Fach
+    ["F", { mhd: "2027-06", fach: "f1" }],       // spaet
+  ]);
+  const st = a.stand();
+  const m = H.fachMarken(H.baldAb(st.eintraege, "2026-11-11"));
+  const f = (name) => st.faecher.find((x) => x.name === name).id;
+  assert.deepStrictEqual(m.get(f("Schublade 1")), { n: 2, farbe: "gelb" });
+  assert.deepStrictEqual(m.get(f("Schublade 3")), { n: 2, farbe: "rot" });
+  assert.strictEqual(m.size, 2);
+  const e = st.eintraege.find((x) => x.name === "E");
+  assert.strictEqual(H.fundort(e, st.orte, st.faecher), "Ort klären");
+  assert.strictEqual(H.fundort(st.eintraege.find((x) => x.name === "C"), st.orte, st.faecher), "Gefrierschrank – Schublade 3");
+  assert.deepStrictEqual([-3, -1, 0, 1, 12].map(H.baldText), ["abgelaufen seit 3 Tagen", "seit gestern abgelaufen", "läuft heute ab", "läuft morgen ab", "in 12 Tagen"]);
 });
 
 console.log("\n" + faelle + " Faelle bestanden.");
