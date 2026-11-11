@@ -124,3 +124,9 @@ main button.baldzeile.abgelaufen { border-left-color: #7a1410; background: #fde7
 main button.kachel.hervor { outline: 4px solid #1d2b24; outline-offset: 2px; }
 :focus-visible { outline: 3px solid #1d6b49; outline-offset: 2px; }
 .reiterzahl { display: inline-block; min-width: 1.4em; margin-left: 6px; padding: 0 4px; border-radius: 999px; background: #d9443a; color: #fff; font-size: .8rem; font-weight: 800; }
+
+/* Abschnitt 4: Scannen */
+.scanbild { display: block; width: 100%; max-height: 50vh; object-fit: cover; border-radius: 12px; background: #000; }
+.scanzeile { align-items: center; margin-bottom: 8px; }
+.scanzeile > button { margin: 0; flex: none; }
+.scanzeile p { margin: 0; }

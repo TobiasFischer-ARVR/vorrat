@@ -147,6 +147,148 @@
     return g.faecher(o.id);
   }]);
 
+  // ---- Abschnitt 4: Codes lesen (reine Funktionen, keine Kamera) ----
+  // Ergebnis von leseCode/codeAusEingabe: { art: "ean"|"gs1"|"ifa"|"pzn", schluessel, ean, pzn, mhd, anzeige }.
+  //   schluessel = "gtin:<8/13/14 Ziffern>" oder "pzn:<8 Ziffern>" (fuer "Code -> Name merken"),
+  //   ean = Code fuer Open Food Facts (nur Lebensmittel-GTIN, nie bei PZN), mhd = "JJJJ-MM" / "JJJJ-MM-TT" / null.
+  // Charge und Seriennummer werden NIE zurueckgegeben (Seriennummer darf nirgends gespeichert werden).
+  const GS = "\x1d", RS = "\x1e", EOT = "\x04";
+  function gtinOk(z) { // Pruefziffer EAN-8, UPC-A (12), EAN-13, GTIN-14
+    if (typeof z !== "string" || !/^(\d{8}|\d{12,14})$/.test(z)) return false;
+    let summe = 0;
+    for (let i = 0; i < z.length - 1; i++) summe += Number(z[z.length - 2 - i]) * (i % 2 === 0 ? 3 : 1);
+    return (10 - (summe % 10)) % 10 === Number(z[z.length - 1]);
+  }
+  function pznOk(p) { // PZN8: Ziffern 1-7 mal 1..7, Summe mod 11 = Pruefziffer (10 = ungueltig)
+    if (typeof p !== "string" || !/^\d{8}$/.test(p)) return false;
+    let summe = 0;
+    for (let i = 0; i < 7; i++) summe += Number(p[i]) * (i + 1);
+    return summe % 11 !== 10 && summe % 11 === Number(p[7]);
+  }
+  // GTIN vereinheitlichen: UPC-A (12) -> 13 Stellen, GTIN-14 mit fuehrender 0 -> 13 Stellen.
+  function gtinNorm(z) {
+    if (z.length === 14 && z[0] === "0") z = z.slice(1);
+    if (z.length === 12) z = "0" + z;
+    return z;
+  }
+  // Arzneimittel-GTIN (NTIN) "4150" + PZN8 + Pruefziffer -> PZN, sonst null.
+  const pznAusGtin = (g) => (g.length === 13 && g.startsWith("4150") && pznOk(g.slice(4, 12)) ? g.slice(4, 12) : null);
+  // "JJMMTT" -> MHD. Tag 00 = nur Monat (gilt bis Monatsende). Ungueltig -> null.
+  function verfallAus(x) {
+    if (typeof x !== "string" || !/^\d{6}$/.test(x)) return null;
+    const mhd = "20" + x.slice(0, 2) + "-" + x.slice(2, 4) + (x.slice(4) === "00" ? "" : "-" + x.slice(4));
+    return Modell.FELDER.eintrag.mhd(mhd) ? mhd : null;
+  }
+  function ergebnis(art, gtin, pzn, mhd) {
+    if (pzn) return { art, schluessel: "pzn:" + pzn, ean: null, pzn, mhd: mhd || null, anzeige: "PZN " + pzn };
+    if (gtin) return { art, schluessel: "gtin:" + gtin, ean: gtin, pzn: null, mhd: mhd || null, anzeige: (art === "ean" ? "EAN " : "GTIN ") + gtin };
+    return null;
+  }
+
+  // GS1 (AI 01 GTIN, 17 Verfall, 10 Charge, 21 Seriennummer ...). Feste Laengen laut GS1; variable Felder enden
+  // am GS-Zeichen (FNC1) oder am Ende. Auch die Klammerform "(01)...(17)..." geht. Unbekannter AI -> Ende.
+  const AI_FEST = { "00": 18, "01": 14, "02": 14, "11": 6, "12": 6, "13": 6, "15": 6, "16": 6, "17": 6, "20": 2, "7003": 10 };
+  const AI_VAR = ["10", "21", "22", "30", "37", "90", "91", "92", "93", "94", "95", "96", "97", "98", "99",
+    "240", "241", "250", "251", "400", "710", "711", "712", "713", "714", "715"];
+  function gs1Felder(t) {
+    const f = {};
+    if (/^\(\d{2,4}\)/.test(t)) { // Klarschrift-Form
+      for (const m of t.matchAll(/\((\d{2,4})\)([^(]*)/g)) if (!Object.hasOwn(f, m[1])) f[m[1]] = m[2].replace(/\x1d/g, "");
+      return f;
+    }
+    let i = 0;
+    while (i < t.length) {
+      if (t[i] === GS) { i++; continue; }
+      let ai = null;
+      for (const n of [2, 3, 4]) {
+        const k = t.slice(i, i + n);
+        if (Object.hasOwn(AI_FEST, k) || AI_VAR.includes(k)) { ai = k; break; }
+      }
+      if (!ai) break; // unbekannt: lieber aufhoeren als falsch zerlegen
+      i += ai.length;
+      let wert;
+      if (Object.hasOwn(AI_FEST, ai)) { wert = t.slice(i, i + AI_FEST[ai]); i += AI_FEST[ai]; }
+      else { const ende = t.indexOf(GS, i); wert = t.slice(i, ende < 0 ? t.length : ende); i = ende < 0 ? t.length : ende + 1; }
+      if (!Object.hasOwn(f, ai)) f[ai] = wert;
+    }
+    return f;
+  }
+  function leseGs1(t) {
+    const f = gs1Felder(t);
+    const g = f["01"] && /^\d{14}$/.test(f["01"]) && gtinOk(f["01"]) ? gtinNorm(f["01"]) : null;
+    // AI 710 = deutsche Nationalnummer (PZN), sonst PZN aus der NTIN
+    const pzn710 = f["710"] && /^\d{8}$/.test(f["710"]) && pznOk(f["710"]) ? f["710"] : null;
+    const pzn = pzn710 || (g && pznAusGtin(g));
+    return ergebnis("gs1", g, pzn, verfallAus(f["17"]));
+  }
+  // IFA/PPN (MH10.8.2): "[)>" RS "06" GS "9N<PPN>" GS "1T<Charge>" GS "D<JJMMTT>" GS "S<Seriennr>" RS EOT.
+  // PPN = "11" + PZN8 + 2 Pruefziffern.
+  function leseIfa(t) {
+    let pzn = null, gtin = null, mhd = null;
+    for (const teil of t.replace(/^\[\)>/, "").split(new RegExp("[" + GS + RS + EOT + "]"))) {
+      if (teil.startsWith("9N")) { const p = teil.slice(2); if (/^11\d{10}$/.test(p) && pznOk(p.slice(2, 10))) pzn = p.slice(2, 10); }
+      else if (teil.startsWith("8P")) { const z = teil.slice(2); if (gtinOk(z)) gtin = gtinNorm(z); }
+      else if (/^D\d{6}$/.test(teil)) mhd = verfallAus(teil.slice(1));
+      // "1T" Charge, "S" Seriennummer, alles andere: bewusst ignoriert
+    }
+    return ergebnis("ifa", gtin, pzn || (gtin && pznAusGtin(gtin)), mhd);
+  }
+  // Rohwert vom Scanner (BarcodeDetector: rawValue + format) -> Ergebnis oder null.
+  function leseCode(roh, format) {
+    if (typeof roh !== "string" || !roh.length || roh.length > 500) return null;
+    let t = roh.trim().replace(/^\][A-Za-z]\d/, ""); // Symbologie-Kennung "]d2", "]C1" ...
+    if (/^\d{8}$|^\d{12,14}$/.test(t) && format !== "data_matrix") {
+      if (!gtinOk(t)) return null;
+      const g = gtinNorm(t);
+      return ergebnis("ean", g, pznAusGtin(g), null);
+    }
+    if (t.startsWith("[)>")) return leseIfa(t);
+    t = t.replace(/^\x1d+/, ""); // fuehrendes FNC1
+    if (/^(\(?01\)?\d{14}|\(?710\)?\d{8})/.test(t) || t.startsWith("(")) return leseGs1(t);
+    return null;
+  }
+  // Von Hand eingetippt: EAN/GTIN (mit Pruefziffer) oder PZN ("PZN 1234567", "-12345678", 7/8 Ziffern).
+  function codeAusEingabe(text) {
+    const roh = String(text || "").trim();
+    const istPzn = /^(pzn|-)/i.test(roh);
+    const z = roh.replace(/^pzn/i, "").replace(/[\s-]/g, "");
+    if (!/^\d+$/.test(z)) return null;
+    const pzn = z.length === 7 ? "0" + z : z;
+    if (istPzn) return pznOk(pzn) ? ergebnis("pzn", null, pzn, null) : null;
+    if (gtinOk(z)) { const g = gtinNorm(z); return ergebnis("ean", g, pznAusGtin(g), null); }
+    if ((z.length === 7 || z.length === 8) && pznOk(pzn)) return ergebnis("pzn", null, pzn, null);
+    return null;
+  }
+  // Antwort von Open Food Facts (api/v2/product/<code>.json?fields=product_name,product_name_de,brands) -> Name oder null.
+  function offName(j) {
+    if (!j || typeof j !== "object" || j.status !== 1 || !j.product || typeof j.product !== "object") return null;
+    const p = j.product;
+    const text = (w) => (typeof w === "string" ? w.replace(/\s+/g, " ").trim() : "");
+    const name = text(p.product_name_de) || text(p.product_name);
+    if (!name) return null;
+    const marke = text(p.brands).split(",")[0].trim();
+    const voll = marke && !name.toLowerCase().includes(marke.toLowerCase()) ? name + " (" + marke + ")" : name;
+    return voll.slice(0, 100);
+  }
+  // "Code -> Name merken" (nur auf diesem Geraet, siehe PRUEFNOTIZEN Verdachtsstellen C):
+  // nur gueltige Schluessel, hoechstens 1000, der zuletzt gemerkte steht hinten.
+  const CODE_SCHLUESSEL = /^(gtin:\d{8,14}|pzn:\d{8})$/;
+  function codesSauber(m) {
+    const aus = {};
+    if (!m || typeof m !== "object" || Array.isArray(m)) return aus;
+    for (const [k, n] of Object.entries(m)) if (CODE_SCHLUESSEL.test(k) && typeof n === "string" && n.trim() && n.length <= 100) aus[k] = n;
+    return aus;
+  }
+  function codesMerken(m, schluessel, name, max) {
+    const alt = codesSauber(m);
+    if (!CODE_SCHLUESSEL.test(schluessel) || typeof name !== "string" || !name.trim() || name.length > 100) return alt;
+    delete alt[schluessel];
+    alt[schluessel] = name.trim();
+    const k = Object.keys(alt);
+    for (const weg of k.slice(0, Math.max(0, k.length - (max || 1000)))) delete alt[weg];
+    return alt;
+  }
+
   // Eingaben VOR dem Vorgang pruefen (UGC #86), mit den Regeln aus Modell.FELDER.
   const FEHLERTEXT = {
     name: "Name fehlt oder ist zu lang", symbol: "Bildchen ist zu lang", mhd: "MHD ungültig (Jahr 2000–2199)",
@@ -158,7 +300,8 @@
     return null;
   }
 
-  const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe };
+  const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

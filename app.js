@@ -144,7 +144,8 @@ function oeffne(ebene) {
 const zurueck = (n) => history.go(-(n || 1));
 addEventListener("popstate", () => {
   const ziel = Math.max(1, Number(history.state) || 1);
-  while (stapel.length > ziel) { const e = stapel.pop(); if (e.el) e.el.remove(); }
+  // weg() = Aufraeumen beim Schliessen (z. B. Kamera stoppen), egal ob per Knopf oder Android-Zurueck.
+  while (stapel.length > ziel) { const e = stapel.pop(); if (e.el) e.el.remove(); if (e.weg) try { e.weg(); } catch (_) { /* weiter schliessen */ } }
   zeichnen(); // UGC #15: nach dem Schliessen nachholen
   if (nachladen) laden();
 });
@@ -804,15 +805,102 @@ async function dreiJahresTest(ausgabe, knopf) {
 // ---- Dialoge (eigene Ebene, kein <dialog>: dessen Zurueck-Verhalten auf Android umgeht den Verlauf) ----
 // knoepfe: [text, fn(melde, schliessen), klasse]. schliessen(n) geht n Ebenen zurueck, nur einmal und
 // nur solange dieser Dialog oben liegt (Doppeltipp, Zurueck waehrend des Speicherns).
-function dialog(titel, inhalt, knoepfe) {
+// weg (optional) laeuft beim Schliessen. Rueckgabe { melde, schliessen } fuer Dialoge, die von aussen schliessen.
+function dialog(titel, inhalt, knoepfe, weg) {
   const meldung = el("p", { className: "meldung", role: "alert" });
   const melde = (t) => { meldung.textContent = t; };
-  const ebene = {};
+  const ebene = { weg };
   const schliessen = (n) => { if (stapel[stapel.length - 1] === ebene) { ebene.zu = true; zurueck(n); } };
   const k = knoepfe.filter(Boolean).map(([text, fn, klasse]) => el("button", { className: klasse || "", onclick: () => { if (!ebene.zu) fn(melde, schliessen); } }, text));
   ebene.el = el("div", { className: "blatt" }, el("div", { className: "fenster" }, el("h2", null, titel), inhalt, meldung,
     el("div", { className: "knoepfe" }, k, el("button", { className: "zweit", onclick: () => schliessen() }, "Abbrechen"))));
+  ebene.el.firstChild.setAttribute("role", "dialog");
+  ebene.el.firstChild.setAttribute("aria-modal", "true");
+  ebene.el.firstChild.setAttribute("aria-label", titel);
   oeffne(ebene);
+  return { melde, schliessen };
+}
+
+// ==== Abschnitt 4: Scannen ====
+// Code -> Name nur auf DIESEM Geraet (localStorage "vorrat-codes"): v3-Apps stoppen bei jedem unbekannten
+// Vorgangstyp oder Feld in einer OneDrive-Datei (Modell.pruefeVorgang) -> nicht in die gemeinsamen Dateien.
+const CODES_KEY = "vorrat-codes";
+function codesLesen() { try { return H.codesSauber(JSON.parse(localStorage.getItem(CODES_KEY) || "{}")); } catch (_) { return {}; } }
+const codeName = (schluessel) => (Object.hasOwn(codesLesen(), schluessel) ? codesLesen()[schluessel] : null);
+function codeMerken(schluessel, name) { try { localStorage.setItem(CODES_KEY, JSON.stringify(H.codesMerken(codesLesen(), schluessel, name))); } catch (_) { /* voll/gesperrt: nur nicht gemerkt */ } }
+
+// Name aus Open Food Facts. Zeitgrenze 6 s, offline sofort aufgeben, jeder Fehler = "kein Treffer" (nie blockieren).
+async function offSuchen(ean) {
+  if (navigator.onLine === false) return { name: null, offline: true };
+  try {
+    const r = await fetch("https://world.openfoodfacts.org/api/v2/product/" + encodeURIComponent(ean) + ".json?fields=product_name,product_name_de,brands",
+      { signal: AbortSignal.timeout(6000), credentials: "omit", referrerPolicy: "no-referrer" });
+    if (!r.ok) return { name: null }; // 404 = unbekanntes Produkt
+    return { name: H.offName(await r.json()) };
+  } catch (_) { return { name: null, offline: true }; }
+}
+
+// Kamera + BarcodeDetector. fertig(ergebnis von H.leseCode/codeAusEingabe) nur bei einem brauchbaren Code.
+// Die Kamera wird bei Treffer, Abbrechen, Android-Zurueck, App im Hintergrund und Fehler gestoppt (stopp()).
+// Den Rohwert (kann eine Seriennummer enthalten) zeigt, speichert und protokolliert die App nie.
+const SCAN_FORMATE = ["ean_13", "ean_8", "upc_a", "data_matrix"];
+function scanDialog(fertig) {
+  const video = el("video", { className: "scanbild", muted: true, playsInline: true, autoplay: true });
+  video.setAttribute("aria-label", "Kamerabild");
+  const status = el("p", { className: "klein", role: "status" }, "Kamera startet …");
+  const eingabe = el("input", { inputMode: "numeric", placeholder: "EAN oder PZN", autocomplete: "off", enterKeyHint: "done" });
+  let strom = null, aus = false, uhr = null;
+  const stopp = () => {
+    aus = true;
+    clearTimeout(uhr);
+    if (strom) strom.getTracks().forEach((t) => t.stop());
+    strom = null;
+    video.srcObject = null;
+    document.removeEventListener("visibilitychange", hintergrund);
+  };
+  const hintergrund = () => { if (document.visibilityState === "hidden") { stopp(); d.schliessen(); } };
+  const nimm = (c) => { stopp(); d.schliessen(); fertig(c); };
+  const d = dialog("Scannen", [video, status, feld("oder Code eintippen", eingabe)], [["Code übernehmen", (melde) => {
+    const c = H.codeAusEingabe(eingabe.value);
+    if (!c) return melde("Kein gültiger EAN- oder PZN-Code (Prüfziffer?)");
+    nimm(c);
+  }]], stopp);
+  document.addEventListener("visibilitychange", hintergrund);
+  const ohne = (text) => { video.hidden = true; status.textContent = text; };
+  (async () => {
+    if (typeof BarcodeDetector === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+      return ohne("Scannen geht auf diesem Gerät/Browser nicht (BarcodeDetector fehlt). Bitte Code eintippen oder den Namen direkt eingeben.");
+    let erkenner;
+    try {
+      const da = await BarcodeDetector.getSupportedFormats();
+      const formate = SCAN_FORMATE.filter((f) => da.includes(f));
+      if (!formate.length) return ohne("Dieser Browser erkennt keine EAN-/DataMatrix-Codes. Bitte eintippen.");
+      erkenner = new BarcodeDetector({ formats: formate });
+    } catch (_) { return ohne("Code-Erkennung nicht verfügbar. Bitte eintippen."); }
+    try {
+      strom = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    } catch (x) {
+      return ohne(x && x.name === "NotAllowedError" ? "Kamera nicht erlaubt. In Chrome: Schloss-Symbol → Berechtigungen → Kamera. Oder Code eintippen."
+        : "Kamera nicht verfügbar (" + ((x && x.name) || "Fehler") + "). Bitte Code eintippen.");
+    }
+    if (aus) { strom.getTracks().forEach((t) => t.stop()); strom = null; return; } // Dialog waehrend der Kamera-Frage geschlossen
+    video.srcObject = strom;
+    try { await video.play(); } catch (_) { /* autoplay reicht meist */ }
+    status.textContent = "Strichcode oder DataMatrix-Code ins Bild halten …";
+    const suchen = async () => {
+      if (aus) return;
+      try {
+        if (video.readyState >= 2) {
+          const treffer = await erkenner.detect(video);
+          if (aus) return;
+          for (const t of treffer) { const c = H.leseCode(t.rawValue, t.format); if (c) { if (navigator.vibrate) navigator.vibrate(60); return nimm(c); } }
+          if (treffer.length) status.textContent = "Code gesehen, aber nicht lesbar (kein EAN/PZN) – weiter halten oder eintippen.";
+        }
+      } catch (_) { /* einzelnes Bild nicht auswertbar: weiter */ }
+      if (!aus) uhr = setTimeout(suchen, 200);
+    };
+    suchen();
+  })();
 }
 
 // Eintrag anlegen (e = null, in Fach fachId) oder bearbeiten. Vorbelegen, nie ungefragt speichern (UGC #85).
@@ -919,6 +1007,36 @@ function eintragDialog(e, fachId) {
       el("div", { className: "zeilen" }, feld("Verschieben nach", ortSel), fachFeld)];
   }
 
+  // Scannen (nur beim Neuanlegen): Name aus dem Gedaechtnis oder Open Food Facts, MHD aus DataMatrix.
+  let code = null;
+  const scanAnz = el("p", { className: "klein", role: "status" });
+  const setzeName = (n) => { name.value = n; name.dispatchEvent(new Event("input")); };
+  async function codeUebernehmen(c) {
+    code = c;
+    if (c.mhd) { // Verfall aus dem DataMatrix-Code
+      frost.checked = false;
+      frostZeigen();
+      mhd = c.mhd;
+      jahr = Number(c.mhd.slice(0, 4));
+      jahrHand = true;
+      genau.value = c.mhd.length === 10 ? c.mhd : "";
+      mhdZeigen();
+    }
+    const kennt = c.anzeige + (c.mhd ? " · MHD " + H.deDatum(c.mhd) : "");
+    const gemerkt = codeName(c.schluessel);
+    if (gemerkt) { setzeName(gemerkt); scanAnz.textContent = kennt + " · Name von früher"; return; }
+    if (!c.ean) { scanAnz.textContent = kennt + " · Name bitte eintippen – wird für diesen Code gemerkt."; name.focus(); return; }
+    scanAnz.textContent = kennt + " · suche Namen …";
+    const vorher = name.value;
+    const r = await offSuchen(c.ean);
+    if (code !== c) return; // inzwischen anders gescannt
+    if (r.name && name.value === vorher) { setzeName(r.name); scanAnz.textContent = kennt + " · Name aus Open Food Facts, bitte prüfen."; }
+    else if (r.name) scanAnz.textContent = kennt + " · Vorschlag „" + r.name + "“ nicht übernommen (Name schon getippt).";
+    else scanAnz.textContent = kennt + (r.offline ? " · offline/keine Antwort" : " · unbekannt") + " – Name bitte eintippen, wird gemerkt.";
+  }
+  const scanTeil = !e && el("div", { className: "zeilen scanzeile" },
+    el("button", { type: "button", className: "an", onclick: () => scanDialog(codeUebernehmen) }, "📷 Scannen"), scanAnz);
+
   async function speichern(melde, schliessen) {
     const fr = frost.checked;
     if (fr && !einDatum.value) return melde("Einfrierdatum fehlt");
@@ -935,7 +1053,10 @@ function eintragDialog(e, fachId) {
     if (!e) {
       const menge = Number(mengeIn.value);
       if (!Number.isInteger(menge) || menge < 1 || menge > 999) return melde("Menge: 1 bis 999");
-      if (await tun([{ typ: "neu", art: "eintrag", werte, menge }])) schliessen();
+      if (await tun([{ typ: "neu", art: "eintrag", werte, menge }])) {
+        if (code) codeMerken(code.schluessel, werte.name); // Abschnitt 4: Code -> Name, nur dieses Geraet
+        schliessen();
+      }
       return;
     }
     // Je geaendertem Feld ein eigener feld-Vorgang, sonst nichts
@@ -951,6 +1072,7 @@ function eintragDialog(e, fachId) {
   }
 
   dialog(e ? "Bearbeiten" : "Neuer Eintrag", [
+    scanTeil,
     el("div", { className: "zeilen" }, feld("Name", name), feld("Bild", symbol)),
     mengeTeil,
     el("label", { className: "schalter" }, frost, "selbst eingefroren"),
