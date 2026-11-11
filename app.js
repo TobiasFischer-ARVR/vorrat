@@ -147,8 +147,10 @@ addEventListener("popstate", () => {
   // weg() = Aufraeumen beim Schliessen (z. B. Kamera stoppen), egal ob per Knopf oder Android-Zurueck.
   while (stapel.length > ziel) { const e = stapel.pop(); if (e.el) e.el.remove(); if (e.weg) try { e.weg(); } catch (_) { /* weiter schliessen */ } }
   zeichnen(); // UGC #15: nach dem Schliessen nachholen
-  if (nachladen) laden();
+  // Folgedialog VOR dem Nachladen oeffnen: laden() prueft die Dialog-Sperre nur beim Start und wuerde sonst
+  // den Stand unter dem frisch geoeffneten Dialog austauschen (Review E #2). So wartet es bis nach dem Dialog.
   if (nachZurueck) { const f = nachZurueck; nachZurueck = null; f(); } // Dialog, der einen anderen ersetzt
+  if (nachladen) laden();
 });
 let nachZurueck = null; // laeuft nach dem naechsten Zurueck (erst schliessen, dann den Folgedialog oeffnen)
 const dialogOffen = () => stapel.some((e) => e.el);
@@ -540,8 +542,9 @@ function startAnsicht() {
     abgleichKarte(),
     el("nav", { className: "reiter" }, orte.map((o) => {
       const n = baldJeOrt.get(o.id) || 0; // Abschnitt 3: auch im Reiter sehen, wo etwas bald ablaeuft
-      return el("button", { className: o.id === ortWahl ? "an" : "", "aria-current": o.id === ortWahl ? "true" : "false", onclick: () => { ortWahl = o.id; zeichnen(); } },
-        o.name, n > 0 && el("span", { className: "reiterzahl", "aria-label": n + " laufen bald ab" }, String(n)));
+      return el("button", { className: o.id === ortWahl ? "an" : "", "aria-current": o.id === ortWahl ? "true" : "false", onclick: () => { ortWahl = o.id; zeichnen(); },
+        "aria-label": o.name + (n > 0 ? ", " + n + " laufen bald ab" : "") },
+        o.name, n > 0 && el("span", { className: "reiterzahl", "aria-hidden": "true" }, String(n)));
     })),
     nDaten > 0 && el("div", { className: "karte still" }, "Daten prüfen: " + nDaten + " Vorgänge passen nicht zusammen und werden nicht angewendet (☰ → Prüfen). Gelöscht wurde nichts."),
     (nKlaeren > 0 || nPruefen > 0) && el("div", { className: "knoepfe" },
@@ -681,6 +684,9 @@ function druck(knopf, kurz, lang, zieh) {
     }, 500);
   });
   knopf.addEventListener("pointerleave", (ev) => { if (ev.pointerType === "mouse" && !lange) ab(); }); // Maus raus = kein langes Druecken
+  // Chrome entscheidet beim touchstart, ob die Beruehrung blockierend ist: der nicht-passive Horcher muss
+  // DANN schon an der Kachel haengen, sonst ist touchmove nicht abbrechbar und Chrome scrollt (Review E #3).
+  if (zieh) knopf.addEventListener("touchmove", wisch, { passive: false });
   knopf.addEventListener("contextmenu", (ev) => ev.preventDefault());
   knopf.addEventListener("click", () => { ab(); if (!lange) kurz(); lange = false; });
   // Tastatur: Kontextmenue-Taste / Umschalt+F10 = langes Druecken (Barrierefreiheit)
@@ -1033,6 +1039,7 @@ function scanDialog(fertig) {
     let erkenner;
     try {
       const da = await BarcodeDetector.getSupportedFormats();
+      if (aus) return; // Dialog schon zu: Kamera gar nicht erst anfragen (Review E #4)
       const formate = SCAN_FORMATE.filter((f) => da.includes(f));
       if (!formate.length) return ohne("Dieser Browser erkennt keine EAN-/DataMatrix-Codes. Bitte eintippen.");
       erkenner = new BarcodeDetector({ formats: formate });

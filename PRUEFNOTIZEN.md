@@ -1,6 +1,8 @@
 # Prüfnotizen Abschnitt 3–5 (Zweig `abschnitt-3-5`, App-Version v4)
 
-Nachtlauf ohne Aufsicht. NICHTS davon ist live: `main` ist unverändert. Diese Datei ist auch die Übergabe an einen späteren Lauf.
+Nachtlauf ohne Aufsicht. NICHTS davon ist live: `main` ist unverändert.
+
+**⚠ Push auf GitHub ging in diesem Lauf nicht (HTTP 403, die Claude-GitHub-App hat keine Schreibrechte auf das Repo).** Der Zweig `abschnitt-3-5` existiert nur lokal im Cloud-Container. Alle Commits liegen zusätzlich als Patch-Datei `abschnitt-3-5.patch` im Arbeitsordner (einspielen: `git checkout -b abschnitt-3-5 main && git am abschnitt-3-5.patch`). Diese Datei ist auch die Übergabe an einen späteren Lauf.
 
 ## 1. Stand je Aufgabe
 
@@ -10,9 +12,9 @@ Nachtlauf ohne Aufsicht. NICHTS davon ist live: `main` ist unverändert. Diese D
 | B Läuft bald ab | fertig | (siehe git log) |
 | C Scannen | fertig | (siehe git log) |
 | D Verschieben | fertig | (siehe git log) |
-| E Code-Prüfung | offen | – |
+| E Code-Prüfung | fertig | (siehe git log) |
 
-Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TESTDEPS=<ordner>`).
+Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TESTDEPS=<ordner>`). Stand Ende: test_cloud 33, test_codes 9, test_geruest ok, test_modell 20, test_oberflaeche 11, test_speicher 20 – alle grün. Oberfläche headless (Chromium, Playwright, Skript nicht im Repo) ohne Konsolenfehler; einziger Fehler ist der gesperrte Abruf von Open Food Facts in der Sandbox.
 
 ## 2. Was wurde gemacht
 
@@ -65,6 +67,23 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 | D7 | Tastatur: Kontextmenü-Taste / Umschalt+F10 = langes Drücken | Barrierefreiheit |
 | D8 | Test: 1 neuer Fall (Verschieben = ein Vorgang, Markierung wandert mit). UI headless per CDP-Touch geprüft: Wischen scrollt (scrollY 272, kein Zug), Halten = Menü, Menü → Folgedialog, Ziehen auf Zeichnung und auf Leiste, Rückgängig, Antippen = −1 | Auftrag Testen |
 
+### Aufgabe E (eigene Prüfung + eine unabhängige zweite Prüfung des Diffs)
+
+| Punkt | Was (behoben) | Woher |
+|---|---|---|
+| E1 | Hervorgehobene Kachel: nur beim ersten Zeichnen hinscrollen (sonst sprang die Ansicht nach jedem −1 zurück) | eigene Prüfung + Zweitprüfung |
+| E2 | `tun()` während eines laufenden Speicherns: Hinweis „Moment – … bitte nochmal“ statt stumm ignorieren (betraf schnelles Doppeltippen und Ablegen per Ziehen) | eigene Prüfung |
+| E3 | Dialoge: `role=dialog`, `aria-modal`, `aria-label`, Fokus in den Dialog, Escape schließt | eigene Prüfung (Barrierefreiheit) |
+| E4 | GS1: AIs in beliebiger Reihenfolge (17 vor 01), Gewichts-AIs 310n–369n überspringen statt abbrechen, AI 15 (Mindesthaltbarkeit) als MHD, wenn 17 fehlt | eigene Prüfung + Zweitprüfung |
+| E5 | popstate: Folgedialog (Menü → Bearbeiten/Verschieben) öffnet VOR dem Nachladen, sonst tauschte `laden()` den Stand unter dem neuen Dialog aus (Verstoß gegen UGC #15) | Zweitprüfung |
+| E6 | Ziehen: nicht-passiver `touchmove`-Horcher hängt schon beim Anlegen an der Kachel (Chrome entscheidet beim touchstart, ob touchmove abbrechbar ist) | Zweitprüfung |
+| E7 | Scannen: Dialog während `getSupportedFormats` geschlossen → Kamera wird gar nicht erst angefragt | Zweitprüfung |
+| E8 | Eintippen: 7/8 Ziffern ohne Präfix zuerst als PZN (vorher EAN-8; ~10 % der PZN sind zugleich gültige EAN-8) | Zweitprüfung |
+| E9 | Reiter: Zahl als `aria-label` am Knopf statt am `span` | Zweitprüfung |
+| E10 | Tests ergänzt (GS1-Reihenfolge, AI 710 allein, AI 15/3103, PZN/EAN-8-Doppeldeutigkeit) | – |
+
+Geprüft ohne Befund: Seriennummer wird nirgends zurückgegeben/angezeigt/gespeichert/gesendet (an Open Food Facts geht nur die Lebensmittel-GTIN); Kamera stoppt in allen Wegen; `zieht` wird bei Ende und Abbruch zurückgesetzt; `ausfuehrenAlle` ganz oder gar nicht; Datumsrechnung; cloud.js und der Datenverlust-Schutz sind **unverändert** (keine Änderung an cloud.js nötig); Service Worker löscht weiterhin nur `vorrat-…`-Caches, keine neuen Dateien im Cache nötig.
+
 ## 3. Verdachtsstellen
 
 (Format: ID · Datei:Funktion · Szenario · wie sicher)
@@ -72,7 +91,7 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 - **V-C1 · modell.js:pruefeVorgang / cloud.js:dateiLesen · Code→Name nicht in OneDrive.** Geprüft: v3 lehnt jeden unbekannten Vorgangstyp (`unbekannter Vorgangstyp`), jede unbekannte Art und jedes unbekannte Feld ab; `dateiLesen` wirft dann und der GANZE Abgleich stoppt. Ein v4-Handy, das Codes in seine Vorgangsdatei schriebe, würde das noch nicht aktualisierte v3-Handy lahmlegen. Daher nur lokal; das andere Handy kennt gemerkte Namen NICHT. Später möglich: erst eine Version ausrollen, die unbekannte Typen überspringt, dann Codes teilen. · sicher
 - **V-C2 · hilfen.js:gs1Felder · DataMatrix ohne GS-Trenner.** Liefert der Scanner keine FNC1/GS-Zeichen, verschluckt ein variables Feld (10/21) alles bis zum Ende. Steht 17 (Verfall) HINTER 10/21, fehlt dann das MHD (wird leer gelassen, nicht falsch). Die Seriennummer landet höchstens in der verworfenen Charge – sie wird nie zurückgegeben. Wie Chrome/Android `rawValue` bei GS1-DataMatrix genau liefert (GS als \x1d? führendes FNC1? „]d2“?), ist ungeprüft → Handy-Test. · mittel
 - **V-C3 · hilfen.js:leseIfa · PPN-Prüfziffern** werden nicht geprüft, nur die PZN darin (mod 11). Ein Lesefehler in den letzten 2 Stellen würde nicht erkannt; die PZN selbst schon. · sicher, geringes Risiko
-- **V-C4 · hilfen.js:codeAusEingabe · 8 Ziffern ohne „PZN“.** Ist eine Zahl zugleich gültige EAN-8 und PZN, wird sie als EAN-8 gelesen. Hinweis im Feld nennt „PZN“ als Präfix. · sicher, selten
+- **V-C4 · hilfen.js:codeAusEingabe · 8 Ziffern ohne „PZN“.** Ist eine Zahl zugleich gültige EAN-8 und PZN, wird sie als PZN gelesen (E8). Eine eingetippte Lebensmittel-EAN-8 kann so als PZN gemerkt werden und fragt Open Food Facts nicht. Gescannte EAN-8 sind nicht betroffen. · sicher, selten
 - **V-C5 · app.js:offSuchen · CORS/Netz.** Open Food Facts erlaubt CORS für GET; im Sandbox-Test war die Seite gesperrt, echter Abruf also ungeprüft. CSP der App hat kein `connect-src` (bewusst), Service Worker lässt fremde URLs durch. · mittel
 - **V-C6 · app.js:scanDialog · Hintergrund.** Geht die App in den Hintergrund, wird die Kamera gestoppt und der Scan-Dialog geschlossen (zurück zum Eintrag). Bei manchen Android-Versionen kommt beim Erlaubnis-Popup selbst ein `visibilitychange`? Dann würde der Dialog beim ersten Mal sofort zugehen. · unsicher → Handy-Test
 - **V-C7 · Datenschutz:** Beim Scannen geht der EAN (nur Lebensmittel, nie PZN) an Open Food Facts. Ohne Cookies/Referrer. · Hinweis
@@ -82,6 +101,13 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 - **V-D3 · app.js:zeichnen/laden · Aufschub während des Ziehens.** Kommt während des Ziehens ein Abgleich mit neuen Daten, wird erst nach dem Loslassen gezeichnet; das Verschieben nutzt den Eintrag von Zugbeginn (nur `e.id` und altes `e.fach` für Rückgängig). Wurde das Ziel-Fach in der Zwischenzeit gelöscht, meldet `verschieben` „Dieses Fach gibt es nicht mehr“. · sicher
 - **V-D4 · app.js:eintragMenue · Folgedialog über `nachZurueck`.** Menü schließt (history.go(-1)), der Folgedialog öffnet erst im popstate. Drückt man sehr schnell zweimal, könnte `nachZurueck` von einem anderen Zurück ausgelöst werden. · unwahrscheinlich
 - **V-D5 · Bedienänderung:** Langes Drücken öffnet jetzt ein Menü statt direkt „Bearbeiten“ (ein Tipp mehr). In „Bestand prüfen“ unverändert (Tippen und Halten = Bearbeiten). · Hinweis für Tobias
+
+- **V-E1 · app.js:tun · Schnelles Doppeltippen auf eine Kachel** zählt weiter nur −1 (zweites Tippen während des Speicherns), zeigt jetzt aber einen Hinweis. Ob das auf dem Handy oft vorkommt (Speichern dauert wenige ms), ist offen. · sicher, Bedienfrage
+- **V-E2 · app.js:druck · Mehrere Finger.** Zwei Kacheln gleichzeitig ziehen ist nicht abgefangen; `zieht` ist ein gemeinsamer Merker, das erste Loslassen gibt das Neuzeichnen wieder frei. Kein Datenverlust, höchstens eine hängende Geist-Kachel bis zum nächsten Loslassen. · mittel, selten
+- **V-E3 · app.js:druck · Maus außerhalb des Fensters losgelassen** → kein pointerup, die Kachel nimmt keinen neuen Druck an, bis neu gezeichnet wird. Am Handy irrelevant. · sicher, unwichtig
+- **V-E4 · app.js:dialog · Fokusfalle fehlt.** Tab kann aus dem Dialog in die Seite dahinter wandern; Fokus springt nach dem Schließen nicht zum Auslöser zurück. · sicher, gering
+- **V-E5 · Zeitzone/Mitternacht:** „Läuft bald ab“ rechnet mit `Modell.heuteIso()` beim Zeichnen; bleibt die App über Mitternacht offen, stimmen die Tage erst nach dem nächsten Zeichnen. · sicher, gering
+- **V-E6 · Vorher schon vorhanden (nicht geändert):** `ortKlaerenAnsicht`/`bestandAnsicht` Kacheln sind Buttons ohne zusätzliche Beschreibung der Farbe (rot/gelb nur über Farbe, Datum steht aber als Text da). · Hinweis
 
 ## 4. Prüfliste fürs Handy
 
@@ -131,4 +157,8 @@ Tests: `node tests/test_*.js` (test_speicher braucht fake-indexeddb, `VORRAT_TES
 
 ## 6. Nächster Schritt
 
-Aufgabe E.
+Aufgaben A–E sind fertig. Offen ist nur, was ein Lauf nicht kann:
+1. Zweig nach GitHub bringen (Push-Rechte reparieren oder Patch-Datei einspielen, siehe oben).
+2. Codex-Gegenprüfung der Verdachtsstellen.
+3. Handy-Prüfliste (Kamera, Drag and Drop, OneDrive zwischen zwei Handys mit v3 + v4 gemischt: v4 schreibt nur Schema-1-Vorgänge, v3 muss die Dateien weiter lesen).
+4. Erst danach (Tobias) nach `main`.

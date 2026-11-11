@@ -200,14 +200,18 @@
     while (i < t.length) {
       if (t[i] === GS) { i++; continue; }
       let ai = null;
+      let fest = null;
       for (const n of [2, 3, 4]) {
         const k = t.slice(i, i + n);
         if (Object.hasOwn(AI_FEST, k) || AI_VAR.includes(k)) { ai = k; break; }
       }
+      // Masse/Gewicht 310n-369n (z. B. Nettogewicht bei Fleisch/Kaese): 4-stelliger AI, 6 Ziffern (Review E #5)
+      if (!ai && /^3[1-6]\d\d$/.test(t.slice(i, i + 4))) { ai = t.slice(i, i + 4); fest = 6; }
       if (!ai) break; // unbekannt: lieber aufhoeren als falsch zerlegen
       i += ai.length;
       let wert;
-      if (Object.hasOwn(AI_FEST, ai)) { wert = t.slice(i, i + AI_FEST[ai]); i += AI_FEST[ai]; }
+      if (fest) { wert = t.slice(i, i + fest); i += fest; }
+      else if (Object.hasOwn(AI_FEST, ai)) { wert = t.slice(i, i + AI_FEST[ai]); i += AI_FEST[ai]; }
       else { const ende = t.indexOf(GS, i); wert = t.slice(i, ende < 0 ? t.length : ende); i = ende < 0 ? t.length : ende + 1; }
       if (!Object.hasOwn(f, ai)) f[ai] = wert;
     }
@@ -219,7 +223,8 @@
     // AI 710 = deutsche Nationalnummer (PZN), sonst PZN aus der NTIN
     const pzn710 = f["710"] && /^\d{8}$/.test(f["710"]) && pznOk(f["710"]) ? f["710"] : null;
     const pzn = pzn710 || (g && pznAusGtin(g));
-    return ergebnis("gs1", g, pzn, verfallAus(f["17"]));
+    // 17 = Verfall (Arznei), sonst 15 = Mindesthaltbarkeit (Lebensmittel, Review E #5)
+    return ergebnis("gs1", g, pzn, verfallAus(f["17"]) || verfallAus(f["15"]));
   }
   // IFA/PPN (MH10.8.2): "[)>" RS "06" GS "9N<PPN>" GS "1T<Charge>" GS "D<JJMMTT>" GS "S<Seriennr>" RS EOT.
   // PPN = "11" + PZN8 + 2 Pruefziffern.
@@ -256,8 +261,10 @@
     if (!/^\d+$/.test(z)) return null;
     const pzn = z.length === 7 ? "0" + z : z;
     if (istPzn) return pznOk(pzn) ? ergebnis("pzn", null, pzn, null) : null;
-    if (gtinOk(z)) { const g = gtinNorm(z); return ergebnis("ean", g, pznAusGtin(g), null); }
+    // 7/8 Ziffern: zuerst PZN (Eintippen braucht man vor allem bei Medikamenten; ~10 % der PZN sind
+    // zugleich gueltige EAN-8, Review E #6). Eine EAN-8, die auch eine gueltige PZN ist, wird so zur PZN.
     if ((z.length === 7 || z.length === 8) && pznOk(pzn)) return ergebnis("pzn", null, pzn, null);
+    if (gtinOk(z)) { const g = gtinNorm(z); return ergebnis("ean", g, pznAusGtin(g), null); }
     return null;
   }
   // Antwort von Open Food Facts (api/v2/product/<code>.json?fields=product_name,product_name_de,brands) -> Name oder null.

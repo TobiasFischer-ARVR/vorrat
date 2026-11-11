@@ -67,6 +67,9 @@ fall("GS1: Tag 00 = nur Monat, ungueltiges Datum -> kein MHD, Lebensmittel-GTIN 
   assert.strictEqual(H.leseCode("01" + "0" + NTIN + "17" + "271300", "data_matrix").mhd, null, "Monat 13");
   const essen = H.leseCode("01" + "0" + EAN + "17" + "270615", "data_matrix");
   assert.deepStrictEqual([essen.schluessel, essen.ean, essen.mhd], ["gtin:" + EAN, EAN, "2027-06-15"]);
+  const mhd15 = H.leseCode("01" + "0" + EAN + "3103" + "000500" + "15" + "270600" + "10" + "LOS1", "data_matrix");
+  assert.deepStrictEqual([mhd15.ean, mhd15.mhd], [EAN, "2027-06"], "Gewicht 3103 ueberspringen, AI 15 als MHD");
+  assert.strictEqual(H.leseCode("01" + "0" + NTIN + "17" + "280331" + "15" + "270600", "data_matrix").mhd, "2028-03-31", "17 geht vor 15");
   const mit710 = H.leseCode("01" + "0" + EAN + "17" + "270615" + "710" + PZN + GS + "21" + SERIE, "data_matrix");
   assert.strictEqual(mit710.schluessel, "pzn:" + PZN);
   assert.strictEqual(H.leseCode("01" + "0" + NTIN.slice(0, 12) + "0" + "17280331", "data_matrix"), null, "falsche GTIN-Pruefziffer, nichts anderes da");
@@ -92,7 +95,12 @@ fall("Eintippen: EAN, PZN mit Praefix, 7-stellige PZN, Leerzeichen", () => {
   assert.strictEqual(H.codeAusEingabe("-" + PZN).schluessel, "pzn:" + PZN);
   const p7 = pzn("0765432").slice(1); // alte 7-stellige PZN = 8-stellige mit fuehrender 0
   assert.strictEqual(H.codeAusEingabe("PZN " + p7).schluessel, "pzn:0" + p7);
-  assert.strictEqual(H.codeAusEingabe(PZN).schluessel, H.gtinOk(PZN) ? "gtin:" + PZN : "pzn:" + PZN, "8 Ziffern ohne Praefix: erst EAN-8, dann PZN");
+  assert.strictEqual(H.codeAusEingabe(PZN).schluessel, "pzn:" + PZN, "8 Ziffern ohne Praefix: zuerst PZN");
+  // Zahl, die zugleich gueltige EAN-8 und PZN ist -> PZN
+  let beides = null;
+  for (let i = 1000000; !beides; i++) { const p = String(i).padStart(7, "0"); try { const v = pzn(p); if (H.gtinOk(v)) beides = v; } catch (_) { /* Stamm ungueltig */ } }
+  assert.strictEqual(H.codeAusEingabe(beides).schluessel, "pzn:" + beides);
+  assert.strictEqual(H.codeAusEingabe(gtin("9638507")).art, H.pznOk(gtin("9638507")) ? "pzn" : "ean", "EAN-8, die keine PZN ist, bleibt EAN");
   assert.strictEqual(H.codeAusEingabe("PZN " + PZN.slice(0, 7) + ((Number(PZN[7]) + 1) % 10)), null, "PZN mit falscher Pruefziffer");
   assert.strictEqual(H.codeAusEingabe("abc"), null);
   assert.strictEqual(H.codeAusEingabe(""), null);
