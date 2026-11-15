@@ -187,4 +187,22 @@ fall("v5 Multiscan: gleicher Code + MHD + Ziel = eine Zeile, sonst getrennt", ()
   assert.deepStrictEqual(H.paketeZeilen([]), []);
 });
 
+fall("v5.2 Aufteilen + Zusammenlegen: ein Platz, zwei Faecher, Inhalt wandert, nichts zu klaeren", () => {
+  const a = aufbau([["Pizza", { fach: "f1" }], ["Eis", { fach: "f1" }, 2]]);
+  const lauf = (schritte) => { const fertig = []; for (const s of schritte) for (const d of [].concat(typeof s === "function" ? s(fertig) : s)) fertig.push(a.tu(d)); return fertig; };
+  const s0 = a.stand(), f1 = s0.faecher.find((f) => f.name === "Schublade 1");
+  lauf(H.aufteilenSchritte(f1, "Schublade 1 links", "Schublade 1 rechts", [a.ids.Eis]));
+  const s1 = a.stand();
+  const teile = s1.faecher.filter((f) => !f.geloescht && f.lage.reihe === 0);
+  assert.deepStrictEqual(teile.map((f) => f.name).sort(), ["Schublade 1 links", "Schublade 1 rechts"]);
+  const rechts = teile.find((f) => f.name.endsWith("rechts"));
+  const e = (st, n) => st.eintraege.find((x) => x.name === n);
+  assert.deepStrictEqual([e(s1, "Pizza").fach, e(s1, "Eis").fach, e(s1, "Eis").menge], [f1.id, rechts.id, 2]);
+  assert.ok(!s1.faecher.some((f) => f.ortKlaeren) && !s1.eintraege.some((x) => x.ortKlaeren));
+  assert.strictEqual(H.aufteilenSchritte(f1, f1.name, "B", []).length, 2, "gleicher Name = kein Umbenennen");
+  lauf(H.zusammenSchritte(rechts.id, f1.id, [a.ids.Eis]));
+  const s2 = a.stand();
+  assert.deepStrictEqual([e(s2, "Eis").fach, e(s2, "Eis").ortKlaeren, s2.faecher.find((f) => f.id === rechts.id).geloescht], [f1.id, false, true]);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v5.1"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v5.2"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -495,8 +495,10 @@ const orteSichtbar = () => stand.orte.filter((o) => !o.geloescht)
   .sort((a, b) => (a.reihenfolge ?? 999) - (b.reihenfolge ?? 999) || a.name.localeCompare(b.name, "de"));
 const ortVon = (id) => stand.orte.find((o) => o.id === id);
 const fachVon = (id) => stand.faecher.find((f) => f.id === id);
+// Mehrere Faecher auf einem Platz (Aufteilen): nach Namen, damit beide Handys gleich zeichnen ("… links" vor "… rechts").
+const nachName = (a, b) => a.name.localeCompare(b.name, "de", { numeric: true }) || (a.id < b.id ? -1 : 1);
 const faecherAn = (ort, reihe, spalte, ausser) => stand.faecher.filter((f) => !f.geloescht && f.id !== ausser &&
-  f.lage.ort === ort && f.lage.reihe === reihe && f.lage.spalte === spalte);
+  f.lage.ort === ort && f.lage.reihe === reihe && f.lage.spalte === spalte).sort(nachName);
 const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id);
 const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
@@ -551,6 +553,7 @@ function startAnsicht() {
       nKlaeren > 0 && el("button", { className: "ortklaeren", onclick: () => oeffne({ art: "ortKlaeren" }) }, "Ort klären (" + nKlaeren + ")"),
       nPruefen > 0 && el("button", { className: "bestand", onclick: () => oeffne({ art: "bestand" }) }, "Bestand prüfen (" + nPruefen + ")")),
     zeichnung(ortVon(ortWahl)),
+    el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …)"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
 }
@@ -626,7 +629,7 @@ function zeichnung(ort) {
           sv("text", { x: mitte, y: y + rh * 0.84, "text-anchor": "middle", fill: schrift, class: "fzahl" }, es.length ? es.length + (es.length === 1 ? " Sache" : " Sachen") : "leer"),
           mk && sv("circle", { cx: xi + w - 15, cy: y + 15, r: 11, class: "punkt " + mk.farbe }),
           mk && sv("text", { x: xi + w - 15, y: y + 19.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
-        g.addEventListener("click", () => oeffne({ art: "fach", id: f.id }));
+        druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f)); // v5.2: lange druecken = Fach-Menue
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
         svg.append(g);
       });
@@ -796,8 +799,9 @@ function verschiebenDialog(e) {
 }
 // Antippen oder langes Druecken auf eine Kachel: kleines Menue. v5 (Tobias 15.11.): -1 nur noch hier,
 // Antippen allein veraendert nichts mehr.
+// Menue-Knopf, der erst das Menue schliesst und dann fn oeffnet.
+const weiter = (fn) => (melde, schliessen) => { nachZurueck = fn; schliessen(); };
 function eintragMenue(e) {
-  const weiter = (fn) => (melde, schliessen) => { nachZurueck = fn; schliessen(); };
   dialog(kuerze(e.name, 40), [el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
     ["−1 · eins rausgenommen" + (e.menge === 1 ? " (das letzte)" : ""), weiter(() => entnehmen(e))],
     ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
@@ -832,7 +836,7 @@ function fachAnsicht(ebene) {
   if (!f || f.geloescht) return [kopf("Kiste"), el("p", null, "Diese Kiste gibt es nicht mehr.")];
   const o = ortVon(f.lage.ort);
   return [
-    kopf(f.name, el("button", { className: "neben", onclick: () => fachDialog(f) }, "✎ " + fachWort(o))),
+    kopf(f.name, el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachWort(o))),
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
     el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => {
       const k = kachel(e, () => eintragMenue(e), () => eintragMenue(e), true);
@@ -853,7 +857,7 @@ function ortKlaerenAnsicht() {
   const { kisten, eintraege } = klaeren();
   return [kopf("Ort klären"),
     el("p", { className: "klein" }, "Diese Sachen haben keinen gültigen Platz. Antippen und Platz wählen."),
-    kisten.map((f) => el("button", { className: "zeile", onclick: () => fachDialog(f) }, "📦 " + fachWort(ortVon(f.lage.ort)) + " „" + f.name + "“: Platz wählen")),
+    kisten.map((f) => el("button", { className: "zeile", onclick: () => fachMenue(f) }, "📦 " + fachWort(ortVon(f.lage.ort)) + " „" + f.name + "“: Platz wählen oder löschen")),
     el("div", { className: "kacheln" }, eintraege.map((e) => kachel(e, () => eintragDialog(e), () => eintragMenue(e), true))),
     !kisten.length && !eintraege.length && el("p", null, "Alles geklärt.")];
 }
@@ -1471,13 +1475,13 @@ function eintragDialog(e, fachId) {
   if (!e) name.focus();
 }
 
-// Kiste/Schublade anlegen (f = null, auf freiem Platz lage) oder bearbeiten.
-function fachDialog(f, lage) {
+// Kiste/Schublade anlegen (f = null, auf freiem Platz lage) oder aendern: nur = "name" | "platz" (Fach-Menue).
+function fachDialog(f, lage, nur) {
   const ort = ortVon(f ? f.lage.ort : lage.ort);
   const wort = fachWort(ort);
   const name = el("input", { value: f ? f.name : "", maxLength: 60, placeholder: "z. B. Nudeln", autocomplete: "off" });
   let platzSel = null;
-  if (f) { // Platz: eigener + alle freien Plaetze aller Orte
+  if (f && nur === "platz") { // Platz: eigener + alle freien Plaetze aller Orte
     const opt = f.ortKlaeren ? [el("option", { value: "" }, "– kein gültiger Platz –")] : [];
     for (const o of orteSichtbar()) for (let r = 0; r < o.reihen; r++) for (let c = 0; c < o.spalten; c++) {
       const meins = !f.ortKlaeren && f.lage.ort === o.id && f.lage.reihe === r && f.lage.spalte === c;
@@ -1485,15 +1489,17 @@ function fachDialog(f, lage) {
     }
     platzSel = el("select", null, opt);
   }
-  dialog(f ? wort + " bearbeiten" : "Neue " + wort, [
+  dialog(!f ? "Neue " + wort : nur === "platz" ? "„" + kuerze(f.name, 30) + "“: Platz ändern" : wort + " umbenennen", [
     !f && el("p", { className: "klein" }, ort.name + " · " + platzName(ort, lage.reihe, lage.spalte)),
-    feld("Name", name),
+    nur !== "platz" && feld("Name", name),
     platzSel && feld("Platz", platzSel),
+    platzSel && el("p", { className: "klein" }, "Nur freie Plätze. Der Inhalt zieht mit um."),
   ], [
     ["Speichern", async (melde, schliessen) => {
-      const werte = { name: name.value.trim() };
+      if (f && !fachVon(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
+      const werte = nur === "platz" ? {} : { name: name.value.trim() };
       if (!f) werte.lage = lage;
-      else if (platzSel.value) {
+      else if (platzSel && platzSel.value) {
         const l = JSON.parse(platzSel.value);
         if (l.ort !== f.lage.ort || l.reihe !== f.lage.reihe || l.spalte !== f.lage.spalte) werte.lage = l;
       }
@@ -1504,14 +1510,73 @@ function fachDialog(f, lage) {
         .map(([k, w]) => ({ typ: "feld", art: "fach", ziel: f.id, feld: k, wert: w }));
       if (!daten.length || (await tun(daten))) schliessen();
     }],
-    f && ["Löschen", async (melde, schliessen) => {
-      const n = imFach(f.id).length;
+  ]);
+  if (nur !== "platz") name.focus();
+}
+
+// ==== v5.2: Fach-Menue (Tobias 15.11.): lange auf ein Fach druecken ====
+const nachbarn = (f) => (f.ortKlaeren ? [] : faecherAn(f.lage.ort, f.lage.reihe, f.lage.spalte, f.id));
+const fachAnsichtVon = (f) => { const d = stapel[stapel.length - 2]; return !!d && d.art === "fach" && d.id === f.id; };
+// Fach weg: lag darunter seine eigene Ansicht, die gleich mit schliessen.
+const fachWegSchliessen = (f, schliessen) => schliessen(fachAnsichtVon(f) ? 2 : 1);
+function fachMenue(alt) {
+  const f = fachVon(alt.id); // gezeichnetes Objekt kann veraltet sein (Abgleich waehrend des Drueckens)
+  if (!f || f.geloescht) return hinweis("Dieses Fach gibt es nicht mehr.");
+  const o = ortVon(f.lage.ort), wort = fachWort(o), n = imFach(f.id).length, nb = nachbarn(f);
+  dialog(wort + " „" + kuerze(f.name, 30) + "“", [el("p", { className: "klein" },
+    (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], [
+    !fachAnsichtVon(f) && ["Öffnen", weiter(() => oeffne({ art: "fach", id: f.id }))],
+    ["✎ Umbenennen", weiter(() => fachDialog(f, null, "name"))],
+    ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
+    !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
+    nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
+    ["Löschen", async (melde, schliessen) => {
       if (!confirm(wort + " „" + f.name + "“ löschen?" + (n ? "\n\n" + n + " Einträge darin kommen in „Ort klären“, nichts geht verloren." : ""))) return;
-      const darunter = stapel[stapel.length - 2];
-      if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "geloescht", wert: true }])) schliessen(darunter.art === "fach" && darunter.id === f.id ? 2 : 1);
+      if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "geloescht", wert: true }])) fachWegSchliessen(f, schliessen);
     }, "gefahr"],
   ]);
-  name.focus();
+}
+
+// Zwei Teile nebeneinander auf demselben Platz; angekreuzte Eintraege kommen ins neue Teil.
+function aufteilenDialog(f) {
+  const n1 = el("input", { value: kuerze(f.name + " links", 60), maxLength: 60, autocomplete: "off" });
+  const n2 = el("input", { value: kuerze(f.name + " rechts", 60), maxLength: 60, autocomplete: "off" });
+  const haken = imFach(f.id).sort(nachAblauf).map((e) => ({ e, box: el("input", { type: "checkbox" }) }));
+  dialog("„" + kuerze(f.name, 30) + "“ aufteilen", [
+    el("p", { className: "klein" }, "Zwei Teile nebeneinander auf demselben Platz, in der Zeichnung nach Namen sortiert."),
+    feld("Teil 1 (bleibt)", n1), feld("Teil 2 (neu)", n2),
+    haken.length ? [el("h3", null, "Was kommt in Teil 2?"), haken.map(({ e, box }) => el("label", { className: "schalter" }, box,
+      (e.symbol || H.bildchen(e.name)) + " " + e.name + (e.menge >= 2 ? " ×" + e.menge : "")))] : el("p", { className: "klein" }, "Das Fach ist leer."),
+  ], [["Aufteilen", async (melde, schliessen) => {
+    const a = n1.value.trim(), b = n2.value.trim();
+    const fe = H.pruefe("fach", { name: a }) || H.pruefe("fach", { name: b });
+    if (fe) return melde(fe);
+    const belegt = nachbarn(f).map((x) => x.name.toLowerCase());
+    if (a.toLowerCase() === b.toLowerCase() || belegt.includes(a.toLowerCase()) || belegt.includes(b.toLowerCase()))
+      return melde("Bitte verschiedene Namen – sonst lassen sich die Teile nicht unterscheiden.");
+    if (!fachGueltig(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
+    const ids = haken.filter((h) => h.box.checked && eintragJetzt(h.e.id)?.fach === f.id).map((h) => h.e.id);
+    if (!(await tun(H.aufteilenSchritte(f, a, b, ids)))) return;
+    schliessen();
+    untenZeigen("Aufgeteilt: „" + a + "“ und „" + b + "“");
+  }]]);
+}
+
+// Gegenstueck: dieses Teil aufloesen, Inhalt in ein anderes Fach auf demselben Platz.
+function zusammenDialog(f, nb) {
+  const sel = el("select", null, nb.map((x) => el("option", { value: x.id }, x.name)));
+  const n = imFach(f.id).length;
+  dialog("„" + kuerze(f.name, 30) + "“ zusammenlegen", [
+    feld("Inhalt kommt nach", sel),
+    el("p", { className: "klein" }, "„" + f.name + "“ verschwindet" + (n ? ", " + (n === 1 ? "seine 1 Sache wandert" : "seine " + n + " Sachen wandern") + " mit." : ".") +
+      " Den Namen des anderen Teils kannst du danach ändern (lange drücken → Umbenennen)."),
+  ], [["Zusammenlegen", async (melde, schliessen) => {
+    const z = sel.value;
+    if (!fachGueltig(f.id) || !fachGueltig(z)) return melde("Ein Fach gibt es nicht mehr.");
+    if (!(await tun(H.zusammenSchritte(f.id, z, imFach(f.id).map((e) => e.id))))) return;
+    fachWegSchliessen(f, schliessen);
+    untenZeigen("„" + f.name + "“ → „" + fachVon(z).name + "“ zusammengelegt");
+  }]]);
 }
 
 function ortDialog(o) {

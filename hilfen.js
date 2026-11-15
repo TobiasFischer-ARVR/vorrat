@@ -147,6 +147,23 @@
     return g.faecher(o.id);
   }]);
 
+  // ---- v5.2 Fach-Menue (Tobias 15.11.) ----
+  // Aufteilen: Fach umbenennen, zweites Fach auf DEMSELBEN Platz (Zeichnung zeigt beide nebeneinander),
+  // angekreuzte Eintraege hinein. Die Kennung des neuen Fachs entsteht erst beim Speichern -> Folgeschritt.
+  const aufteilenSchritte = (f, name1, name2, eintragIds) => [
+    ...(name1 !== f.name ? [{ typ: "feld", art: "fach", ziel: f.id, feld: "name", wert: name1 }] : []),
+    fachNeu(name2, f.lage.ort, f.lage.reihe, f.lage.spalte),
+    (bisher) => {
+      const neu = bisher.find((v) => v.typ === "neu" && v.art === "fach");
+      return eintragIds.map((id) => ({ typ: "feld", art: "eintrag", ziel: id, feld: "fach", wert: neu.id }));
+    },
+  ];
+  // Zusammenlegen: Inhalt von "von" nach "nach", dann "von" loeschen.
+  const zusammenSchritte = (von, nach, eintragIds) => [
+    ...eintragIds.map((id) => ({ typ: "feld", art: "eintrag", ziel: id, feld: "fach", wert: nach })),
+    { typ: "feld", art: "fach", ziel: von, feld: "geloescht", wert: true },
+  ];
+
   // ---- Abschnitt 4: Codes lesen (reine Funktionen, keine Kamera) ----
   // Ergebnis von leseCode/codeAusEingabe: { art: "ean"|"gs1"|"ifa"|"pzn", schluessel, ean, pzn, mhd, anzeige }.
   //   schluessel = "gtin:<8/13/14 Ziffern>" oder "pzn:<8 Ziffern>" (fuer "Code -> Name merken"),
@@ -321,7 +338,7 @@
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen };
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);
