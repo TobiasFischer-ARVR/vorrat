@@ -147,3 +147,21 @@ main button.kachel.angehoben, main button.baldzeile.angehoben { transform: scale
 .zielchip.ziel { background: #1d6b49; color: #fff; transform: scale(1.08); }
 .platz.ziel rect:first-child { stroke: #1d6b49; stroke-width: 6; }
 .fenster:focus { outline: none; }
+
+/* v5 Multiscan */
+.fenster:has(.zuletzt) .scanbild { max-height: 30vh; } /* Platz fuer die MHD-Wahl darunter */
+.zuletzt { margin: 6px 0; padding: 8px; border-radius: 10px; background: #f3f7f5; }
+.zuletzt p { margin: 0 0 4px; }
+.mhdkopf { align-items: center; }
+.mhdkopf > button { margin: 0; flex: none; }
+.mliste { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.mzeile { display: grid; grid-template-columns: 2.2rem 1fr auto; grid-template-areas: "bild name name" "detail detail zahl"; gap: 4px 8px;
+  align-items: center; padding: 6px 8px; border-radius: 10px; background: #f3f7f5; }
+.mzeile .bild { grid-area: bild; font-size: 1.6rem; text-align: center; }
+.mzeile input { grid-area: name; min-width: 0; }
+.mzeile.ohnename input { outline: 2px solid #d9443a; }
+.mzeile .mdetail { grid-area: detail; justify-self: start; padding: 6px 10px; font-size: .85rem; text-align: left; }
+.mzeile .plusminus { grid-area: zahl; gap: 10px; }
+.mzeile .plusminus button { padding: 2px 14px; }
+.weiterscannen { width: 100%; margin-bottom: 4px; }
+main button.scanstart { display: block; width: 100%; margin-top: 12px; padding: 12px; font-size: 1rem; }

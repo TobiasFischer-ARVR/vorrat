@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v4"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v5"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -551,6 +551,7 @@ function startAnsicht() {
       nKlaeren > 0 && el("button", { className: "ortklaeren", onclick: () => oeffne({ art: "ortKlaeren" }) }, "Ort klären (" + nKlaeren + ")"),
       nPruefen > 0 && el("button", { className: "bestand", onclick: () => oeffne({ art: "bestand" }) }, "Bestand prüfen (" + nPruefen + ")")),
     zeichnung(ortVon(ortWahl)),
+    el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
 }
 
@@ -764,7 +765,7 @@ async function verschieben(e, fachId) {
 }
 // Ziel waehlen: Ort -> Fach. Vorbelegt mit dem jetzigen Platz. wert(): undefined = kein Ort gewaehlt (nichts
 // aendern), "" = Ort ohne Faecher, sonst die Fach-Kennung. Faecher ohne gueltigen Platz sind kein Ziel.
-function zielWahl(aktFach) {
+function zielWahl(aktFach, jetztWort = " (jetzt)") {
   const f = aktFach && fachVon(aktFach);
   const startOrt = f && !f.geloescht && !f.ortKlaeren ? f.lage.ort : "";
   const fachSel = el("select");
@@ -774,7 +775,7 @@ function zielWahl(aktFach) {
     orteSichtbar().map((o) => el("option", { value: o.id, selected: o.id === startOrt }, o.name)));
   const fuellen = () => {
     const fs = ortSel.value ? faecherVonOrt(ortSel.value) : [];
-    fachSel.replaceChildren(...fs.map((x) => el("option", { value: x.id, selected: x.id === aktFach }, x.name + (x.id === aktFach ? " (jetzt)" : ""))));
+    fachSel.replaceChildren(...fs.map((x) => el("option", { value: x.id, selected: x.id === aktFach }, x.name + (x.id === aktFach ? jetztWort : ""))));
     fachFeld.hidden = !fs.length;
     leer.hidden = !ortSel.value || fs.length > 0;
   };
@@ -793,10 +794,12 @@ function verschiebenDialog(e) {
     if (w === e.fach || (await verschieben(e, w))) schliessen();
   }]]);
 }
-// Langes Druecken auf eine Kachel: kleines Menue (Bearbeiten, Verschieben nach ...).
+// Antippen oder langes Druecken auf eine Kachel: kleines Menue. v5 (Tobias 15.11.): -1 nur noch hier,
+// Antippen allein veraendert nichts mehr.
 function eintragMenue(e) {
   const weiter = (fn) => (melde, schliessen) => { nachZurueck = fn; schliessen(); };
   dialog(kuerze(e.name, 40), [el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
+    ["−1 · eins rausgenommen" + (e.menge === 1 ? " (das letzte)" : ""), weiter(() => entnehmen(e))],
     ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
     ["↦ Verschieben nach …", weiter(() => verschiebenDialog(e))],
   ]);
@@ -815,7 +818,7 @@ function kachel(e, kurz, lang, ziehbar) {
   return k;
 }
 
-// Entscheidung 11: Antippen = -1, Leiste mit Rueckgaengig (= Gegenvorgang +1), keine Rueckfrage.
+// Entscheidung 11: -1 ohne Rueckfrage, Leiste mit Rueckgaengig (= Gegenvorgang +1). Seit v5 aus dem Menue.
 async function entnehmen(e) {
   if (!(await tun([{ typ: "menge", art: "eintrag", ziel: e.id, delta: -1, grund: "entnahme" }]))) return;
   untenZeigen(e.name + " −1", "Rückgängig", async () => {
@@ -832,16 +835,17 @@ function fachAnsicht(ebene) {
     kopf(f.name, el("button", { className: "neben", onclick: () => fachDialog(f) }, "✎ " + fachWort(o))),
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
     el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => {
-      const k = kachel(e, () => entnehmen(e), () => eintragMenue(e), true);
+      const k = kachel(e, () => eintragMenue(e), () => eintragMenue(e), true);
       if (e.id === hervor) {
         k.classList.add("hervor");
-        // nur beim ersten Zeichnen hinscrollen, sonst springt die Ansicht nach jedem Antippen (-1) zurueck
+        // nur beim ersten Zeichnen hinscrollen, sonst springt die Ansicht nach jedem -1 zurueck
         if (!ebene.gescrollt) { ebene.gescrollt = true; requestAnimationFrame(() => k.scrollIntoView({ block: "center", behavior: "smooth" })); }
       }
       return k;
     }),
-      el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu"))),
-    el("p", { className: "klein" }, "Antippen = eins weniger · lange drücken = Menü (bearbeiten, verschieben) · gedrückt halten und ziehen = auf ein anderes Fach legen"),
+      el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu")),
+      el("button", { className: "kachel neu", onclick: () => multiScan(id) }, el("span", { className: "bild" }, "📷"), el("span", { className: "name" }, "Scannen"))),
+    el("p", { className: "klein" }, "Antippen = Menü (−1, bearbeiten, verschieben) · gedrückt halten und ziehen = auf ein anderes Fach legen"),
   ];
 }
 
@@ -976,15 +980,16 @@ async function dreiJahresTest(ausgabe, knopf) {
 // ---- Dialoge (eigene Ebene, kein <dialog>: dessen Zurueck-Verhalten auf Android umgeht den Verlauf) ----
 // knoepfe: [text, fn(melde, schliessen), klasse]. schliessen(n) geht n Ebenen zurueck, nur einmal und
 // nur solange dieser Dialog oben liegt (Doppeltipp, Zurueck waehrend des Speicherns).
-// weg (optional) laeuft beim Schliessen. Rueckgabe { melde, schliessen } fuer Dialoge, die von aussen schliessen.
-function dialog(titel, inhalt, knoepfe, weg) {
+// weg (optional) laeuft beim Schliessen; zu = Beschriftung des Schliessen-Knopfs.
+// Rueckgabe { melde, schliessen } fuer Dialoge, die von aussen schliessen.
+function dialog(titel, inhalt, knoepfe, weg, zu = "Abbrechen") {
   const meldung = el("p", { className: "meldung", role: "alert" });
   const melde = (t) => { meldung.textContent = t; };
   const ebene = { weg };
   const schliessen = (n) => { if (stapel[stapel.length - 1] === ebene) { ebene.zu = true; zurueck(n); } };
   const k = knoepfe.filter(Boolean).map(([text, fn, klasse]) => el("button", { className: klasse || "", onclick: () => { if (!ebene.zu) fn(melde, schliessen); } }, text));
   ebene.el = el("div", { className: "blatt" }, el("div", { className: "fenster" }, el("h2", null, titel), inhalt, meldung,
-    el("div", { className: "knoepfe" }, k, el("button", { className: "zweit", onclick: () => schliessen() }, "Abbrechen"))));
+    el("div", { className: "knoepfe" }, k, el("button", { className: "zweit", onclick: () => schliessen() }, zu))));
   const fenster = ebene.el.firstChild;
   fenster.setAttribute("role", "dialog");
   fenster.setAttribute("aria-modal", "true");
@@ -1019,8 +1024,11 @@ async function offSuchen(ean) {
 // Kamera + BarcodeDetector. fertig(ergebnis von H.leseCode/codeAusEingabe) nur bei einem brauchbaren Code.
 // Die Kamera wird bei Treffer, Abbrechen, Android-Zurueck, App im Hintergrund und Fehler gestoppt (stopp()).
 // Den Rohwert (kann eine Seriennummer enthalten) zeigt, speichert und protokolliert die App nie.
+// mehr (v5 Multiscan): { unten, gesehen } = Element unter dem Kamerabild, Code-Sperre der ganzen Liste. Dann bleibt der Dialog offen, jeder neue Code geht an
+// fertig(); derselbe Code zaehlt erst wieder, wenn er WIEDERSEHEN ms nicht im Bild war (sonst 5 Treffer pro Sekunde).
 const SCAN_FORMATE = ["ean_13", "ean_8", "upc_a", "data_matrix"];
-function scanDialog(fertig) {
+const WIEDERSEHEN = 1500;
+function scanDialog(fertig, mehr) {
   const video = el("video", { className: "scanbild", muted: true, playsInline: true, autoplay: true });
   video.setAttribute("aria-label", "Kamerabild");
   const status = el("p", { className: "klein", role: "status" }, "Kamera startet …");
@@ -1036,11 +1044,20 @@ function scanDialog(fertig) {
   };
   const hintergrund = () => { if (document.visibilityState === "hidden") { stopp(); d.schliessen(); } };
   const nimm = (c) => { stopp(); d.schliessen(); fertig(c); };
-  const d = dialog("Scannen", [video, status, feld("oder Code eintippen", eingabe)], [["Code übernehmen", (melde) => {
+  const gesehen = (mehr && mehr.gesehen) || new Map(); // Code -> zuletzt im Bild (nur Mehrfach-Modus)
+  const neuImBild = (c) => {
+    const k = c.schluessel + "|" + (c.mhd || ""), jetzt = Date.now(), vor = gesehen.get(k);
+    gesehen.set(k, jetzt);
+    return !(vor && jetzt - vor < WIEDERSEHEN);
+  };
+  const d = dialog(mehr ? "Mehrere scannen" : "Scannen", [video, status, mehr && mehr.unten, feld("oder Code eintippen", eingabe)], [["Code übernehmen", (melde) => {
     const c = H.codeAusEingabe(eingabe.value);
     if (!c) return melde("Kein gültiger EAN- oder PZN-Code (Prüfziffer?)");
-    nimm(c);
-  }]], stopp);
+    if (!mehr) return nimm(c);
+    melde("");
+    eingabe.value = "";
+    fertig(c);
+  }]], stopp, mehr ? "Fertig → Liste" : "Abbrechen");
   document.addEventListener("visibilitychange", hintergrund);
   const ohne = (text) => { video.hidden = true; status.textContent = text; };
   (async () => {
@@ -1063,21 +1080,191 @@ function scanDialog(fertig) {
     if (aus) { strom.getTracks().forEach((t) => t.stop()); strom = null; return; } // Dialog waehrend der Kamera-Frage geschlossen
     video.srcObject = strom;
     try { await video.play(); } catch (_) { /* autoplay reicht meist */ }
-    status.textContent = "Strichcode oder DataMatrix-Code ins Bild halten …";
+    status.textContent = "Strichcode oder DataMatrix-Code ins Bild halten …" + (mehr ? " Gleiche Packung nochmal: kurz aus dem Bild nehmen." : "");
     const suchen = async () => {
       if (aus) return;
       try {
         if (video.readyState >= 2) {
           const treffer = await erkenner.detect(video);
           if (aus) return;
-          for (const t of treffer) { const c = H.leseCode(t.rawValue, t.format); if (c) { if (navigator.vibrate) navigator.vibrate(60); return nimm(c); } }
-          if (treffer.length) status.textContent = "Code gesehen, aber nicht lesbar (kein EAN/PZN) – weiter halten oder eintippen.";
+          let gelesen = false;
+          for (const t of treffer) {
+            const c = H.leseCode(t.rawValue, t.format);
+            if (!c) continue;
+            gelesen = true;
+            if (!mehr) { if (navigator.vibrate) navigator.vibrate(60); return nimm(c); }
+            if (neuImBild(c)) { if (navigator.vibrate) navigator.vibrate(60); fertig(c); }
+          }
+          if (treffer.length && !gelesen) status.textContent = "Code gesehen, aber nicht lesbar (kein EAN/PZN) – weiter halten oder eintippen.";
         }
       } catch (_) { /* einzelnes Bild nicht auswertbar: weiter */ }
       if (!aus) uhr = setTimeout(suchen, 200);
     };
     suchen();
   })();
+}
+
+// ==== v5: Multiscan (Tobias 15.11.) ====
+// Kompakte MHD-Wahl: Monat antippen (naechstes passendes Jahr, bis das Jahr von Hand gewaehlt ist), "kein MHD".
+// geaendert(mhd) bei jeder Wahl. Ein genaues Datum (DataMatrix) wird angezeigt, ein Monat ersetzt es.
+function mhdWahl(start, geaendert) {
+  const heute = Modell.heuteIso();
+  let mhd = start || null, jahr = (H.mhdTeile(mhd) || { jahr: Number(heute.slice(0, 4)) }).jahr, jahrHand = !!mhd;
+  const anz = el("b"), jahrAnz = el("b"), monate = el("div", { className: "monate" });
+  const setze = (m) => { mhd = m; zeigen(); geaendert(mhd); };
+  const zeigen = () => {
+    const t = mhd && mhd.length === 7 ? H.mhdTeile(mhd) : null;
+    anz.textContent = mhd ? H.deDatum(mhd) : "kein MHD";
+    jahrAnz.textContent = String(jahr);
+    monate.replaceChildren(...MONATE.map((m, i) => el("button", { type: "button", className: t && t.jahr === jahr && t.monat === i + 1 ? "an" : "",
+      onclick: () => { if (!jahrHand) jahr = H.mhdJahr(i + 1, heute); setze(H.mhdMonat(jahr, i + 1)); } }, m)));
+  };
+  const jahrKnopf = (d, t) => el("button", { type: "button", onclick: () => {
+    jahr += d; jahrHand = true;
+    if (mhd && mhd.length === 7) setze(H.mhdMonat(jahr, H.mhdTeile(mhd).monat)); else zeigen();
+  } }, t);
+  zeigen();
+  return el("div", null,
+    el("div", { className: "zeilen mhdkopf" }, el("div", { className: "feld" }, el("span", null, "MHD"), anz),
+      el("button", { type: "button", className: "zweit", onclick: () => setze(null) }, "kein MHD")),
+    el("div", { className: "jahr" }, jahrKnopf(-1, "‹"), jahrAnz, jahrKnopf(1, "›")), monate);
+}
+
+// Ablauf: Liste oeffnen, Kamera sofort darueber. Jeder Treffer = eine Packung, darunter gleich die MHD-Wahl fuer
+// sie. "Fertig → Liste" zeigt die Tabelle (gleicher Code + MHD = eine Zeile), ein Ziel fuer alle, vorbelegt mit
+// dem Fach, aus dem gescannt wird. Eine Zeile antippen = eigenes MHD/Ziel. Gespeichert wird alles in EINEM tun().
+// ponytail: neue Eintraege auch wenn im Fach schon dasselbe mit gleichem MHD liegt (wie beim Einzel-Scan);
+// Zusammenlegen erst, wenn es stoert.
+// alt = Zustand einer verworfenen Liste (Zurueckholen).
+function multiScan(fachId, alt) {
+  const pakete = alt ? alt.pakete : [];  // { schluessel, mhd, fach? } je gescannter Packung
+  const namen = alt ? alt.namen : {}, notiz = alt ? alt.notiz : {}; // je Code: Name, Hinweis (sucht/unbekannt/offline)
+  const gesehen = new Map();
+  let gespeichert = false;
+  const ziel = zielWahl(fachId || null, " (hier)");
+  const tabelle = el("div", { className: "mliste" });
+  const kopfAnz = el("p", { className: "klein" });
+  const zeilen = () => H.paketeZeilen(pakete);
+
+  function render() {
+    const zs = zeilen();
+    kopfAnz.textContent = pakete.length ? pakete.length + (pakete.length === 1 ? " Packung" : " Packungen") + " in " + zs.length + (zs.length === 1 ? " Zeile" : " Zeilen") : "";
+    tabelle.replaceChildren(...(zs.length ? zs.map(zeile) : [el("p", { className: "klein" }, "Noch nichts gescannt.")]));
+  }
+  // Ohne Neuzeichnen, damit ein Feld, in dem gerade getippt wird, den Fokus behaelt.
+  const nameSetzen = (s, n) => {
+    namen[s] = n;
+    for (const i of tabelle.querySelectorAll("input[data-schl]")) if (i.dataset.schl === s) {
+      if (i.value !== n) i.value = n;
+      i.closest(".mzeile").classList.toggle("ohnename", !n.trim());
+    }
+  };
+
+  function zeile(z) {
+    const s = z.schluessel;
+    const gruppe = () => z.pakete;
+    const name = el("input", { value: namen[s] || "", placeholder: notiz[s] || "Name eintippen", maxLength: 100, autocomplete: "off", "data-schl": s,
+      "aria-label": "Name", oninput: () => nameSetzen(s, name.value) });
+    const minus = () => { const g = gruppe(); pakete.splice(pakete.lastIndexOf(g[g.length - 1]), 1); render(); };
+    const plus = () => { if (z.menge < 999) { pakete.push(Object.assign({}, gruppe()[0])); render(); } };
+    return el("div", { className: "mzeile" + ((namen[s] || "").trim() ? "" : " ohnename") },
+      el("span", { className: "bild", "aria-hidden": "true" }, H.bildchen(namen[s] || "")), name,
+      el("button", { type: "button", className: "mdetail", onclick: () => zeileDialog(z, gruppe) },
+        (z.mhd ? "MHD " + H.deDatum(z.mhd) : "kein MHD") + (z.fach ? " · " + fachText(z.fach) : "") + " ✎"),
+      el("div", { className: "plusminus" }, el("button", { type: "button", "aria-label": "eins weniger", onclick: minus }, "−"),
+        el("b", null, String(z.menge)), el("button", { type: "button", "aria-label": "eins mehr", onclick: plus }, "+")));
+  }
+
+  // Eine Zeile: eigenes MHD und Ziel (gilt fuer alle ihre Packungen), oder ganz entfernen.
+  function zeileDialog(z, gruppe) {
+    let mhd = z.mhd;
+    const w = mhdWahl(mhd, (m) => { mhd = m; });
+    const zw = zielWahl(z.fach || ziel.wert() || null, " (gewählt)");
+    dialog((namen[z.schluessel] || "Zeile") + " · " + z.menge + " Stück", [w, el("h3", null, "Speichern in"), zw.teil], [
+      ["Übernehmen", (melde, schliessen) => {
+        const f = zw.wert();
+        if (f === "") return melde("Dieser Ort hat noch keine Kiste.");
+        for (const p of gruppe()) { p.mhd = mhd; p.fach = f || undefined; }
+        schliessen(); render();
+      }],
+      ["Zeile entfernen", (melde, schliessen) => { for (const p of gruppe()) pakete.splice(pakete.indexOf(p), 1); schliessen(); render(); }, "gefahr"],
+    ]);
+  }
+
+  async function nameSuchen(c) {
+    const s = c.schluessel;
+    if (s in namen || s in notiz) return; // schon bekannt oder Suche laeuft
+    const gemerkt = codeName(s);
+    if (gemerkt) return nameSetzen(s, gemerkt);
+    if (!c.ean) { notiz[s] = "Name eintippen (wird gemerkt)"; return; }
+    notiz[s] = "suche Namen …";
+    const r = await offSuchen(c.ean);
+    notiz[s] = r.offline ? "offline – Name eintippen" : "unbekannt – Name eintippen";
+    for (const i of tabelle.querySelectorAll("input[data-schl]")) if (i.dataset.schl === s) i.placeholder = notiz[s];
+    if (r.name && !namen[s]) nameSetzen(s, r.name);
+    zuletztName();
+  }
+
+  // Kamera-Dialog: unter dem Bild die zuletzt gescannte Packung mit MHD-Wahl.
+  const unten = el("div", { className: "zuletzt" });
+  const nameAnz = el("p");
+  let letzte = null;
+  const zuletztName = () => {
+    if (!letzte) return;
+    const n = pakete.filter((x) => x.schluessel === letzte.schluessel).length;
+    nameAnz.replaceChildren("✓ ", el("b", null, namen[letzte.schluessel] || notiz[letzte.schluessel] || "…"), n > 1 ? " (" + n + "×)" : "", " · insgesamt " + pakete.length);
+  };
+  function zuletztZeigen() {
+    if (letzte && !pakete.includes(letzte)) letzte = null; // in der Liste entfernt
+    if (!letzte) return unten.replaceChildren(el("p", { className: "klein" }, "Noch nichts gescannt."));
+    const p = letzte;
+    zuletztName();
+    unten.replaceChildren(nameAnz,
+      p.codeMhd ? el("p", { className: "klein" }, "MHD aus dem Code: " + H.deDatum(p.mhd)) : mhdWahl(p.mhd, (m) => { p.mhd = m; render(); }));
+  }
+  function treffer(c) {
+    // Gleiche Packung nochmal: MHD der vorigen gleichen uebernehmen (meist zusammen gekauft); sichtbar und aenderbar.
+    const vorige = c.mhd ? null : pakete.findLast((p) => p.schluessel === c.schluessel);
+    letzte = { schluessel: c.schluessel, mhd: c.mhd || (vorige ? vorige.mhd : null), codeMhd: !!c.mhd };
+    pakete.push(letzte);
+    nameSuchen(c);
+    render(); zuletztZeigen();
+  }
+  const scannen = () => { zuletztZeigen(); scanDialog(treffer, { unten, gesehen }); };
+
+  async function speichern(melde, schliessen) {
+    const zs = zeilen();
+    if (!zs.length) return melde("Noch nichts gescannt.");
+    const alle = ziel.wert(), daten = [];
+    for (const z of zs) {
+      const fach = z.fach || alle;
+      const name = (namen[z.schluessel] || "").trim();
+      if (!name) return melde("Bitte alle Namen eintragen (rot markiert).");
+      if (fach === undefined) return melde("Bitte unten Ort und Fach wählen.");
+      if (fach === "") return melde("Dieser Ort hat noch keine Kiste.");
+      if (!fachGueltig(fach)) return melde("Das Fach für „" + name + "“ gibt es nicht mehr – bitte neu wählen.");
+      if (z.menge > 999) return melde(name + ": höchstens 999 Stück");
+      const werte = { name, symbol: H.bildchen(name), mhd: z.mhd, eingefroren: null, frist: null, fach };
+      const fe = H.pruefe("eintrag", werte); // UGC #86: vor dem Vorgang pruefen
+      if (fe) return melde(name + ": " + fe);
+      daten.push({ typ: "neu", art: "eintrag", werte, menge: z.menge });
+    }
+    if (!(await tun(daten))) return;
+    gespeichert = true;
+    for (const z of zs) codeMerken(z.schluessel, namen[z.schluessel].trim()); // Abschnitt 4: Code -> Name, nur dieses Geraet
+    untenZeigen(pakete.length + (pakete.length === 1 ? " Packung" : " Packungen") + " gespeichert");
+    schliessen();
+  }
+
+  dialog("Gescannt", [kopfAnz, tabelle,
+    el("button", { type: "button", className: "an weiterscannen", onclick: scannen }, "📷 Weiter scannen"),
+    el("h3", null, "Speichern in"), ziel.teil], [["Alle speichern", speichern]], () => {
+    if (gespeichert || !pakete.length) return;
+    const n = pakete.length;
+    untenZeigen(n + (n === 1 ? " gescannte Packung" : " gescannte Packungen") + " verworfen", "Zurückholen", () => multiScan(fachId, { pakete, namen, notiz }));
+  });
+  render();
+  if (alt) zuletztZeigen(); else scannen();
 }
 
 // Eintrag anlegen (e = null, in Fach fachId) oder bearbeiten. Vorbelegen, nie ungefragt speichern (UGC #85).

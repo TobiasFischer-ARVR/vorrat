@@ -175,4 +175,16 @@ fall("Verschieben = EIN Vorgang (Feld fach), Markierung wandert mit, Rueckgaengi
   assert.strictEqual(a.stand().eintraege.find((e) => e.name === "Pizza").ortKlaeren, true);
 });
 
+fall("v5 Multiscan: gleicher Code + MHD + Ziel = eine Zeile, sonst getrennt", () => {
+  const z = H.paketeZeilen([
+    { schluessel: "e4001", mhd: null }, { schluessel: "e4001", mhd: null },               // 2x Erbsen
+    { schluessel: "e4001", mhd: "2027-03" },                                             // Erbsen, anderes MHD
+    { schluessel: "p123", mhd: "2028-01-31" }, { schluessel: "p123", mhd: "2028-02-29" }, // Medikament, 2 Verfallsdaten
+    { schluessel: "e4001", mhd: null, fach: "f9" },                                      // Erbsen, eigenes Ziel
+  ]);
+  assert.deepStrictEqual(z.map((x) => [x.schluessel, x.mhd, x.fach, x.menge]),
+    [["e4001", null, undefined, 2], ["e4001", "2027-03", undefined, 1], ["p123", "2028-01-31", undefined, 1], ["p123", "2028-02-29", undefined, 1], ["e4001", null, "f9", 1]]);
+  assert.deepStrictEqual(H.paketeZeilen([]), []);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

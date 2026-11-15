@@ -303,13 +303,25 @@
     eingefroren: "Einfrierdatum ungültig", frist: "Frist muss 1 bis 60 Monate sein", fach: "Kiste ungültig",
     reihen: "Reihen: 1 bis 20", spalten: "Spalten: 1 bis 20", reihenfolge: "Reihenfolge: 0 bis 999", lage: "Platz ungültig",
   };
+  // Multiscan: gescannte Packungen -> Zeilen. Gleicher Code + gleiches MHD + gleiches Ziel = eine Zeile mit Menge
+  // (Regel "ein Eintrag pro MHD"). p.fach undefined = Ziel der ganzen Liste.
+  function paketeZeilen(pakete) {
+    const m = new Map();
+    for (const p of pakete) {
+      const k = JSON.stringify([p.schluessel, p.mhd || null, p.fach || null]);
+      const z = m.get(k);
+      if (z) { z.menge++; z.pakete.push(p); } else m.set(k, { schluessel: p.schluessel, mhd: p.mhd || null, fach: p.fach || undefined, menge: 1, pakete: [p] });
+    }
+    return [...m.values()];
+  }
+
   function pruefe(art, werte) {
     for (const [f, w] of Object.entries(werte)) if (!Modell.FELDER[art][f](w)) return FEHLERTEXT[f] || "Ungültig: " + f;
     return null;
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe };
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);
