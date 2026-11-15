@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v5.2"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v5.3"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -553,7 +553,7 @@ function startAnsicht() {
       nKlaeren > 0 && el("button", { className: "ortklaeren", onclick: () => oeffne({ art: "ortKlaeren" }) }, "Ort klären (" + nKlaeren + ")"),
       nPruefen > 0 && el("button", { className: "bestand", onclick: () => oeffne({ art: "bestand" }) }, "Bestand prüfen (" + nPruefen + ")")),
     zeichnung(ortVon(ortWahl)),
-    el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …)"),
+    el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
 }
@@ -609,7 +609,7 @@ function zeichnung(ort) {
       const x = rand + c * (cw + luft);
       const hier = faecherAn(ort.id, r, c);
       if (!hier.length) {
-        const g = sv("g", { class: "frei", tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
+        const g = sv("g", { class: "frei", "data-platz": JSON.stringify({ ort: ort.id, reihe: r, spalte: c }), tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
         g.addEventListener("click", () => fachDialog(null, { ort: ort.id, reihe: r, spalte: c }));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fachDialog(null, { ort: ort.id, reihe: r, spalte: c }); } });
         svg.append(g);
@@ -629,7 +629,8 @@ function zeichnung(ort) {
           sv("text", { x: mitte, y: y + rh * 0.84, "text-anchor": "middle", fill: schrift, class: "fzahl" }, es.length ? es.length + (es.length === 1 ? " Sache" : " Sachen") : "leer"),
           mk && sv("circle", { cx: xi + w - 15, cy: y + 15, r: 11, class: "punkt " + mk.farbe }),
           mk && sv("text", { x: xi + w - 15, y: y + 19.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
-        druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f)); // v5.2: lange druecken = Fach-Menue
+        // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
+        druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f), fachZug(f));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
         svg.append(g);
       });
@@ -717,23 +718,25 @@ function zielLeiste(e) {
       })));
     }));
 }
-function zugStart(e) {
+// Gemeinsamer Ablauf fuers Ziehen (Eintraege, v5.3 auch Faecher): Geist folgt dem Finger, das Ziel unter dem Finger
+// wird markiert. Beim Loslassen erst den aufgeschobenen Stand laden, dann ablegen(ziel) gegen IHN (Codex v4 #1).
+// geist()/leiste() werden erst beim Zugbeginn gebaut; zielVon(element) -> Ablage-Element oder null.
+function zug(geist, leiste, zielVon, ablegen) {
   return (ev) => {
     zieht = true;
-    const geist = el("div", { className: "zuggeist", "aria-hidden": "true" }, el("span", { className: "bild" }, e.symbol || H.bildchen(e.name)), el("span", null, e.name));
-    const leiste = zielLeiste(e);
-    document.body.append(leiste, geist);
+    const g = el("div", { className: "zuggeist", "aria-hidden": "true" }, geist());
+    const l = leiste ? leiste() : null;
+    document.body.append(...[l, g].filter(Boolean));
     let ziel = null;
     const setze = (x, y) => {
-      geist.style.transform = "translate(" + (x - 50) + "px," + (y - 70) + "px)";
+      g.style.transform = "translate(" + (x - 50) + "px," + (y - 70) + "px)";
       const t = document.elementFromPoint(x, y);
-      const z = t && t.closest ? t.closest("[data-fach]") : null;
-      const neu = z && z.dataset.fach !== e.fach ? z : null;
+      const neu = t && t.closest ? zielVon(t) : null;
       if (neu !== ziel) { if (ziel) ziel.classList.remove("ziel"); ziel = neu; if (ziel) ziel.classList.add("ziel"); }
     };
     setze(ev.clientX, ev.clientY);
     const fertig = () => {
-      geist.remove(); leiste.remove();
+      g.remove(); if (l) l.remove();
       if (ziel) ziel.classList.remove("ziel");
       zieht = false;
       if (nachZeichnen) { nachZeichnen = false; zeichnen(); }
@@ -741,12 +744,14 @@ function zugStart(e) {
     };
     return {
       bewege: (m) => setze(m.clientX, m.clientY),
-      // Codex v4 #1: erst den waehrend des Ziehens aufgeschobenen Stand laden, dann gegen IHN pruefen
-      ende: async (m) => { setze(m.clientX, m.clientY); const z = ziel && ziel.dataset.fach; await fertig(); if (z) verschieben(e, z); },
+      ende: async (m) => { setze(m.clientX, m.clientY); const z = ziel; await fertig(); if (z) ablegen(z); },
       abbruch: fertig,
     };
   };
 }
+const zugStart = (e) => zug(() => [el("span", { className: "bild" }, e.symbol || H.bildchen(e.name)), el("span", null, e.name)], () => zielLeiste(e),
+  (t) => { const z = t.closest("[data-fach]"); return z && z.dataset.fach !== e.fach ? z : null; },
+  (z) => verschieben(e, z.dataset.fach));
 const fachText = (fachId) => { const f = fachVon(fachId), o = f && ortVon(f.lage.ort); return f && o ? o.name + " – " + f.name : "?"; };
 // Codex v4 #1/#2: Eintrag und Faecher immer im AKTUELLEN Stand pruefen, nicht im Objekt von Zugbeginn.
 const eintragJetzt = (id) => (stand ? stand.eintraege.find((x) => x.id === id && x.sichtbar) : null);
@@ -1485,7 +1490,9 @@ function fachDialog(f, lage, nur) {
     const opt = f.ortKlaeren ? [el("option", { value: "" }, "– kein gültiger Platz –")] : [];
     for (const o of orteSichtbar()) for (let r = 0; r < o.reihen; r++) for (let c = 0; c < o.spalten; c++) {
       const meins = !f.ortKlaeren && f.lage.ort === o.id && f.lage.reihe === r && f.lage.spalte === c;
-      if (meins || !faecherAn(o.id, r, c, f.id).length) opt.push(el("option", { value: JSON.stringify({ ort: o.id, reihe: r, spalte: c }), selected: meins }, o.name + " · " + platzName(o, r, c)));
+      const da = faecherAn(o.id, r, c, f.id); // v5.3: belegte Plaetze auch (daneben legen, wie nach dem Aufteilen)
+      opt.push(el("option", { value: JSON.stringify({ ort: o.id, reihe: r, spalte: c }), selected: meins },
+        o.name + " · " + platzName(o, r, c) + (meins ? " (jetzt)" : da.length ? " (neben „" + da.map((x) => x.name).join("“, „") + "“)" : " (frei)")));
     }
     platzSel = el("select", null, opt);
   }
@@ -1493,7 +1500,7 @@ function fachDialog(f, lage, nur) {
     !f && el("p", { className: "klein" }, ort.name + " · " + platzName(ort, lage.reihe, lage.spalte)),
     nur !== "platz" && feld("Name", name),
     platzSel && feld("Platz", platzSel),
-    platzSel && el("p", { className: "klein" }, "Nur freie Plätze. Der Inhalt zieht mit um."),
+    platzSel && el("p", { className: "klein" }, "Belegter Platz = daneben legen. Der Inhalt zieht mit um. Tauschen: in der Zeichnung auf das andere Fach ziehen."),
   ], [
     ["Speichern", async (melde, schliessen) => {
       if (f && !fachVon(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
@@ -1501,7 +1508,10 @@ function fachDialog(f, lage, nur) {
       if (!f) werte.lage = lage;
       else if (platzSel && platzSel.value) {
         const l = JSON.parse(platzSel.value);
-        if (l.ort !== f.lage.ort || l.reihe !== f.lage.reihe || l.spalte !== f.lage.spalte) werte.lage = l;
+        if (l.ort !== f.lage.ort || l.reihe !== f.lage.reihe || l.spalte !== f.lage.spalte) {
+          if (nameDort(f.name, l, f.id)) return melde("Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen.");
+          werte.lage = l;
+        }
       }
       const fe = H.pruefe("fach", werte);
       if (fe) return melde(fe);
@@ -1577,6 +1587,58 @@ function zusammenDialog(f, nb) {
     fachWegSchliessen(f, schliessen);
     untenZeigen("„" + f.name + "“ → „" + fachVon(z).name + "“ zusammengelegt");
   }]]);
+}
+
+// ==== v5.3: Faecher ziehen (Tobias 16.11.) ====
+const lageKopie = (f) => ({ ort: f.lage.ort, reihe: f.lage.reihe, spalte: f.lage.spalte });
+const gleicheLage = (a, b) => a.ort === b.ort && a.reihe === b.reihe && a.spalte === b.spalte;
+// Platz gibt es im AKTUELLEN Stand (Ort nicht geloescht, innerhalb der Reihen/Spalten) - sonst landet das Fach in "Ort klaeren".
+const lageGueltig = (l) => { const o = ortVon(l.ort); return !!o && !o.geloescht && l.reihe < o.reihen && l.spalte < o.spalten; };
+// Gleicher Name wie ein Fach auf dem Platz l? (sonst lassen sich Teile nicht unterscheiden, wie beim Aufteilen)
+const nameDort = (name, l, ausser) => faecherAn(l.ort, l.reihe, l.spalte, ausser).some((x) => x.name.toLowerCase() === name.toLowerCase());
+// Ziel: anderes Fach (nicht auf demselben Platz) oder freier Platz. Immer gegen den aktuellen Stand.
+const fachZug = (f) => zug(() => [el("span", { className: "bild" }, "🗄️"), el("span", null, f.name)], null, (t) => {
+  const z = t.closest("[data-fach],[data-platz]"), ich = fachVon(f.id);
+  if (!z || !ich || z.dataset.fach === f.id) return null;
+  const x = z.dataset.fach && fachVon(z.dataset.fach);
+  return x && gleicheLage(x.lage, ich.lage) ? null : z;
+}, (z) => (z.dataset.platz ? fachAufPlatz(f.id, JSON.parse(z.dataset.platz)) : fachAufFach(f.id, z.dataset.fach)));
+
+// Lagen mehrerer Faecher in EINEM Schritt setzen. Rueckgaengig nur, wenn noch alles so liegt und die alten Plaetze gelten.
+async function lagenSetzen(neu, text) {
+  const alt = neu.map(([id]) => [id, lageKopie(fachVon(id))]);
+  if (!(await tun(neu.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage }))))) return;
+  untenZeigen(text, "Rückgängig", async () => {
+    if (!neu.every(([id, lage]) => fachGueltig(id) && gleicheLage(fachVon(id).lage, lage)))
+      return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
+    if (!alt.every(([, lage]) => lageGueltig(lage))) return hinweis("Den alten Platz gibt es nicht mehr – Rückgängig nicht möglich.");
+    if (await tun(alt.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })))) untenZeigen("Zurück verschoben");
+  });
+}
+function fachAufPlatz(id, lage) {
+  if (!fachGueltig(id)) return hinweis("Dieses Fach gibt es nicht mehr.");
+  if (!lageGueltig(lage)) return hinweis("Diesen Platz gibt es nicht mehr.");
+  if (faecherAn(lage.ort, lage.reihe, lage.spalte, id).length) return hinweis("Der Platz ist inzwischen belegt – bitte nochmal ziehen.");
+  const o = ortVon(lage.ort);
+  lagenSetzen([[id, lage]], "„" + fachVon(id).name + "“ → " + o.name + " · " + platzName(o, lage.reihe, lage.spalte));
+}
+function fachAufFach(id, zielId) {
+  if (!fachGueltig(id) || !fachGueltig(zielId)) return hinweis("Dieses Fach gibt es nicht mehr.");
+  // Beide Knoepfe pruefen erst den aktuellen Stand; paare(x, y) -> [[id, lage], ...] oder Fehlertext.
+  const knopf = (text, paare, meldung) => [text, (melde, schliessen) => {
+    if (!fachGueltig(id) || !fachGueltig(zielId)) return melde("Ein Fach gibt es nicht mehr.");
+    const x = fachVon(id), y = fachVon(zielId), r = paare(x, y);
+    if (typeof r === "string") return melde(r);
+    schliessen();
+    lagenSetzen(r, meldung(x, y));
+  }];
+  dialog("„" + kuerze(fachVon(id).name, 25) + "“ auf „" + kuerze(fachVon(zielId).name, 25) + "“", [
+    el("p", { className: "klein" }, "Der Inhalt zieht jeweils mit um."),
+  ], [
+    knopf("⇄ Plätze tauschen", (x, y) => [[id, lageKopie(y)], [zielId, lageKopie(x)]], (x, y) => "„" + x.name + "“ ⇄ „" + y.name + "“ getauscht"),
+    knopf("⊕ Daneben legen", (x, y) => (nameDort(x.name, y.lage, id) ? "Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen." : [[id, lageKopie(y)]]),
+      (x, y) => "„" + x.name + "“ liegt jetzt neben „" + y.name + "“"),
+  ]);
 }
 
 function ortDialog(o) {

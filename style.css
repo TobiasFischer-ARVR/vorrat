@@ -165,3 +165,6 @@ main button.kachel.angehoben, main button.baldzeile.angehoben { transform: scale
 .mzeile .plusminus button { padding: 2px 14px; }
 .weiterscannen { width: 100%; margin-bottom: 4px; }
 main button.scanstart { display: block; width: 100%; margin-top: 12px; padding: 12px; font-size: 1rem; }
+/* v5.3 Faecher ziehen */
+.platz.angehoben rect:first-child { stroke: #1d6b49; stroke-width: 5; stroke-dasharray: 8 4; }
+.frei.ziel rect { stroke: #1d6b49; stroke-width: 6; stroke-dasharray: none; fill: #dcefe5; }
