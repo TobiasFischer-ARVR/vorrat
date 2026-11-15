@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v5"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v5.1"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -1024,10 +1024,13 @@ async function offSuchen(ean) {
 // Kamera + BarcodeDetector. fertig(ergebnis von H.leseCode/codeAusEingabe) nur bei einem brauchbaren Code.
 // Die Kamera wird bei Treffer, Abbrechen, Android-Zurueck, App im Hintergrund und Fehler gestoppt (stopp()).
 // Den Rohwert (kann eine Seriennummer enthalten) zeigt, speichert und protokolliert die App nie.
-// mehr (v5 Multiscan): { unten, gesehen } = Element unter dem Kamerabild, Code-Sperre der ganzen Liste. Dann bleibt der Dialog offen, jeder neue Code geht an
-// fertig(); derselbe Code zaehlt erst wieder, wenn er WIEDERSEHEN ms nicht im Bild war (sonst 5 Treffer pro Sekunde).
+// Gegen Falschlesungen (Tobias 15.11.: 4 Packungen gescannt, 5 in der Liste, 2 davon unbekannt): ein Code zaehlt erst,
+// wenn er in BESTAETIGT Bildern hintereinander gleich gelesen wurde; danach erst wieder nach einer Luecke.
+// mehr (v5 Multiscan): { unten } = Element unter dem Kamerabild. Dann bleibt der Dialog offen, jeder bestaetigte Code
+// geht an fertig(c, vonHand); fertig liefert false, wenn er nicht gezaehlt wurde (dann kein Brummen).
 const SCAN_FORMATE = ["ean_13", "ean_8", "upc_a", "data_matrix"];
-const WIEDERSEHEN = 1500;
+const BESTAETIGT = 3;
+const codeKey = (c) => c.schluessel + "|" + (c.mhd || ""); // DataMatrix mit anderem Verfall = andere Packung
 function scanDialog(fertig, mehr) {
   const video = el("video", { className: "scanbild", muted: true, playsInline: true, autoplay: true });
   video.setAttribute("aria-label", "Kamerabild");
@@ -1044,19 +1047,14 @@ function scanDialog(fertig, mehr) {
   };
   const hintergrund = () => { if (document.visibilityState === "hidden") { stopp(); d.schliessen(); } };
   const nimm = (c) => { stopp(); d.schliessen(); fertig(c); };
-  const gesehen = (mehr && mehr.gesehen) || new Map(); // Code -> zuletzt im Bild (nur Mehrfach-Modus)
-  const neuImBild = (c) => {
-    const k = c.schluessel + "|" + (c.mhd || ""), jetzt = Date.now(), vor = gesehen.get(k);
-    gesehen.set(k, jetzt);
-    return !(vor && jetzt - vor < WIEDERSEHEN);
-  };
+  let folge = new Map(); // Code -> Zahl der Bilder in Folge, in denen er gelesen wurde
   const d = dialog(mehr ? "Mehrere scannen" : "Scannen", [video, status, mehr && mehr.unten, feld("oder Code eintippen", eingabe)], [["Code übernehmen", (melde) => {
     const c = H.codeAusEingabe(eingabe.value);
     if (!c) return melde("Kein gültiger EAN- oder PZN-Code (Prüfziffer?)");
     if (!mehr) return nimm(c);
     melde("");
     eingabe.value = "";
-    fertig(c);
+    fertig(c, true);
   }]], stopp, mehr ? "Fertig → Liste" : "Abbrechen");
   document.addEventListener("visibilitychange", hintergrund);
   const ohne = (text) => { video.hidden = true; status.textContent = text; };
@@ -1080,7 +1078,7 @@ function scanDialog(fertig, mehr) {
     if (aus) { strom.getTracks().forEach((t) => t.stop()); strom = null; return; } // Dialog waehrend der Kamera-Frage geschlossen
     video.srcObject = strom;
     try { await video.play(); } catch (_) { /* autoplay reicht meist */ }
-    status.textContent = "Strichcode oder DataMatrix-Code ins Bild halten …" + (mehr ? " Gleiche Packung nochmal: kurz aus dem Bild nehmen." : "");
+    status.textContent = "Strichcode oder DataMatrix-Code ins Bild halten …" + (mehr ? " Jeder Code zählt einmal, weitere gleiche Packungen: Knopf „+1 gleiche Packung“." : "");
     const suchen = async () => {
       if (aus) return;
       try {
@@ -1088,13 +1086,20 @@ function scanDialog(fertig, mehr) {
           const treffer = await erkenner.detect(video);
           if (aus) return;
           let gelesen = false;
+          const neu = new Map();
           for (const t of treffer) {
             const c = H.leseCode(t.rawValue, t.format);
             if (!c) continue;
             gelesen = true;
+            const k = codeKey(c);
+            if (neu.has(k)) continue;
+            const n = (folge.get(k) || 0) + 1;
+            neu.set(k, n);
+            if (n !== BESTAETIGT) continue; // genau einmal je ununterbrochener Folge
             if (!mehr) { if (navigator.vibrate) navigator.vibrate(60); return nimm(c); }
-            if (neuImBild(c)) { if (navigator.vibrate) navigator.vibrate(60); fertig(c); }
+            if (fertig(c, false) !== false && navigator.vibrate) navigator.vibrate(60);
           }
+          folge = neu;
           if (treffer.length && !gelesen) status.textContent = "Code gesehen, aber nicht lesbar (kein EAN/PZN) – weiter halten oder eintippen.";
         }
       } catch (_) { /* einzelnes Bild nicht auswertbar: weiter */ }
@@ -1139,7 +1144,6 @@ function mhdWahl(start, geaendert) {
 function multiScan(fachId, alt) {
   const pakete = alt ? alt.pakete : [];  // { schluessel, mhd, fach? } je gescannter Packung
   const namen = alt ? alt.namen : {}, notiz = alt ? alt.notiz : {}; // je Code: Name, Hinweis (sucht/unbekannt/offline)
-  const gesehen = new Map();
   let gespeichert = false;
   const ziel = zielWahl(fachId || null, " (hier)");
   const tabelle = el("div", { className: "mliste" });
@@ -1196,10 +1200,11 @@ function multiScan(fachId, alt) {
     if (s in namen || s in notiz) return; // schon bekannt oder Suche laeuft
     const gemerkt = codeName(s);
     if (gemerkt) return nameSetzen(s, gemerkt);
-    if (!c.ean) { notiz[s] = "Name eintippen (wird gemerkt)"; return; }
+    if (!c.ean) { notiz[s] = c.anzeige + " · Name eintippen, wird gemerkt"; return; }
     notiz[s] = "suche Namen …";
     const r = await offSuchen(c.ean);
-    notiz[s] = r.offline ? "offline – Name eintippen" : "unbekannt – Name eintippen";
+    // Code-Nummer mit anzeigen: so laesst sich mit der Packung vergleichen, ob die Kamera sich verlesen hat
+    notiz[s] = r.name ? c.anzeige : c.anzeige + " · " + (r.offline ? "offline" : "unbekannt") + ", Name eintippen";
     for (const i of tabelle.querySelectorAll("input[data-schl]")) if (i.dataset.schl === s) i.placeholder = notiz[s];
     if (r.name && !namen[s]) nameSetzen(s, r.name);
     zuletztName();
@@ -1208,7 +1213,17 @@ function multiScan(fachId, alt) {
   // Kamera-Dialog: unter dem Bild die zuletzt gescannte Packung mit MHD-Wahl.
   const unten = el("div", { className: "zuletzt" });
   const nameAnz = el("p");
+  const wiederAnz = el("p", { className: "hinweis-rot", hidden: true }, "Schon in der Liste. Noch eine gleiche Packung? → „+1 gleiche Packung“");
   let letzte = null;
+  // Gleiche Packung nochmal (Tobias 15.11.): nie von selbst, nur per Knopf. Neue Packung = Kopie samt MHD, eigene MHD-Wahl.
+  const plusKnopf = el("button", { type: "button", className: "an", onclick: () => {
+    if (!letzte || !pakete.includes(letzte)) return;
+    if (pakete.filter((p) => p.code === letzte.code).length >= 999) return; // Review #4: wie das + in der Liste
+    letzte = Object.assign({}, letzte);
+    pakete.push(letzte);
+    wiederAnz.hidden = true;
+    render(); zuletztZeigen();
+  } }, "+1 gleiche Packung");
   const zuletztName = () => {
     if (!letzte) return;
     const n = pakete.filter((x) => x.schluessel === letzte.schluessel).length;
@@ -1219,18 +1234,28 @@ function multiScan(fachId, alt) {
     if (!letzte) return unten.replaceChildren(el("p", { className: "klein" }, "Noch nichts gescannt."));
     const p = letzte;
     zuletztName();
-    unten.replaceChildren(nameAnz,
+    unten.replaceChildren(nameAnz, wiederAnz, plusKnopf,
       p.codeMhd ? el("p", { className: "klein" }, "MHD aus dem Code: " + H.deDatum(p.mhd)) : mhdWahl(p.mhd, (m) => { p.mhd = m; render(); }));
   }
-  function treffer(c) {
-    // Gleiche Packung nochmal: MHD der vorigen gleichen uebernehmen (meist zusammen gekauft); sichtbar und aenderbar.
+  // Kamera: ein Code, der schon in der Liste steht, zaehlt nicht nochmal (lange draufgehalten, kurz verloren, zwei
+  // Packungen im Bild). Er wird nur "aktuell", damit +1 auf IHN wirkt. Eingetippt zaehlt immer.
+  function treffer(c, vonHand) {
+    const code = codeKey(c);
+    const schon = !vonHand && pakete.findLast((p) => p.code === code);
+    if (schon) {
+      if (letzte !== schon) { letzte = schon; zuletztZeigen(); }
+      wiederAnz.hidden = false;
+      return false;
+    }
+    wiederAnz.hidden = true;
+    // Spaeter nochmal dieselbe: MHD der vorigen gleichen uebernehmen (meist zusammen gekauft); sichtbar und aenderbar.
     const vorige = c.mhd ? null : pakete.findLast((p) => p.schluessel === c.schluessel);
-    letzte = { schluessel: c.schluessel, mhd: c.mhd || (vorige ? vorige.mhd : null), codeMhd: !!c.mhd };
+    letzte = { schluessel: c.schluessel, mhd: c.mhd || (vorige ? vorige.mhd : null), codeMhd: !!c.mhd, code };
     pakete.push(letzte);
     nameSuchen(c);
     render(); zuletztZeigen();
   }
-  const scannen = () => { zuletztZeigen(); scanDialog(treffer, { unten, gesehen }); };
+  const scannen = () => { wiederAnz.hidden = true; zuletztZeigen(); scanDialog(treffer, { unten }); };
 
   async function speichern(melde, schliessen) {
     const zs = zeilen();
