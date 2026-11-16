@@ -208,3 +208,13 @@ main .suche button.baldzeile { border-left-color: #cfe0d7; } /* kein Warn-Gelb b
 .ablage span { display: flex; align-items: flex-end; min-width: 0; }
 .ablage img.foto { max-height: 58px; max-width: 52px; object-fit: contain; border-radius: 4px; }
 .ablage b { font-size: 13px; color: #555; align-self: center; }
+/* v6.5 Sortierkasten (Medizinschrank) */
+.ortscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -4px; padding: 0 4px; }
+.skwand { fill: #f6f4ef; }
+.skboden { fill: #d8d3c7; }
+.sktrenner { fill: #fbfaf7; stroke: #0001; filter: drop-shadow(0 0 3px #0003); }
+.klar { fill: #dfe4ea66; stroke: #1c1c1e; stroke-width: 2.5; }
+.klargriff { fill: #f6f4ef; stroke: #1c1c1e; stroke-width: 1.5; }
+.klname { font-size: 10px; }
+.klzahl { fill: #555; font-size: 10px; }
+.frei.leise { opacity: .35; }

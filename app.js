@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.4"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.5"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -536,7 +536,7 @@ const ausserhalb = (ortId, reihen, spalten) => stand.faecher.filter((f) => !f.ge
 const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id);
 const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
-const fachWort = (o) => (o && o.spalten === 1 ? "Schublade" : "Kiste");
+const fachWort = (o) => (o && (o.spalten === 1 || o.stil === "sortierkasten") ? "Schublade" : "Kiste");
 const fachArt = (f, o) => (f.offen ? "Ablage" : fachWort(o)); // v6.4
 const klaeren = () => ({ kisten: stand.faecher.filter((f) => f.ortKlaeren), eintraege: stand.eintraege.filter((e) => e.ortKlaeren).sort(nachAblauf) });
 
@@ -707,6 +707,20 @@ function kisteTeile(x, y, w, h, name, zahl) {
   ];
 }
 
+// v6.5 Sortierkasten-Schublade (Medizinschrank-Foto): durchsichtig, schwarzer Rahmen, Griffmulde oben, weisses Etikett rechts.
+function klarTeile(x, y, w, h, name, zahl) {
+  const kurz = kuerze(name, Math.max(3, Math.floor((w - 12) / 5.9)));
+  const lw = Math.min(w - 8, kurz.length * 5.9 + 10), mitte = x + w / 2;
+  return [
+    sv("g", { filter: "url(#zSchatten)" },
+      sv("rect", { x, y, width: w, height: h, rx: 3, class: "klar" }),
+      sv("path", { d: `M${mitte - 11} ${y + 1.5} a11 8 0 0 0 22 0`, class: "klargriff" })),
+    sv("rect", { x: x + w - lw - 4, y: y + 14, width: lw, height: 15, rx: 1.5, class: "etikett" }),
+    sv("text", { x: x + w - lw / 2 - 4, y: y + 25, "text-anchor": "middle", class: "fname kname klname" }, kurz),
+    sv("text", { x: mitte, y: y + h - 7, "text-anchor": "middle", class: "fzahl klzahl" }, zahl),
+  ];
+}
+
 // v6.4 (Tobias 16.11.): Ablage ohne Kiste - Getraenke, Kuechenrolle, Oel … stehen direkt im Regal. Statt der Kiste
 // stehen bis zu 3 Produktbilder auf dem Boden (Foto oder Bildchen, wie auf den Kacheln), darunter das Etikett.
 function ablageTeile(x, y, w, h, f, n) {
@@ -725,26 +739,34 @@ function ablageTeile(x, y, w, h, f, n) {
 }
 
 function zeichnung(ort) {
-  const W = 360, schub = ort.spalten === 1, rand = schub ? 14 : 12, luft = schub ? 9 : 10, rh = schub ? 66 : 96, spalt = 6;
-  const cw = (W - 2 * rand - (ort.spalten - 1) * luft) / ort.spalten;
+  // v6.5 Sortierkasten (Medizinschrank): breiter als der Bildschirm -> seitlich wischen; Trennwand zwischen den Schrankfaechern.
+  const sk = ort.stil === "sortierkasten", tb = sk && ort.trenner && ort.trenner < ort.spalten ? 18 : 0;
+  const W = sk ? Math.max(360, 100 * ort.spalten + tb) : 360, schub = !sk && ort.spalten === 1;
+  const rand = schub ? 14 : 12, luft = schub ? 9 : sk ? 6 : 10, rh = schub ? 66 : sk ? 58 : 96, spalt = 6;
+  const cw = (W - 2 * rand - (ort.spalten - 1) * luft - tb) / ort.spalten;
+  const xVon = (c) => rand + c * (cw + luft) + (tb && c >= ort.trenner ? tb : 0);
   const hoehe = 2 * rand + ort.reihen * rh + (ort.reihen - 1) * luft;
   const marken = H.fachMarken(H.baldAb(stand.eintraege, Modell.heuteIso())); // Abschnitt 3
   const defs = sv("defs", {});
   defs.innerHTML = ZEICHEN_DEFS;
   const svg = sv("svg", { viewBox: `0 0 ${W} ${hoehe}`, class: "ortbild", role: "group", "aria-label": ort.name }, defs);
-  if (schub) svg.append(sv("rect", { width: W, height: hoehe, rx: 16, class: "korpus" }),
+  if (sk) {
+    svg.style.width = W + "px"; svg.style.maxWidth = "none";
+    svg.append(sv("rect", { width: W, height: hoehe, rx: 6, class: "skwand" }), sv("rect", { x: 0, y: hoehe - 5, width: W, height: 5, class: "skboden" }));
+    if (tb) svg.append(sv("rect", { x: xVon(ort.trenner) - tb - luft + 4, y: 0, width: tb - 2, height: hoehe, class: "sktrenner" }));
+  } else if (schub) svg.append(sv("rect", { width: W, height: hoehe, rx: 16, class: "korpus" }),
     sv("rect", { x: 7, y: 7, width: W - 14, height: hoehe - 14, rx: 11, fill: "url(#zInnen)", stroke: "#0002" }));
   else svg.append(sv("rect", { width: W, height: hoehe, rx: 10, fill: "url(#zWand)" }),
     sv("rect", { x: 2, y: 0, width: 7, height: hoehe, class: "pfosten" }), sv("rect", { x: W - 9, y: 0, width: 7, height: hoehe, class: "pfosten" }));
   for (let r = 0; r < ort.reihen; r++) {
     const y = rand + r * (rh + luft);
     const braun = (ort.farben || [])[r] === "braun";
-    if (!schub) svg.append(sv("rect", { x: 0, y: y + rh + 1, width: W, height: 8, fill: "url(#zBoden)" }), sv("rect", { x: 0, y: y + rh + 9, width: W, height: 3, fill: "#0002" }));
+    if (!schub && !sk) svg.append(sv("rect", { x: 0, y: y + rh + 1, width: W, height: 8, fill: "url(#zBoden)" }), sv("rect", { x: 0, y: y + rh + 9, width: W, height: 3, fill: "#0002" }));
     for (let c = 0; c < ort.spalten; c++) {
-      const x = rand + c * (cw + luft);
+      const x = xVon(c);
       const hier = faecherAn(ort.id, r, c);
       if (!hier.length) {
-        const g = sv("g", { class: "frei", "data-platz": JSON.stringify({ ort: ort.id, reihe: r, spalte: c }), tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
+        const g = sv("g", { class: "frei" + (sk ? " leise" : ""), "data-platz": JSON.stringify({ ort: ort.id, reihe: r, spalte: c }), tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
         g.addEventListener("click", () => fachDialog(null, { ort: ort.id, reihe: r, spalte: c }));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fachDialog(null, { ort: ort.id, reihe: r, spalte: c }); } });
         svg.append(g);
@@ -754,12 +776,13 @@ function zeichnung(ort) {
       hier.forEach((f, i) => {
         const n = imFach(f.id).length;
         const mk = marken.get(f.id); // { n, farbe } oder undefined
-        const xi = x + i * (w + spalt), py = schub ? y + 15 : y + 26;
+        const xi = x + i * (w + spalt), py = schub ? y + 15 : sk ? y + 12 : y + 26;
         const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
           "aria-label": f.name + ", " + sachenText(n) +
             (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
           sv("rect", { x: xi, y, width: w, height: rh, rx: 8, class: "treffer" }),
-          ...(schub ? schubladeTeile(xi, y, w, rh, braun, f.name, sachenText(n)) : f.offen ? ablageTeile(xi, y, w, rh, f, n) : kisteTeile(xi, y, w, rh, f.name, sachenText(n))),
+          ...(f.offen ? ablageTeile(xi, y, w, rh, f, n) : schub ? schubladeTeile(xi, y, w, rh, braun, f.name, sachenText(n))
+            : sk ? klarTeile(xi, y, w, rh, f.name, sachenText(n)) : kisteTeile(xi, y, w, rh, f.name, sachenText(n))),
           mk && sv("circle", { cx: xi + w - 15, cy: py, r: 11, class: "punkt " + mk.farbe }),
           mk && sv("text", { x: xi + w - 15, y: py + 4.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
         // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
@@ -769,7 +792,7 @@ function zeichnung(ort) {
       });
     }
   }
-  return svg;
+  return sk ? el("div", { className: "ortscroll" }, svg) : svg;
 }
 
 // v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
@@ -2082,6 +2105,16 @@ function ortDialog(o) {
       if (aussen && !confirm(aussen + " Kisten liegen dann außerhalb und kommen in „Ort klären“. Trotzdem ändern?")) return;
       const daten = Object.entries(werte).filter(([k, w]) => w !== start[k]).map(([k, w]) => ({ typ: "feld", art: "ort", ziel: o.id, feld: k, wert: w }));
       if (!daten.length || (await tun(daten))) schliessen();
+    }],
+    // v6.5: Raster, Aussehen und alle Schubladen wie auf den Fotos; belegte Plaetze bleiben, wie sie sind.
+    o && !o.stil && ["🩹 Als Medizinschrank einrichten (Vorlage)", async (melde, schliessen) => {
+      const jetzt = ortVon(o.id);
+      if (!jetzt || jetzt.geloescht) return melde("Diesen Ort gibt es nicht mehr.");
+      const frei = (r, c) => !faecherAn(o.id, r, c).length;
+      const n = H.medizinPlaetze().filter((p) => frei(p.reihe, p.spalte)).length;
+      if (!confirm("„" + jetzt.name + "“ als Medizinschrank einrichten?\n\n2 Seiten nebeneinander, 8 × 6 Plätze, " + n +
+        " Schubladen und Ablagen mit den Etiketten vom Foto. Was schon da ist, bleibt liegen.")) return;
+      if (await tun(H.medizinSchritte(o.id, frei))) { ortWahl = o.id; schliessen(2); }
     }],
     o && ["Löschen", async (melde, schliessen) => {
       const kisten = stand.faecher.filter((f) => !f.geloescht && f.lage.ort === o.id);

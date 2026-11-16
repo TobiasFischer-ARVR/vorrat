@@ -79,6 +79,8 @@
       spalten: (w) => ganzzahl(w, 1, 20),
       farben: (w) => w === null || (Array.isArray(w) && w.length <= 20 && w.every((f) => typeof f === "string" && f.length <= 20)), // je Reihe
       reihenfolge: (w) => ganzzahl(w, 0, 999),
+      stil: (w) => w === null || w === "sortierkasten", // v6.5: Zeichnung wie Medizinschrank (durchsichtige Schubladen); fehlt = Standard
+      trenner: (w) => w === null || ganzzahl(w, 1, 19), // v6.5: Trennwand vor dieser Spalte (zwei Schrankfaecher nebeneinander)
       geloescht: bool,
     },
     fach: {

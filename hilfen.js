@@ -147,6 +147,36 @@
     return g.faecher(o.id);
   }]);
 
+  // ---- v6.5 Vorlage Medizinschrank (Tobias 16.11., Fotos) ----
+  // Haengeschrank, 2 Faecher nebeneinander (Spalten 0-3 links, 4-7 rechts), je 4 Tuerme durchsichtiger Schubladen,
+  // unten buendig wie im Schrank (Turm mit n Schubladen = die unteren n Reihen). Oben auf Turm 1 je eine Ablage.
+  // Gleiche Etiketten bekommen eine Nummer (sonst beim Verschieben nicht unterscheidbar); kurz wie auf den Etiketten,
+  // damit der Unterschied in der Zeichnung nicht abgeschnitten wird.
+  const MEDIZIN = { reihen: 6, spalten: 8, trenner: 4, tuerme: [
+    ["Klebeband", "Mullbinden", "Pflaster", "Sonderpflaster"],
+    ["Salben", "Kompressen", "Wärmepflaster"],
+    ["Ohren", "Augen", "Desinfektion", "Verband selbsthaftend", "Verband"],
+    ["Kochsalzlsg 1", "Kochsalzlsg 2", "Fingerlinge", "Thermometer & Sonstiges", "Tape & Schere"],
+    ["Magendarm 1", "Magendarm 2", "Lactose", "Kühlpack"],
+    ["Erkältung 1", "Erkältung 2", "Schmerzen"],
+    ["Baby Kochsalz", "Baby Bauch 1", "Baby Pflaster", "Baby Schmerzen"],
+    ["Baby Nasenspülung", "Baby Nase", "Baby Bauch 2", "Baby Erkältung", "Baby Zahnen", "Baby Salben"],
+  ], ablagen: [["Oben links", 0], ["Oben rechts", 4]] };
+  const medizinPlaetze = () => [
+    ...MEDIZIN.tuerme.flatMap((t, spalte) => t.map((name, i) => ({ name, reihe: MEDIZIN.reihen - t.length + i, spalte }))),
+    ...MEDIZIN.ablagen.map(([name, spalte]) => ({ name, reihe: MEDIZIN.reihen - MEDIZIN.tuerme[spalte].length - 1, spalte, offen: true })),
+  ];
+  // Schritte: Raster + Aussehen setzen, Faecher NUR auf freien Plaetzen anlegen (frei(reihe, spalte) -> bool).
+  const medizinSchritte = (ortId, frei) => [
+    ...[["reihen", MEDIZIN.reihen], ["spalten", MEDIZIN.spalten], ["stil", "sortierkasten"], ["trenner", MEDIZIN.trenner]]
+      .map(([feld, wert]) => ({ typ: "feld", art: "ort", ziel: ortId, feld, wert })),
+    ...medizinPlaetze().filter((p) => frei(p.reihe, p.spalte)).map((p) => {
+      const v = fachNeu(p.name, ortId, p.reihe, p.spalte);
+      if (p.offen) v.werte.offen = true;
+      return v;
+    }),
+  ];
+
   // ---- v5.2 Fach-Menue (Tobias 15.11.) ----
   // Aufteilen: Fach umbenennen, zweites Fach auf DEMSELBEN Platz (Zeichnung zeigt beide nebeneinander),
   // angekreuzte Eintraege hinein. Die Kennung des neuen Fachs entsteht erst beim Speichern -> Folgeschritt.
@@ -412,7 +442,7 @@
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, offDetails };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
