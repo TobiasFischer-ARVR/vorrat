@@ -1,5 +1,5 @@
 // Service Worker der Vorrats-App (Muster: UGC-App, schlanker)
-const CACHE = "vorrat-v6.10"; // UGC #71: im Gleichschritt mit APP_VERSION in app.js ("v6.10")
+const CACHE = "vorrat-v6.12"; // UGC #71: im Gleichschritt mit APP_VERSION in app.js ("v6.12")
 // konto-test.html steht bewusst NICHT hier: der fetch-Handler beantwortet nur Dateien aus
 // DATEIEN, alles andere geht direkt ans Netz. msal-browser.min.js seit v3 (Login in der App).
 const DATEIEN = ["./", "index.html", "style.css", "app.js", "modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "bilder.js",

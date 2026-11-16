@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.10"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.12"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -865,12 +865,30 @@ function rasterKnoepfe(o) {
     }
     tun([{ typ: "feld", art: "ort", ziel: o.id, feld, wert }]);
   };
+  // v6.12 (Tobias 16.11.): mit Trennwand (zwei Schrankfaecher) die Spalte fuer die LINKE Seite direkt vor der Trennwand
+  // einfuegen bzw. entfernen; die rechte Seite rueckt mit (alle Faecher ab der Trennwand eine Spalte weiter).
+  const linksAendern = (delta) => {
+    const jetzt = ortVon(o.id);
+    if (!jetzt || jetzt.geloescht || !jetzt.trenner) return hinweis("Diesen Ort gibt es nicht mehr.");
+    const t = jetzt.trenner, spalten = jetzt.spalten + delta;
+    if (delta < 0 && t < 2) return;
+    const fe = H.pruefe("ort", { spalten });
+    if (fe) return hinweis(fe);
+    const imOrt = stand.faecher.filter((f) => !f.geloescht && f.lage.ort === o.id && f.lage.spalte !== null);
+    if (delta < 0 && imOrt.some((f) => f.lage.spalte === t - 1))
+      return hinweis("In der äußeren Spalte links (vor der Trennwand) steht noch etwas – bitte erst wegziehen oder löschen.");
+    tun([{ typ: "feld", art: "ort", ziel: o.id, feld: "spalten", wert: spalten }, { typ: "feld", art: "ort", ziel: o.id, feld: "trenner", wert: t + delta },
+      ...imOrt.filter((f) => f.lage.spalte >= t).map((f) => ({ typ: "feld", art: "fach", ziel: f.id, feld: "lage", wert: { ...f.lage, spalte: f.lage.spalte + delta } }))]);
+  };
   const k = (text, aria, fn) => el("button", { className: "neben", "aria-label": aria, onclick: fn }, text);
+  const zwei = o.trenner && o.trenner < o.spalten;
   return el("div", { className: "knoepfe raster" },
     k("+ Reihe", "Reihe unten anfügen", () => aendern("reihen", 1)),
     o.reihen > 1 && k("− Reihe", "Unterste Reihe entfernen", () => aendern("reihen", -1)),
-    k("+ Spalte", "Spalte rechts anfügen", () => aendern("spalten", 1)),
-    o.spalten > 2 && k("− Spalte", "Rechte Spalte entfernen", () => aendern("spalten", -1)));
+    zwei && k("+ Spalte links", "Spalte auf der linken Seite anfügen", () => linksAendern(1)),
+    zwei && o.trenner > 1 && k("− Spalte links", "Äußere Spalte der linken Seite entfernen", () => linksAendern(-1)),
+    k(zwei ? "+ Spalte rechts" : "+ Spalte", "Spalte rechts anfügen", () => aendern("spalten", 1)),
+    o.spalten > (zwei ? o.trenner + 1 : 2) && k(zwei ? "− Spalte rechts" : "− Spalte", "Rechte Spalte entfernen", () => aendern("spalten", -1)));
 }
 
 // Antippen = kurz, lange druecken (0,5 s) = lang. Scrollen bricht ab (pointercancel).
@@ -1037,6 +1055,20 @@ function zielWahl(aktFach, jetztWort = " (jetzt)") {
   fuellen();
   return { teil: [el("div", { className: "zeilen" }, feld("Ort", ortSel), fachFeld), leer], wert: () => (!ortSel.value ? undefined : fachSel.value || "") };
 }
+// v6.12 (Tobias 16.11.: "alle Produkte aus Schublade 1 auf einmal loeschen"): markierte Eintraege in EINEM Schritt loeschen,
+// ein Rueckgaengig. Weg: lange druecken -> "Alle" -> "Loeschen".
+async function mehrLoeschen(ids) {
+  const es = ids.map(eintragJetzt).filter(Boolean);
+  if (!es.length) return hinweis("Die markierten Sachen gibt es nicht mehr.");
+  const stueck = es.reduce((s, e) => s + e.menge, 0);
+  if (!confirm(sachenText(es.length) + " (" + stueck + " Stück) löschen?" + String.fromCharCode(10, 10) +
+    es.slice(0, 8).map((e) => "• " + e.name).join(String.fromCharCode(10)) + (es.length > 8 ? String.fromCharCode(10) + "…" : ""))) return;
+  const schritte = (wert) => es.map((e) => ({ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert }));
+  if (!(await tun(schritte(true)))) return;
+  zurueck(); // Markier-Ebene schliessen
+  untenZeigen(sachenText(es.length) + " gelöscht", "Rückgängig", async () => { if (await tun(schritte(false))) untenZeigen(sachenText(es.length) + " zurückgeholt"); });
+}
+
 // Ziel waehlen und verschieben, fuer einen oder mehrere Eintraege. inhalt(zielTeil) = Dialoginhalt, zu = Ebenen beim Schliessen.
 function verschiebenDialog(ids, aktFach, titel, inhalt = (t) => [t], zu = 1) {
   const z = zielWahl(aktFach);
@@ -1191,6 +1223,7 @@ function fachAnsicht(ebene) {
     m && el("div", { className: "knoepfe markleiste", role: "status" },
       el("b", null, m.size + " markiert"),
       el("button", { onclick: () => verschiebenDialog([...m], id, sachenText(m.size) + " verschieben nach …", undefined, 2) }, "↦ Verschieben"), // 2 = Dialog + Markier-Ebene
+      el("button", { className: "gefahr", onclick: () => mehrLoeschen([...m]) }, "🗑 Löschen"),
       m.size < es.length && el("button", { className: "neben", onclick: () => { for (const e of es) m.add(e.id); zeichnen(); } }, "Alle"),
       el("button", { className: "neben", onclick: () => zurueck() }, "Fertig")),
     el("div", { className: "kacheln" }, es.map((e) => {
@@ -2180,7 +2213,12 @@ async function medizinEinrichten(id) {
   if (!o || o.geloescht) { hinweis("Diesen Ort gibt es nicht mehr."); return false; }
   // Vorlagen-Schubladen, die es schon gibt, werden umgesetzt - sie zaehlen beim "frei" nicht als Hindernis.
   const namen = new Set(H.medizinPlaetze().map((p) => p.name));
-  // je Name nur die erste (Review: doppelte Namen) - alle anderen Faecher im Ort gelten als Hindernis
+  // v6.11 (Tobias 16.11.: zwei "Kochsalzlsg 2" nach Umbenennen -> Vorlage legte "Kochsalzlsg 1" neu an, die doppelte landete
+  // verdeckt in "Ort klaeren"): doppelte Vorlagen-Namen erst aufloesen lassen, dann umsetzen.
+  const doppelt = [...namen].filter((n) => stand.faecher.filter((f) => !f.geloescht && f.lage.ort === id && f.name === n).length > 1);
+  if (doppelt.length) { alert("Diese Namen gibt es im " + o.name + " mehrfach:\n\n• " + doppelt.join("\n• ") +
+    "\n\nBitte erst umbenennen oder löschen (lange drücken), dann nochmal – sonst landen Schubladen am falschen Platz."); return false; }
+  // je Name nur die erste - alle anderen Faecher im Ort gelten als Hindernis
   const vorhanden = [];
   for (const f of stand.faecher) if (!f.geloescht && f.lage.ort === id && namen.has(f.name) && !vorhanden.some((v) => v.name === f.name)) vorhanden.push(f);
   const umzug = new Set(vorhanden.map((f) => f.id));
