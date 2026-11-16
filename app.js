@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.5"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.6"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -590,6 +590,9 @@ function startAnsicht() {
       nPruefen > 0 && el("button", { className: "bestand", onclick: () => oeffne({ art: "bestand" }) }, "Bestand prüfen (" + nPruefen + ")")),
     zeichnung(ortVon(ortWahl)),
     rasterKnoepfe(ortVon(ortWahl)),
+    // v6.6 (Tobias: "da sehe ich 6 Felder"): Vorlage sichtbar anbieten, solange der Medizinschrank noch der alte Platzhalter ist.
+    ortVon(ortWahl).name === "Medizinschrank" && !ortVon(ortWahl).stil &&
+      el("button", { className: "neben gross", onclick: () => medizinEinrichten(ortWahl) }, "🩹 Wie auf dem Foto einrichten (34 Schubladen)"),
     el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
@@ -612,7 +615,7 @@ function suchTeil() {
       el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)))))),
       ...(q && !treffer.length ? [el("li", { className: "klein" }, "Nichts gefunden.")] : []));
   };
-  const feldS = el("input", { type: "search", value: suchText, placeholder: "🔍 Suchen, z. B. Tomat", autocomplete: "off", "aria-label": "Vorrat durchsuchen",
+  const feldS = el("input", { type: "search", value: suchText, placeholder: "🔍 Produkt suchen", autocomplete: "off", "aria-label": "Vorrat durchsuchen",
     oninput: () => { suchText = feldS.value; fuellen(); } });
   fuellen();
   // Neuzeichnen (z. B. Abgleich fertig) waehrend des Tippens: Fokus und Cursor ins neue Feld uebernehmen
@@ -2079,6 +2082,19 @@ function fachAufFach(id, zielId) {
   ]);
 }
 
+// v6.5/v6.6: Vorlage Medizinschrank anwenden (Ort-Dialog und Knopf unter der Zeichnung). Belegte Plaetze bleiben.
+async function medizinEinrichten(id) {
+  const o = ortVon(id);
+  if (!o || o.geloescht) { hinweis("Diesen Ort gibt es nicht mehr."); return false; }
+  const frei = (r, c) => !faecherAn(id, r, c).length;
+  const n = H.medizinPlaetze().filter((p) => frei(p.reihe, p.spalte)).length;
+  if (!confirm("„" + o.name + "“ als Medizinschrank einrichten?\n\n2 Seiten nebeneinander, 8 × 6 Plätze, " + n +
+    " Schubladen und Ablagen mit den Etiketten vom Foto. Was schon da ist, bleibt liegen.")) return false;
+  if (!(await tun(H.medizinSchritte(id, frei)))) return false;
+  ortWahl = id;
+  return true;
+}
+
 function ortDialog(o) {
   const zahl = (w, min, max) => el("input", { type: "number", min, max, value: String(w), inputMode: "numeric" });
   const name = el("input", { value: o ? o.name : "", maxLength: 60, autocomplete: "off" });
@@ -2107,15 +2123,7 @@ function ortDialog(o) {
       if (!daten.length || (await tun(daten))) schliessen();
     }],
     // v6.5: Raster, Aussehen und alle Schubladen wie auf den Fotos; belegte Plaetze bleiben, wie sie sind.
-    o && !o.stil && ["🩹 Als Medizinschrank einrichten (Vorlage)", async (melde, schliessen) => {
-      const jetzt = ortVon(o.id);
-      if (!jetzt || jetzt.geloescht) return melde("Diesen Ort gibt es nicht mehr.");
-      const frei = (r, c) => !faecherAn(o.id, r, c).length;
-      const n = H.medizinPlaetze().filter((p) => frei(p.reihe, p.spalte)).length;
-      if (!confirm("„" + jetzt.name + "“ als Medizinschrank einrichten?\n\n2 Seiten nebeneinander, 8 × 6 Plätze, " + n +
-        " Schubladen und Ablagen mit den Etiketten vom Foto. Was schon da ist, bleibt liegen.")) return;
-      if (await tun(H.medizinSchritte(o.id, frei))) { ortWahl = o.id; schliessen(2); }
-    }],
+    o && !o.stil && ["🩹 Als Medizinschrank einrichten (Vorlage)", async (melde, schliessen) => { if (await medizinEinrichten(o.id)) schliessen(2); }],
     o && ["Löschen", async (melde, schliessen) => {
       const kisten = stand.faecher.filter((f) => !f.geloescht && f.lage.ort === o.id);
       const n = kisten.reduce((s, f) => s + imFach(f.id).length, 0);
