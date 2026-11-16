@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.6"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.7"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -530,9 +530,19 @@ const fachVon = (id) => stand.faecher.find((f) => f.id === id);
 const nachName = (a, b) => a.name.localeCompare(b.name, "de", { numeric: true }) || (a.id < b.id ? -1 : 1);
 const faecherAn = (ort, reihe, spalte, ausser) => stand.faecher.filter((f) => !f.geloescht && f.id !== ausser &&
   f.lage.ort === ort && f.lage.reihe === reihe && f.lage.spalte === spalte).sort(nachName);
+// v6.7 Hoehe: ein Fach mit hoch = n belegt die Plaetze reihe .. reihe+n-1 seiner Spalte.
+const hoeheVon = (f) => f.hoch || 1;
+// Faecher, die den Platz (r, c) belegen: dort verankert ODER von weiter oben hineinragend.
+const faecherUeber = (ort, r, c, ausser) => stand.faecher.filter((f) => !f.geloescht && f.id !== ausser && f.lage.ort === ort &&
+  f.lage.spalte === c && f.lage.reihe !== null && f.lage.reihe <= r && r < f.lage.reihe + hoeheVon(f));
+// Genug Platz fuer ein Fach der Hoehe h ab (r, c): im Raster und keine fremden Faecher auf den Plaetzen.
+// Platz l liegt im Bereich eines hohen Fachs, das weiter oben verankert ist.
+const verdeckt = (l, ausser) => faecherUeber(l.ort, l.reihe, l.spalte, ausser).some((x) => x.lage.reihe !== l.reihe);
+const platzFrei = (ort, r, c, ausser, h = 1) => { const o = ortVon(ort); return !!o && r + h <= o.reihen &&
+  Array.from({ length: h }, (_, i) => faecherUeber(ort, r + i, c, ausser).length === 0).every(Boolean); };
 // Faecher, die bei einem Raster von reihen x spalten ausserhalb laegen (Ort verkleinern: Knoepfe und Ort-Dialog).
 const ausserhalb = (ortId, reihen, spalten) => stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ortId &&
-  (f.lage.reihe >= reihen || f.lage.spalte >= spalten));
+  (f.lage.reihe + hoeheVon(f) > reihen || f.lage.spalte >= spalten));
 const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id);
 const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
@@ -761,6 +771,7 @@ function zeichnung(ort) {
     sv("rect", { x: 7, y: 7, width: W - 14, height: hoehe - 14, rx: 11, fill: "url(#zInnen)", stroke: "#0002" }));
   else svg.append(sv("rect", { width: W, height: hoehe, rx: 10, fill: "url(#zWand)" }),
     sv("rect", { x: 2, y: 0, width: 7, height: hoehe, class: "pfosten" }), sv("rect", { x: W - 9, y: 0, width: 7, height: hoehe, class: "pfosten" }));
+  const faecherG = []; // v6.7: hohe Faecher zuletzt anhaengen, sonst laege der Regalboden darunter ueber ihnen
   for (let r = 0; r < ort.reihen; r++) {
     const y = rand + r * (rh + luft);
     const braun = (ort.farben || [])[r] === "braun";
@@ -768,7 +779,7 @@ function zeichnung(ort) {
     for (let c = 0; c < ort.spalten; c++) {
       const x = xVon(c);
       const hier = faecherAn(ort.id, r, c);
-      if (!hier.length) {
+      if (!faecherUeber(ort.id, r, c).length) {
         const g = sv("g", { class: "frei" + (sk ? " leise" : ""), "data-platz": JSON.stringify({ ort: ort.id, reihe: r, spalte: c }), tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
         g.addEventListener("click", () => fachDialog(null, { ort: ort.id, reihe: r, spalte: c }));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fachDialog(null, { ort: ort.id, reihe: r, spalte: c }); } });
@@ -777,24 +788,25 @@ function zeichnung(ort) {
       // Mehrere Faecher auf einem Platz (Aufteilen) stehen nebeneinander, mit kleinem Spalt.
       const w = (cw - (hier.length - 1) * spalt) / Math.max(1, hier.length);
       hier.forEach((f, i) => {
-        const n = imFach(f.id).length;
+        const n = imFach(f.id).length, hp = hoeheVon(f) * rh + (hoeheVon(f) - 1) * luft;
         const mk = marken.get(f.id); // { n, farbe } oder undefined
         const xi = x + i * (w + spalt), py = schub ? y + 15 : sk ? y + 12 : y + 26;
         const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
           "aria-label": f.name + ", " + sachenText(n) +
             (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
-          sv("rect", { x: xi, y, width: w, height: rh, rx: 8, class: "treffer" }),
-          ...(f.offen ? ablageTeile(xi, y, w, rh, f, n) : schub ? schubladeTeile(xi, y, w, rh, braun, f.name, sachenText(n))
-            : sk ? klarTeile(xi, y, w, rh, f.name, sachenText(n)) : kisteTeile(xi, y, w, rh, f.name, sachenText(n))),
+          sv("rect", { x: xi, y, width: w, height: hp, rx: 8, class: "treffer" }),
+          ...(f.offen ? ablageTeile(xi, y, w, hp, f, n) : schub ? schubladeTeile(xi, y, w, hp, braun, f.name, sachenText(n))
+            : sk ? klarTeile(xi, y, w, hp, f.name, sachenText(n)) : kisteTeile(xi, y, w, hp, f.name, sachenText(n))),
           mk && sv("circle", { cx: xi + w - 15, cy: py, r: 11, class: "punkt " + mk.farbe }),
           mk && sv("text", { x: xi + w - 15, y: py + 4.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
         // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
         druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f), fachZug(f));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
-        svg.append(g);
+        if (hoeheVon(f) > 1) faecherG.push(g); else svg.append(g); // Tab-Reihenfolge bleibt Reihe fuer Reihe
       });
     }
   }
+  svg.append(...faecherG);
   return sk ? el("div", { className: "ortscroll" }, svg) : svg;
 }
 
@@ -1924,6 +1936,8 @@ function fachDialog(f, lage, nur) {
     const opt = f.ortKlaeren ? [el("option", { value: "" }, "– kein gültiger Platz –")] : [];
     for (const o of orteSichtbar()) for (let r = 0; r < o.reihen; r++) for (let c = 0; c < o.spalten; c++) {
       const meins = !f.ortKlaeren && f.lage.ort === o.id && f.lage.reihe === r && f.lage.spalte === c;
+      // v6.7: hohes Fach nur auf genug freien Platz; einfache nicht in/neben hohe Faecher
+      if (!meins && (hoeheVon(f) > 1 ? !platzFrei(o.id, r, c, f.id, hoeheVon(f)) : faecherUeber(o.id, r, c, f.id).some((x) => hoeheVon(x) > 1))) continue;
       const da = faecherAn(o.id, r, c, f.id); // v5.3: belegte Plaetze auch (daneben legen, wie nach dem Aufteilen)
       opt.push(el("option", { value: JSON.stringify({ ort: o.id, reihe: r, spalte: c }), selected: meins },
         o.name + " · " + platzName(o, r, c) + (meins ? " (jetzt)" : da.length ? " (neben „" + da.map((x) => x.name).join("“, „") + "“)" : " (frei)")));
@@ -1946,6 +1960,7 @@ function fachDialog(f, lage, nur) {
         const l = JSON.parse(platzSel.value);
         if (l.ort !== f.lage.ort || l.reihe !== f.lage.reihe || l.spalte !== f.lage.spalte) {
           if (nameDort(f.name, l, f.id)) return melde("Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen.");
+          if (hoeheVon(f) > 1 && !platzFrei(l.ort, l.reihe, l.spalte, f.id, hoeheVon(f))) return melde("Dort ist nicht genug Platz für dieses hohe Fach.");
           werte.lage = l;
         }
       }
@@ -1976,6 +1991,7 @@ function fachMenue(alt) {
     ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
     !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
     nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
+    ...hoehenKnoepfe(f),
     o && o.spalten > 1 && [f.offen ? "📦 In Kiste umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
       const jetzt = fachVon(f.id);
       if (!jetzt || jetzt.geloescht) return melde("Dieses Fach gibt es nicht mehr.");
@@ -1986,6 +2002,40 @@ function fachMenue(alt) {
       if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "geloescht", wert: true }])) fachWegSchliessen(f, schliessen);
     }, "gefahr"],
   ]);
+}
+
+// v6.7 (Tobias 16.11.): Faecher in der Hoehe verbinden. Nur fuer Faecher, die ihren Platz allein haben (nicht aufgeteilt).
+// Moeglichkeiten werden bei jedem Tipp gegen den AKTUELLEN Stand neu bestimmt (Abgleich waehrend das Menue offen ist).
+function hoehenLage(id) {
+  const f = fachVon(id), o = f && ortVon(f.lage.ort);
+  if (!f || f.geloescht || f.ortKlaeren || !o || nachbarn(f).length) return null;
+  const h = hoeheVon(f), r = f.lage.reihe, c = f.lage.spalte, unten = r + h < o.reihen ? faecherUeber(o.id, r + h, c) : null;
+  const untenFach = unten && unten.length === 1 && unten[0].lage.reihe === r + h && !nachbarn(unten[0]).length ? unten[0] : null;
+  return { f, h, r, untenFrei: !!unten && !unten.length, untenFach, obenFrei: r > 0 && !faecherUeber(o.id, r - 1, c).length };
+}
+function hoehenKnoepfe(alt) {
+  const L = hoehenLage(alt.id);
+  if (!L) return [];
+  // pruef(J) enthaelt auch die Grenze 6 Reihen (Modell erlaubt hoch 2..6)
+  const tu = (pruef, schritte) => async (melde, schliessen) => {
+    const J = hoehenLage(alt.id);
+    if (!J || !pruef(J)) return melde("Das geht inzwischen nicht mehr – bitte das Menü neu öffnen.");
+    if (await tun(schritte(J))) schliessen();
+  };
+  const passt = (J, dazu) => J.h + dazu <= 6;
+  const fach = (feld, wert) => ({ typ: "feld", art: "fach", ziel: alt.id, feld, wert });
+  return [
+    L.untenFrei && passt(L, 1) && ["↕ Nach unten vergrößern", tu((J) => J.untenFrei && passt(J, 1), (J) => [fach("hoch", J.h + 1)])],
+    L.untenFach && passt(L, hoeheVon(L.untenFach)) && ["↕ Mit „" + kuerze(L.untenFach.name, 20) + "“ darunter verbinden", async (melde, schliessen) => {
+      const n = imFach(L.untenFach.id).length;
+      if (!confirm("„" + L.untenFach.name + "“ mit „" + L.f.name + "“ verbinden?\n\n„" + L.untenFach.name + "“ verschwindet" +
+        (n ? ", " + sachenText(n) + " wandern mit nach „" + L.f.name + "“." : ".") + " Mit „Wieder 1 Platz hoch“ wird es wieder klein (der untere Platz ist dann frei).")) return;
+      return tu((J) => J.untenFach && J.untenFach.id === L.untenFach.id && passt(J, hoeheVon(J.untenFach)),
+        (J) => H.verbindenSchritte(alt.id, J.h + hoeheVon(J.untenFach), J.untenFach.id, imFach(J.untenFach.id).map((e) => e.id)))(melde, schliessen);
+    }],
+    L.obenFrei && passt(L, 1) && ["↑ Nach oben vergrößern", tu((J) => J.obenFrei && passt(J, 1), (J) => [fach("lage", { ...J.f.lage, reihe: J.r - 1 }), fach("hoch", J.h + 1)])],
+    L.h > 1 && ["Wieder 1 Platz hoch (bleibt oben)", tu((J) => J.h > 1, () => [fach("hoch", null)])],
+  ];
 }
 
 // Zwei Teile nebeneinander auf demselben Platz; angekreuzte Eintraege kommen ins neue Teil.
@@ -2007,7 +2057,7 @@ function aufteilenDialog(f) {
       return melde("Bitte verschiedene Namen – sonst lassen sich die Teile nicht unterscheiden.");
     if (!fachGueltig(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
     const ids = haken.filter((h) => h.box.checked && eintragJetzt(h.e.id)?.fach === f.id).map((h) => h.e.id);
-    if (!(await tun(H.aufteilenSchritte(f, a, b, ids)))) return;
+    if (!(await tun(H.aufteilenSchritte(fachVon(f.id), a, b, ids)))) return;
     schliessen();
     untenZeigen("Aufgeteilt: „" + a + "“ und „" + b + "“");
   }]]);
@@ -2052,22 +2102,27 @@ async function lagenSetzen(neu, text) {
   untenZeigen(text, "Rückgängig", async () => {
     if (!neu.every(([id, lage]) => fachGueltig(id) && gleicheLage(fachVon(id).lage, lage)))
       return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
-    if (!alt.every(([, lage]) => lageGueltig(lage))) return hinweis("Den alten Platz gibt es nicht mehr – Rückgängig nicht möglich.");
+    if (!alt.every(([i, l]) => lageGueltig(l) && (hoeheVon(fachVon(i)) === 1 ? !verdeckt(l, i) : platzFrei(l.ort, l.reihe, l.spalte, i, hoeheVon(fachVon(i))))))
+      return hinweis("Den alten Platz gibt es nicht mehr – Rückgängig nicht möglich.");
     if (await tun(alt.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })))) untenZeigen("Zurück verschoben");
   });
 }
 function fachAufPlatz(id, lage) {
   if (!fachGueltig(id)) return hinweis("Dieses Fach gibt es nicht mehr.");
   if (!lageGueltig(lage)) return hinweis("Diesen Platz gibt es nicht mehr.");
-  if (faecherAn(lage.ort, lage.reihe, lage.spalte, id).length) return hinweis("Der Platz ist inzwischen belegt – bitte nochmal ziehen.");
+  const h = hoeheVon(fachVon(id));
+  if (!platzFrei(lage.ort, lage.reihe, lage.spalte, id, h))
+    return hinweis(h > 1 ? "Dort ist nicht genug Platz für ein Fach über " + h + " Reihen." : "Der Platz ist inzwischen belegt – bitte nochmal ziehen.");
   const o = ortVon(lage.ort);
   lagenSetzen([[id, lage]], "„" + fachVon(id).name + "“ → " + o.name + " · " + platzName(o, lage.reihe, lage.spalte));
 }
 function fachAufFach(id, zielId) {
   if (!fachGueltig(id) || !fachGueltig(zielId)) return hinweis("Dieses Fach gibt es nicht mehr.");
+  if (hoeheVon(fachVon(id)) > 1 || hoeheVon(fachVon(zielId)) > 1) return hinweis("Hohe Fächer bitte auf einen freien Platz ziehen – Tauschen/Daneben geht nur mit einfachen.");
   // Beide Knoepfe pruefen erst den aktuellen Stand; paare(x, y) -> [[id, lage], ...] oder Fehlertext.
   const knopf = (text, paare, meldung) => [text, (melde, schliessen) => {
     if (!fachGueltig(id) || !fachGueltig(zielId)) return melde("Ein Fach gibt es nicht mehr.");
+    if (hoeheVon(fachVon(id)) > 1 || hoeheVon(fachVon(zielId)) > 1) return melde("Inzwischen ist eins der Fächer hoch – bitte auf einen freien Platz ziehen.");
     const x = fachVon(id), y = fachVon(zielId), r = paare(x, y);
     if (typeof r === "string") return melde(r);
     schliessen();
@@ -2086,8 +2141,8 @@ function fachAufFach(id, zielId) {
 async function medizinEinrichten(id) {
   const o = ortVon(id);
   if (!o || o.geloescht) { hinweis("Diesen Ort gibt es nicht mehr."); return false; }
-  const frei = (r, c) => !faecherAn(id, r, c).length;
-  const n = H.medizinPlaetze().filter((p) => frei(p.reihe, p.spalte)).length;
+  const frei = (r, c) => !faecherUeber(id, r, c).length;
+  const n = H.medizinSchritte(id, frei).filter((v) => v.typ === "neu").length;
   if (!confirm("„" + o.name + "“ als Medizinschrank einrichten?\n\n2 Seiten nebeneinander, 8 × 6 Plätze, " + n +
     " Schubladen und Ablagen mit den Etiketten vom Foto. Was schon da ist, bleibt liegen.")) return false;
   if (!(await tun(H.medizinSchritte(id, frei)))) return false;

@@ -87,6 +87,7 @@
       name: (w) => text(w, 60),
       lage: lageGueltig,
       offen: bool, // v6.4: Ablage ohne Kiste (Produkte stehen direkt im Regal); fehlt = Kiste
+      hoch: (w) => w === null || ganzzahl(w, 2, 6), // v6.7: Fach reicht ueber so viele Reihen nach unten; fehlt = 1
       geloescht: bool,
     },
     eintrag: {
@@ -256,9 +257,14 @@
     const fachNach = new Map(faecher.map((f) => [f.id, f]));
     for (const f of faecher) {
       const o = ortNach.get(f.lage.ort);
-      f.ortKlaeren = !f.geloescht && (!o || o.geloescht || f.lage.reihe === null || f.lage.reihe >= o.reihen || f.lage.spalte >= o.spalten);
+      f.ortKlaeren = !f.geloescht && (!o || o.geloescht || f.lage.reihe === null || f.lage.reihe + (f.hoch || 1) > o.reihen || f.lage.spalte >= o.spalten);
     }
     // ponytail: zwei Faecher auf demselben Platz (gleichzeitig angelegt) werden beide gezeigt, keine Sonderregel.
+    // v6.7: ein Fach, das ein hohes Fach darueber verdeckt (z. B. gleichzeitig auf zwei Handys entstanden), kommt nach
+    // "Ort klaeren" - sonst laegen beide unsichtbar uebereinander. ponytail: O(n^2), bei < 200 Faechern egal.
+    for (const f of faecher) if (!f.geloescht && !f.ortKlaeren && (f.hoch || 1) > 1)
+      for (const g of faecher) if (g !== f && !g.geloescht && !g.ortKlaeren && g.lage.ort === f.lage.ort && g.lage.spalte === f.lage.spalte &&
+        g.lage.reihe > f.lage.reihe && g.lage.reihe < f.lage.reihe + f.hoch) g.ortKlaeren = true;
     for (const e of eintraege) {
       const o = objekte.get(e.id);
       const f = e.fach ? fachNach.get(e.fach) : null;
