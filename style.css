@@ -173,3 +173,9 @@ main button.scanstart { display: block; width: 100%; margin-top: 12px; padding: 
 /* v5.3 Faecher ziehen */
 .platz.angehoben rect:first-child { stroke: #1d6b49; stroke-width: 5; stroke-dasharray: 8 4; }
 .frei.ziel rect { stroke: #1d6b49; stroke-width: 6; stroke-dasharray: none; fill: #dcefe5; }
+/* v6 A: Produktfotos statt Bildchen */
+.bild img.foto { pointer-events: none; -webkit-user-drag: none; display: block; width: 3.4rem; height: 3.4rem; object-fit: cover; border-radius: 10px; background: #fff; }
+.baldzeile .bild img.foto { width: 2.6rem; height: 2.6rem; border-radius: 8px; }
+.mzeile .bild img.foto { width: 2rem; height: 2rem; border-radius: 6px; }
+.codezeile { align-items: center; }
+.codezeile > button { margin: 0; flex: none; }

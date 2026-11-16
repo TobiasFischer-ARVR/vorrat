@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v5.4"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.0"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -380,6 +380,11 @@ async function geraetLoeschen(grund) {
     fehlerZeigen("Nichts gelöscht: " + ((x && x.message) || x) + ". Bitte die App neu laden.");
     return false;
   }
+  // v6 A: nur Internetbilder (wiederbeschaffbar) -> nach den Vorgaengen, Fehler hier egal
+  bildGen++; bildSchlange.length = 0; // laufende Abrufe schreiben danach nichts mehr
+  try { await Bilder.leeren(); } catch (_) { /* wiederbeschaffbar */ }
+  for (const u of bildUrls.values()) if (u) URL.revokeObjectURL(u);
+  bildUrls.clear(); bildNetz.clear(); bildSpaeter.clear();
   stand = null;
   return true;
 }
@@ -576,7 +581,7 @@ function baldZeile(x) {
   const wort = { abgelaufen: "abgelaufen", rot: "bald", gelb: "demnächst" }[x.stufe];
   const z = el("button", { className: "baldzeile " + x.stufe, "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " +
       H.baldText(x.tage) + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
-    el("span", { className: "bild", "aria-hidden": "true" }, e.symbol || H.bildchen(e.name)),
+    el("span", { className: "bild", "aria-hidden": "true" }, bildOder(e.code, e.symbol || H.bildchen(e.name))),
     el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
     el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)), el("span", null, x.stufe === "abgelaufen" ? "abgelaufen" : H.baldText(x.tage))));
   z.dataset.stufe = wort;
@@ -870,7 +875,7 @@ function eintragMenue(e) {
 function kachel(e, kurz, lang, ziehbar) {
   const st = Modell.stufe(e.ablauf, Modell.heuteIso());
   const k = el("button", { className: "kachel" + (st === "rot" || st === "gelb" ? " " + st : "") + (e.bestandPruefen ? " pruefen" : "") },
-    el("span", { className: "bild" }, e.symbol || H.bildchen(e.name)),
+    el("span", { className: "bild" }, bildOder(e.code, e.symbol || H.bildchen(e.name))),
     el("span", { className: "name" }, e.name),
     e.menge >= 2 && el("span", { className: "zahl" }, "×" + e.menge),
     el("span", { className: "datum" }, H.kurzDatum(e)),
@@ -1075,12 +1080,76 @@ function codeMerken(schluessel, name) { try { localStorage.setItem(CODES_KEY, JS
 async function offSuchen(ean) {
   if (navigator.onLine === false) return { name: null, offline: true };
   try {
-    const r = await fetch("https://world.openfoodfacts.org/api/v2/product/" + encodeURIComponent(ean) + ".json?fields=product_name,product_name_de,brands",
+    const r = await fetch("https://world.openfoodfacts.org/api/v2/product/" + encodeURIComponent(ean) + ".json?fields=product_name,product_name_de,brands,image_front_url",
       { signal: AbortSignal.timeout(6000), credentials: "omit", referrerPolicy: "no-referrer" });
     if (!r.ok) return { name: null }; // 404 = unbekanntes Produkt
-    return { name: H.offName(await r.json()) };
+    const j = await r.json();
+    return { name: H.offName(j), bild: H.offBild(j) };
   } catch (_) { return { name: null, offline: true }; }
 }
+
+// ==== v6 Abschnitt A: Produktbilder (Internetbild je GTIN, Speicher in bilder.js) ====
+// bildFuer(code) antwortet sofort (blob:-Adresse oder null) und stoesst das Laden an: erst Bild-Speicher, dann
+// einmal je App-Start und Code Open Food Facts, hoechstens 2 Netzabrufe gleichzeitig. PZN nie ans Netz (Codex #13).
+const bildUrls = new Map();  // code -> blob:-Adresse | null (gesucht/laeuft/keins)
+const bildNetz = new Set();  // Codes, fuer die in dieser Sitzung schon im Netz gesucht wurde
+const bildSchlange = [];
+let bildNetzLaeuft = 0, bildZeichnenUhr = null, bildGen = 0;
+const bildSpaeter = new Set(); // offline gescheitert -> beim naechsten "online" erneut (Review v6 A #4)
+addEventListener("online", () => {
+  for (const c of bildSpaeter) { bildNetz.delete(c); bildUrls.delete(c); }
+  if (bildSpaeter.size) { bildSpaeter.clear(); zeichnen(); }
+});
+const offTauglich = (code) => typeof code === "string" && code.startsWith("gtin:");
+function bildFuer(code) {
+  if (!offTauglich(code)) return null;
+  if (bildUrls.has(code)) return bildUrls.get(code);
+  bildUrls.set(code, null);
+  bildLaden(code, null);
+  return null;
+}
+// Adresse schon bekannt (Produkt-Antwort beim Scannen): spart den zweiten Abruf.
+function bildMitUrl(code, url) {
+  if (!offTauglich(code) || !url || bildUrls.get(code)) return;
+  bildUrls.set(code, null);
+  bildLaden(code, url);
+}
+async function bildLaden(code, url) {
+  const gespeichert = await Bilder.offLesen(code);
+  if (gespeichert) return bildDa(code, gespeichert);
+  if (bildNetz.has(code)) return;
+  bildNetz.add(code);
+  bildSchlange.push([code, url]);
+  bildWeiter();
+}
+function bildWeiter() {
+  while (bildNetzLaeuft < 2 && bildSchlange.length) {
+    const [code, url] = bildSchlange.shift();
+    const gen = bildGen;
+    bildNetzLaeuft++;
+    (async () => {
+      try {
+        if (navigator.onLine === false) { bildSpaeter.add(code); return; }
+        const r = url ? null : await offSuchen(code.slice(5));
+        if (r && r.offline) { bildSpaeter.add(code); return; }
+        const u = url || r.bild;
+        const blob = u ? await Bilder.offLaden(u) : null;
+        if (gen !== bildGen) return; // inzwischen "Geraetedaten loeschen": nichts mehr schreiben (Review v6 A #3)
+        if (blob) { await Bilder.offSchreiben(code, blob); bildDa(code, blob); }
+      } catch (_) { /* kein Bild */ } finally { bildNetzLaeuft--; bildWeiter(); }
+    })();
+  }
+}
+function bildDa(code, blob) {
+  const alt = bildUrls.get(code);
+  if (alt) URL.revokeObjectURL(alt);
+  bildUrls.set(code, URL.createObjectURL(blob));
+  document.dispatchEvent(new Event("vorrat-bild"));
+  clearTimeout(bildZeichnenUhr);
+  bildZeichnenUhr = setTimeout(zeichnen, 150); // mehrere Bilder kurz nacheinander = einmal neu zeichnen
+}
+// Foto fuer Kachel/Zeile, sonst das Bildchen.
+const bildOder = (code, ersatz) => { const u = code ? bildFuer(code) : null; return u ? el("img", { src: u, alt: "", className: "foto", draggable: false }) : ersatz; };
 
 // Kamera + BarcodeDetector. fertig(ergebnis von H.leseCode/codeAusEingabe) nur bei einem brauchbaren Code.
 // Die Kamera wird bei Treffer, Abbrechen, Android-Zurueck, App im Hintergrund und Fehler gestoppt (stopp()).
@@ -1233,7 +1302,7 @@ function multiScan(fachId, alt) {
     const minus = () => { const g = gruppe(); pakete.splice(pakete.lastIndexOf(g[g.length - 1]), 1); render(); };
     const plus = () => { if (z.menge < 999) { pakete.push(Object.assign({}, gruppe()[0])); render(); } };
     return el("div", { className: "mzeile" + ((namen[s] || "").trim() ? "" : " ohnename") },
-      el("span", { className: "bild", "aria-hidden": "true" }, H.bildchen(namen[s] || "")), name,
+      el("span", { className: "bild", "aria-hidden": "true" }, bildOder(s, H.bildchen(namen[s] || ""))), name,
       el("button", { type: "button", className: "mdetail", onclick: () => zeileDialog(z, gruppe) },
         (z.mhd ? "MHD " + H.deDatum(z.mhd) : "kein MHD") + (z.fach ? " · " + fachText(z.fach) : "") + " ✎"),
       el("div", { className: "plusminus" }, el("button", { type: "button", "aria-label": "eins weniger", onclick: minus }, "−"),
@@ -1260,10 +1329,11 @@ function multiScan(fachId, alt) {
     const s = c.schluessel;
     if (s in namen || s in notiz) return; // schon bekannt oder Suche laeuft
     const gemerkt = codeName(s);
-    if (gemerkt) return nameSetzen(s, gemerkt);
+    if (gemerkt) { bildFuer(s); return nameSetzen(s, gemerkt); } // gemerkter Name: Bild trotzdem holen (Bauplan B3)
     if (!c.ean) { notiz[s] = c.anzeige + " · Name eintippen, wird gemerkt"; return; }
     notiz[s] = "suche Namen …";
     const r = await offSuchen(c.ean);
+    if (r.bild) bildMitUrl(s, r.bild);
     // Code-Nummer mit anzeigen: so laesst sich mit der Packung vergleichen, ob die Kamera sich verlesen hat
     notiz[s] = r.name ? c.anzeige : c.anzeige + " · " + (r.offline ? "offline" : "unbekannt") + ", Name eintippen";
     for (const i of tabelle.querySelectorAll("input[data-schl]")) if (i.dataset.schl === s) i.placeholder = notiz[s];
@@ -1330,7 +1400,7 @@ function multiScan(fachId, alt) {
       if (fach === "") return melde("Dieser Ort hat noch keine Kiste.");
       if (!fachGueltig(fach)) return melde("Das Fach für „" + name + "“ gibt es nicht mehr – bitte neu wählen.");
       if (z.menge > 999) return melde(name + ": höchstens 999 Stück");
-      const werte = { name, symbol: H.bildchen(name), mhd: z.mhd, eingefroren: null, frist: null, fach };
+      const werte = { name, symbol: H.bildchen(name), mhd: z.mhd, eingefroren: null, frist: null, fach, code: z.schluessel }; // v6: Schluessel, nie paket.code (Codex #9)
       const fe = H.pruefe("eintrag", werte); // UGC #86: vor dem Vorgang pruefen
       if (fe) return melde(name + ": " + fe);
       daten.push({ typ: "neu", art: "eintrag", werte, menge: z.menge });
@@ -1345,10 +1415,14 @@ function multiScan(fachId, alt) {
   dialog("Gescannt", [kopfAnz, tabelle,
     el("button", { type: "button", className: "an weiterscannen", onclick: scannen }, "📷 Weiter scannen"),
     el("h3", null, "Speichern in"), ziel.teil], [["Alle speichern", speichern]], () => {
+    document.removeEventListener("vorrat-bild", bildNeu);
     if (gespeichert || !pakete.length) return;
     const n = pakete.length;
     untenZeigen(n + (n === 1 ? " gescannte Packung" : " gescannte Packungen") + " verworfen", "Zurückholen", () => multiScan(fachId, { pakete, namen, notiz }));
   });
+  // Bild kam an: Tabelle neu, ausser es wird gerade ein Name getippt (Fokus bliebe sonst nicht stehen)
+  const bildNeu = () => { if (!tabelle.contains(document.activeElement)) render(); };
+  document.addEventListener("vorrat-bild", bildNeu);
   render();
   if (alt) zuletztZeigen(); else scannen();
 }
@@ -1446,6 +1520,16 @@ function eintragDialog(e, fachId) {
     verschiebenTeil = [el("h3", null, "Platz"), el("p", { className: "klein" }, "Liegt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), ziel.teil];
   }
 
+  // v6: Strichcode beim Bearbeiten erhalten, neu scannen oder entfernen (Codex #10). Neu: kommt aus dem Scan.
+  let codeWert = e ? e.code ?? null : null, codeTeil = null;
+  if (e) {
+    const anz = el("b"), entf = el("button", { type: "button", className: "zweit", onclick: () => { codeWert = null; codeZeigen(); } }, "entfernen");
+    const codeZeigen = () => { anz.textContent = codeWert ? H.codeText(codeWert) : "keiner"; entf.hidden = !codeWert; };
+    codeTeil = el("div", { className: "zeilen codezeile" }, el("div", { className: "feld" }, el("span", null, "Strichcode"), anz),
+      el("button", { type: "button", onclick: () => scanDialog((c) => { codeWert = c.schluessel; codeZeigen(); bildFuer(codeWert); }) }, "📷 neu scannen"), entf);
+    codeZeigen();
+  }
+
   // Scannen (nur beim Neuanlegen): Name aus dem Gedaechtnis oder Open Food Facts, MHD aus DataMatrix.
   let code = null;
   const scanAnz = el("p", { className: "klein", role: "status" });
@@ -1467,11 +1551,12 @@ function eintragDialog(e, fachId) {
     }
     const kennt = c.anzeige + (c.mhd ? " · MHD " + H.deDatum(c.mhd) : "");
     const gemerkt = codeName(c.schluessel);
-    if (gemerkt) { setzeName(gemerkt); scanAnz.textContent = kennt + " · Name von früher"; return; }
+    if (gemerkt) { bildFuer(c.schluessel); setzeName(gemerkt); scanAnz.textContent = kennt + " · Name von früher"; return; } // v6: Bild trotzdem holen
     if (!c.ean) { scanAnz.textContent = kennt + " · Name bitte eintippen – wird für diesen Code gemerkt."; name.focus(); return; }
     scanAnz.textContent = kennt + " · suche Namen …";
     const vorher = name.value;
     const r = await offSuchen(c.ean);
+    if (r.bild) bildMitUrl(c.schluessel, r.bild);
     if (code !== c) return; // inzwischen anders gescannt
     if (r.name && name.value === vorher) { setzeName(r.name); scanAnz.textContent = kennt + " · Name aus Open Food Facts, bitte prüfen."; }
     else if (r.name) scanAnz.textContent = kennt + " · Vorschlag „" + r.name + "“ nicht übernommen (Name schon getippt).";
@@ -1492,7 +1577,9 @@ function eintragDialog(e, fachId) {
       if (z) fach = z;
     }
     const werte = { name: name.value.trim(), symbol: symbol.value.trim() || null, mhd: fr ? null : mhd,
-      eingefroren: fr ? einDatum.value : null, frist: fr ? Number(frist.value) : null, fach };
+      eingefroren: fr ? einDatum.value : null, frist: fr ? Number(frist.value) : null, fach,
+      code: e ? codeWert : code ? code.schluessel : null }; // v6: Schluessel aus dem Scan, nie das ganze Ergebnis (Codex #9)
+    if (!e && !werte.code) delete werte.code; // ohne Scan kein Feld: aeltere Versionen lesen das weiter (Review v6 A #6)
     const fe = H.pruefe("eintrag", werte); // UGC #86: vor dem Vorgang pruefen
     if (fe) return melde(fe);
     if (!e) {
@@ -1521,7 +1608,7 @@ function eintragDialog(e, fachId) {
     el("div", { className: "zeilen" }, feld("Name", name), feld("Bild", symbol)),
     mengeTeil,
     el("label", { className: "schalter" }, frost, "selbst eingefroren"),
-    mhdTeil, frostTeil, verschiebenTeil,
+    mhdTeil, frostTeil, verschiebenTeil, codeTeil,
   ], [
     ["Speichern", speichern],
     e && ["Löschen", async (melde, schliessen) => {

@@ -205,4 +205,47 @@ fall("v5.2 Aufteilen + Zusammenlegen: ein Platz, zwei Faecher, Inhalt wandert, n
   assert.deepStrictEqual([e(s2, "Eis").fach, e(s2, "Eis").ortKlaeren, s2.faecher.find((f) => f.id === rechts.id).geloescht], [f1.id, false, true]);
 });
 
+fall("v6 A: Feld code nur kanonisch mit Pruefziffer, alte Eintraege ohne code gueltig", () => {
+  const ok = M.FELDER.eintrag.code;
+  for (const w of [null, "gtin:4000417025005", "gtin:40170725", "gtin:0012345678905", "gtin:14000417025002", "pzn:01234562"]) assert.ok(ok(w), String(w));
+  for (const w of ["gtin:4000417025006", "gtin:123456789", "gtin:012345678905", "gtin:04000417025005", "pzn:01234563", "pzn:1234562",
+    "ean:4000417025005", "", undefined, 4000417025005, "gtin:4000417025005 "]) assert.ok(!ok(w), String(w));
+  // Scanner und Modell sprechen dieselbe Sprache: jeder Scanner-Schluessel ist ein gueltiger code
+  for (const [r, f] of [["4000417025005", "ean_13"], ["012345678905", "upc_a"], ["40170725", "ean_8"], ["01040004170250051727033110ABC", "data_matrix"]])
+    assert.ok(ok(H.leseCode(r, f).schluessel), r);
+  assert.ok(ok(H.codeAusEingabe("PZN 1234562").schluessel));
+  const v = { typ: "neu", art: "eintrag", inst: "abcdefgh12", n: 1, id: "abcdefgh12-1", uhr: 1, ziel: "abcdefgh12-1", werte: { name: "X", code: "gtin:4000417025005" }, menge: 1 };
+  assert.strictEqual(M.pruefeVorgang(v), null);
+  assert.strictEqual(M.pruefeVorgang(Object.assign({}, v, { werte: { name: "X" } })), null, "ohne code (alt) bleibt gueltig");
+  assert.match(M.pruefeVorgang(Object.assign({}, v, { werte: { name: "X", code: "gtin:123" } })), /code/);
+  assert.deepStrictEqual(H.codesSauber({ "gtin:123456789": "X", "gtin:4000417025005": "Y" }), { "gtin:4000417025005": "Y" }, "Gedaechtnis: gleiche Regel");
+});
+
+fall("v6 A: Bild-Adresse nur von images.openfoodfacts.org, Ausschnitt, Code-Text", () => {
+  assert.strictEqual(H.bildUrlOk("https://images.openfoodfacts.org/images/products/400/front_de.12.400.jpg"), "https://images.openfoodfacts.org/images/products/400/front_de.12.400.jpg");
+  for (const u of ["http://images.openfoodfacts.org/a.jpg", "https://images.openfoodfacts.org.evil.com/a.jpg", "https://evil.com/images.openfoodfacts.org/a.jpg",
+    "https://user:pw@images.openfoodfacts.org/a.jpg", "https://images.openfoodfacts.org:8443/a.jpg", "javascript:alert(1)", "", null, 42, "https://" + "x".repeat(600)])
+    assert.strictEqual(H.bildUrlOk(u), null, String(u));
+  assert.strictEqual(H.offBild({ status: 1, product: { image_front_url: "https://images.openfoodfacts.org/x.jpg" } }), "https://images.openfoodfacts.org/x.jpg");
+  assert.strictEqual(H.offBild({ status: 1, product: { image_front_url: "https://evil.com/x.jpg" } }), null);
+  assert.strictEqual(H.offBild({ status: 0 }), null);
+  assert.strictEqual(H.offBild(null), null);
+  assert.deepStrictEqual(H.ausschnitt(400, 300), { sx: 50, sy: 0, s: 300 });
+  assert.deepStrictEqual(H.ausschnitt(300, 401), { sx: 0, sy: 50, s: 300 });
+  assert.deepStrictEqual([H.codeText("gtin:4000417025005"), H.codeText("pzn:01234562"), H.codeText(null)], ["EAN 4000417025005", "PZN 01234562", ""]);
+});
+
+fall("v6 A: Bildmasse aus dem Dateikopf (PNG, JPEG), Unbekanntes = null", () => {
+  const png = new Uint8Array(24); png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]); png.set([0, 0, 0x4e, 0x20, 0, 0, 0x01, 0x90], 16); // 20000 x 400
+  assert.deepStrictEqual(H.bildMasse(png), { w: 20000, h: 400 });
+  // JPEG: SOI, APP0 (Laenge 16), SOF0 mit Hoehe 450, Breite 600
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, ...new Array(14).fill(0), 0xff, 0xc0, 0, 17, 8, 0x01, 0xc2, 0x02, 0x58, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepStrictEqual(H.bildMasse(jpg), { w: 600, h: 450 });
+  const sos = new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 8, ...new Array(20).fill(0)]);
+  assert.strictEqual(H.bildMasse(sos), null, "Bilddaten vor SOF");
+  assert.strictEqual(H.bildMasse(new Uint8Array([0x47, 0x49, 0x46, 0x38, ...new Array(30).fill(0)])), null, "GIF/unbekannt");
+  assert.strictEqual(H.bildMasse(new Uint8Array(5)), null);
+  assert.strictEqual(H.bildMasse(null), null);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

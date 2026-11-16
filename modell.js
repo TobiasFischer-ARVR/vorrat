@@ -35,6 +35,24 @@
   const kennungOderNull = (w) => w === null || kennung(w);
   // Fuer Fehlertexte: nie String(w) auf fremde Objekte (deren toString kann werfen, Codex 1a #6).
   const kurz = (w) => (typeof w === "string" ? w.slice(0, 20) : typeof w);
+  // Pruefziffern (v6, Codex #7: EINE Regel fuer Modell und Scanner, hilfen.js nimmt sie von hier).
+  function gtinOk(z) { // EAN-8, UPC-A (12), EAN-13, GTIN-14
+    if (typeof z !== "string" || !/^(\d{8}|\d{12,14})$/.test(z)) return false;
+    let summe = 0;
+    for (let i = 0; i < z.length - 1; i++) summe += Number(z[z.length - 2 - i]) * (i % 2 === 0 ? 3 : 1);
+    return (10 - (summe % 10)) % 10 === Number(z[z.length - 1]);
+  }
+  function pznOk(p) { // PZN8: Ziffern 1-7 mal 1..7, Summe mod 11 = Pruefziffer (10 = ungueltig)
+    if (typeof p !== "string" || !/^\d{8}$/.test(p)) return false;
+    let summe = 0;
+    for (let i = 0; i < 7; i++) summe += Number(p[i]) * (i + 1);
+    return summe % 11 !== 10 && summe % 11 === Number(p[7]);
+  }
+  // Code eines Eintrags, nur in der Form, die der Scanner liefert: "gtin:" + 8/13 Ziffern oder 14 ohne fuehrende 0
+  // (UPC-A und 14er mit 0 sind dort schon auf 13 gebracht), "pzn:" + 8 Ziffern. Immer mit gueltiger Pruefziffer.
+  const codeGueltig = (w) => typeof w === "string" &&
+    ((/^gtin:(\d{8}|\d{13}|[1-9]\d{13})$/.test(w) && gtinOk(w.slice(5))) || (/^pzn:\d{8}$/.test(w) && pznOk(w.slice(4))));
+
   // "JJJJ-MM-TT" und ein echter Kalendertag (kein 30.02.)
   const datumGueltig = (w) => typeof w === "string" && DATUM.test(w) && isoAusTag(tagZahl(w)) === w;
   const mhdGueltig = (w) => w === null || (typeof w === "string" && MONAT.test(w)) || datumGueltig(w);
@@ -66,6 +84,7 @@
       eingefroren: (w) => w === null || datumGueltig(w),
       frist: (w) => w === null || ganzzahl(w, 1, 60), // Monate "essen bis" ab Einfrierdatum
       fach: kennungOderNull,
+      code: (w) => w === null || codeGueltig(w), // v6: Strichcode (Produktbild), fehlt bei alten Eintraegen
       geloescht: bool,
     },
   };
@@ -320,7 +339,7 @@
   }
 
   const Modell = {
-    SCHEMA, FELDER,
+    SCHEMA, FELDER, gtinOk, pznOk, codeGueltig,
     pruefeVorgang, pruefeDatei, vereinige, berechne, kanonisch,
     ablaufdatum, plusMonate, tageBis, heuteIso, stufe, lokalIso,
     erzeuge, uhrNachziehen, korrektur, neueInstallationsId,

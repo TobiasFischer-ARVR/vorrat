@@ -127,9 +127,10 @@ fall("Code -> Name merken: nur gueltige Schluessel, zuletzt gemerkt hinten, Ober
   assert.deepStrictEqual(Object.keys(m), ["pzn:" + PZN, "gtin:" + EAN]);
   assert.deepStrictEqual(H.codesMerken(m, "seriennr:123", "x"), m, "ungueltiger Schluessel wird nicht gemerkt");
   assert.deepStrictEqual(H.codesMerken(m, "pzn:" + PZN, ""), m);
-  const voll = H.codesMerken({ "gtin:11111111": "a", "gtin:22222222": "b", "gtin:33333333": "c" }, "gtin:44444444", "d", 3);
-  assert.deepStrictEqual(Object.keys(voll), ["gtin:22222222", "gtin:33333333", "gtin:44444444"]);
-  assert.deepStrictEqual(H.codesSauber(JSON.parse('{"__proto__": "x", "gtin:12345678": "ok", "pzn:1": "kurz", "gtin:87654321": 5}')), { "gtin:12345678": "ok" });
+  // v6: Gedaechtnis nimmt nur Codes mit gueltiger Pruefziffer (gleiche Regel wie das Modell, Codex #7)
+  const voll = H.codesMerken({ "gtin:11111115": "a", "gtin:22222220": "b", "gtin:33333335": "c" }, "gtin:44444440", "d", 3);
+  assert.deepStrictEqual(Object.keys(voll), ["gtin:22222220", "gtin:33333335", "gtin:44444440"]);
+  assert.deepStrictEqual(H.codesSauber(JSON.parse('{"__proto__": "x", "gtin:12345670": "ok", "gtin:12345678": "Pruefziffer falsch", "pzn:1": "kurz", "gtin:87654321": 5}')), { "gtin:12345670": "ok" });
   assert.deepStrictEqual(H.codesSauber("kaputt"), {});
   assert.deepStrictEqual(H.codesSauber([1, 2]), {});
 });
@@ -138,7 +139,8 @@ fall("Schema: v3 stoppt bei unbekanntem Vorgangstyp/Feld -> Codes NICHT in die g
   // Diese Pruefung steht unveraendert in v3 (modell.js) und laeuft dort auf JEDE gelesene Datei (cloud.js dateiLesen).
   const basis = { id: "testgeraet1-1", inst: "testgeraet1", n: 1, uhr: 1, ziel: "testgeraet1-1" };
   assert.match(M.pruefeVorgang(Object.assign({}, basis, { typ: "code", art: "eintrag", werte: { code: "gtin:" + EAN, name: "Erbsen" } })), /unbekannter Vorgangstyp/);
-  assert.match(M.pruefeVorgang(Object.assign({}, basis, { typ: "neu", art: "eintrag", werte: { name: "Erbsen", code: "gtin:" + EAN }, menge: 1 })), /unbekanntes Feld/);
+  // v6 (Bauplan Produktbilder): Feld code ist jetzt erlaubt; aeltere Versionen stoppen dabei sicher (gemessen 16.11.)
+  assert.strictEqual(M.pruefeVorgang(Object.assign({}, basis, { typ: "neu", art: "eintrag", werte: { name: "Erbsen", code: "gtin:" + EAN }, menge: 1 })), null);
   assert.match(M.pruefeVorgang(Object.assign({}, basis, { typ: "neu", art: "code", werte: { name: "Erbsen" } })), /unbekannte Art/);
   assert.strictEqual(M.pruefeDatei({ schema: 2, inst: "testgeraet1", vorgaenge: [] }).ok, false, "neue Schema-Nummer waere fuer v3 ebenfalls ein Stopp");
   // Ein gescannter Eintrag (Name + MHD aus dem Code) ist ein ganz normaler v3-Vorgang

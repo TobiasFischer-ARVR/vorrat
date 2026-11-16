@@ -170,18 +170,7 @@
   //   ean = Code fuer Open Food Facts (nur Lebensmittel-GTIN, nie bei PZN), mhd = "JJJJ-MM" / "JJJJ-MM-TT" / null.
   // Charge und Seriennummer werden NIE zurueckgegeben (Seriennummer darf nirgends gespeichert werden).
   const GS = "\x1d", RS = "\x1e", EOT = "\x04";
-  function gtinOk(z) { // Pruefziffer EAN-8, UPC-A (12), EAN-13, GTIN-14
-    if (typeof z !== "string" || !/^(\d{8}|\d{12,14})$/.test(z)) return false;
-    let summe = 0;
-    for (let i = 0; i < z.length - 1; i++) summe += Number(z[z.length - 2 - i]) * (i % 2 === 0 ? 3 : 1);
-    return (10 - (summe % 10)) % 10 === Number(z[z.length - 1]);
-  }
-  function pznOk(p) { // PZN8: Ziffern 1-7 mal 1..7, Summe mod 11 = Pruefziffer (10 = ungueltig)
-    if (typeof p !== "string" || !/^\d{8}$/.test(p)) return false;
-    let summe = 0;
-    for (let i = 0; i < 7; i++) summe += Number(p[i]) * (i + 1);
-    return summe % 11 !== 10 && summe % 11 === Number(p[7]);
-  }
+  const gtinOk = Modell.gtinOk, pznOk = Modell.pznOk; // v6: eine Regel fuer Scanner und Modell (Codex #7)
   // GTIN vereinheitlichen: UPC-A (12) -> 13 Stellen, GTIN-14 mit fuehrender 0 -> 13 Stellen.
   function gtinNorm(z) {
     if (z.length === 14 && z[0] === "0") z = z.slice(1);
@@ -295,18 +284,58 @@
     const voll = marke && !name.toLowerCase().includes(marke.toLowerCase()) ? name + " (" + marke + ")" : name;
     return voll.slice(0, 100);
   }
+  // ---- v6 Abschnitt A: Produktbild von Open Food Facts ----
+  // Nur https://images.openfoodfacts.org/..., ohne Anmeldedaten/Port (Codex #14). Liefert die Adresse oder null.
+  function bildUrlOk(u) {
+    if (typeof u !== "string" || u.length > 500) return null;
+    let x;
+    try { x = new URL(u); } catch (_) { return null; }
+    return x.protocol === "https:" && x.hostname === "images.openfoodfacts.org" && !x.port && !x.username && !x.password ? x.href : null;
+  }
+  // Bild-Adresse aus der Produkt-Antwort (400 px, Entscheidung 1), sonst null.
+  const offBild = (j) => (j && typeof j === "object" && j.status === 1 && j.product && typeof j.product === "object" ? bildUrlOk(j.product.image_front_url) : null);
+  // Quadratischer Ausschnitt aus der Mitte: { sx, sy, s } (Quelle), Kantenlaenge = kuerzere Seite.
+  const ausschnitt = (w, h) => { const s = Math.min(w, h); return { sx: Math.floor((w - s) / 2), sy: Math.floor((h - s) / 2), s }; };
+  // Breite/Hoehe aus dem Dateikopf (Uint8Array), ohne zu dekodieren: PNG (IHDR) und JPEG (SOF-Marker).
+  // Unbekanntes Format oder kaputter Kopf -> null (= nicht verarbeiten). Schuetzt vor "klein, aber riesig" (Review v6 A #5).
+  function bildMasse(b) {
+    if (!b || b.length < 24) return null;
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+      const w = ((b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19]) >>> 0, h = ((b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23]) >>> 0;
+      return w && h ? { w, h } : null;
+    }
+    if (b[0] !== 0xff || b[1] !== 0xd8) return null;
+    for (let i = 2; i + 9 < b.length;) {
+      if (b[i] !== 0xff) return null;
+      const m = b[i + 1];
+      if (m === 0xff) { i++; continue; } // Fuellbytes
+      if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { i += 2; continue; } // ohne Laenge
+      const len = (b[i + 2] << 8) | b[i + 3];
+      if (len < 2) return null;
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) { // SOFn
+        const h = (b[i + 5] << 8) | b[i + 6], w = (b[i + 7] << 8) | b[i + 8];
+        return w && h ? { w, h } : null;
+      }
+      if (m === 0xd9 || m === 0xda) return null; // Bildende/Bilddaten vor SOF
+      i += 2 + len;
+    }
+    return null;
+  }
+  // Lesbarer Code fuer die Oberflaeche: "gtin:4000417025005" -> "EAN 4000417025005", "pzn:…" -> "PZN …".
+  const codeText = (k) => (typeof k !== "string" ? "" : k.startsWith("pzn:") ? "PZN " + k.slice(4) : k.startsWith("gtin:") ? "EAN " + k.slice(5) : "");
+
   // "Code -> Name merken" (nur auf diesem Geraet, siehe PRUEFNOTIZEN Verdachtsstellen C):
   // nur gueltige Schluessel, hoechstens 1000, der zuletzt gemerkte steht hinten.
-  const CODE_SCHLUESSEL = /^(gtin:\d{8,14}|pzn:\d{8})$/;
+  const codeOk = (k) => Modell.codeGueltig(k); // v6: wie das Modell, mit Pruefziffer (Codex #7)
   function codesSauber(m) {
     const aus = {};
     if (!m || typeof m !== "object" || Array.isArray(m)) return aus;
-    for (const [k, n] of Object.entries(m)) if (CODE_SCHLUESSEL.test(k) && typeof n === "string" && n.trim() && n.length <= 100) aus[k] = n;
+    for (const [k, n] of Object.entries(m)) if (codeOk(k) && typeof n === "string" && n.trim() && n.length <= 100) aus[k] = n;
     return aus;
   }
   function codesMerken(m, schluessel, name, max) {
     const alt = codesSauber(m);
-    if (!CODE_SCHLUESSEL.test(schluessel) || typeof name !== "string" || !name.trim() || name.length > 100) return alt;
+    if (!codeOk(schluessel) || typeof name !== "string" || !name.trim() || name.length > 100) return alt;
     delete alt[schluessel];
     alt[schluessel] = name.trim();
     const k = Object.keys(alt);
@@ -338,7 +367,7 @@
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte };
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);
