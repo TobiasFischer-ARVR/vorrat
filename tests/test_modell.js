@@ -350,4 +350,43 @@ fall("Drei Jahre Kunstdaten, zwei Handys offline bis zum Abgleich: gueltig, reih
     "\n    Lesen+Pruefen+Berechnen am PC: " + gesamtMs + " ms (Erzeugen " + erzeugtMs + " ms)");
 });
 
+fall("v6 B: Art bild - Schluessel/Datei geprueft, juengster datei-Stempel ueber alle Objekte gewinnt, null = entfernt", () => {
+  const F1 = "foto-" + "a".repeat(32) + ".jpg", F2 = "foto-" + "b".repeat(32) + ".jpg", F3 = "foto-" + "c".repeat(32) + ".jpg";
+  assert.strictEqual(M.namensSchluessel("  Rinder   GULASCH "), "n:rinder gulasch");
+  assert.strictEqual(M.namensSchluessel("   "), null);
+  const a = handy("aaaaaaaa1"), b = handy("bbbbbbbb2");
+  // ungueltig: Name nicht kanonisch, Code ohne Pruefziffer, Dateiname mit Produktname, Pflichtfeld fehlt, geloescht gibt es nicht
+  assert.throws(() => a.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:Gulasch", datei: F1 } }), /Wert ungueltig: schluessel/);
+  assert.throws(() => a.tu({ typ: "neu", art: "bild", werte: { schluessel: "gtin:4000417025006", datei: F1 } }), /Wert ungueltig: schluessel/);
+  assert.throws(() => a.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:gulasch", datei: "gulasch.jpg" } }), /Wert ungueltig: datei/);
+  assert.throws(() => a.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:gulasch" } }), /Pflichtfeld fehlt: datei/);
+  assert.throws(() => a.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:gulasch", datei: F1, geloescht: false } }), /unbekanntes Feld/);
+  assert.throws(() => a.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:gulasch", datei: F1 }, menge: 1 }), /Menge nur bei Eintraegen/);
+  // zwei Handys offline: je ein Objekt fuer denselben Schluessel -> das juengere gewinnt (auf beiden gleich)
+  const oa = a.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:gulasch", datei: F1 } });
+  const ob = b.tu({ typ: "neu", art: "bild", werte: { schluessel: "n:gulasch", datei: F2 } });
+  let s = stand(a, b);
+  assert.strictEqual(s.bilder.length, 2);
+  assert.strictEqual(s.fotoVon.get("n:gulasch"), F2); // gleiche Uhr, hoehere Installation
+  assert.deepStrictEqual(M.berechne([...b.liste, ...a.liste]).fotoVon, s.fotoVon); // Reihenfolge egal
+  // Entfernen auf A (beide bekannten Objekte null) -> kein Foto mehr, auch nicht das aeltere
+  a.sieht(b);
+  a.tu({ typ: "feld", art: "bild", ziel: oa.id, feld: "datei", wert: null });
+  a.tu({ typ: "feld", art: "bild", ziel: ob.id, feld: "datei", wert: null });
+  s = stand(a, b);
+  assert.strictEqual(s.fotoVon.has("n:gulasch"), false);
+  // Ersetzen nach Entfernen zeigt wieder ein Foto (ein Feld, juengerer Stempel)
+  b.sieht(a);
+  b.tu({ typ: "feld", art: "bild", ziel: ob.id, feld: "datei", wert: F3 });
+  s = stand(a, b);
+  assert.strictEqual(s.fotoVon.get("n:gulasch"), F3);
+  assert.deepStrictEqual(s.bilder.find((x) => x.id === ob.id).dateiStempel, [b.zaehler.uhr, "bbbbbbbb2"]);
+  // Datei mit bild-Vorgang liest sich, eine aeltere Version kennt die Art nicht und stoppt die GANZE Datei (sicher)
+  assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
+  // So stoppt v6.0 an "bild": unbekannte Art -> ganze Datei abgelehnt, nichts berechnet (Codex #8). Hier mit einer Art,
+  // die auch diese Version nicht kennt.
+  const zukunft = a.liste.map((x) => (x.art === "bild" ? { ...x, art: "zukunft" } : x));
+  assert.match(M.pruefeDatei(datei("aaaaaaaa1", zukunft)).fehler, /^Vorgang 1: unbekannte Art: zukunft$/);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

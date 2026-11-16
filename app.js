@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.0"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.1"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -295,6 +295,13 @@ async function offenFrisch() {
 function nichtLoeschen(x) {
   if (confirm("Gerätedaten nicht lesbar (" + ((x && x.message) || x) + ") – es wird NICHTS gelöscht.\n\nBackup des angezeigten Stands herunterladen?")) backupHerunterladen();
 }
+// v6 B (Tobias 16.11.: Rueckfrage statt Sperre): Satz fuer die Loesch-Rueckfrage, "" ohne eigene Fotos.
+async function fotoText() {
+  const aktuell = stand ? new Set(stand.fotoVon.values()) : null; // Stand unbekannt -> alle zaehlen
+  let n;
+  try { n = await Bilder.fotosOffen(aktuell); } catch (_) { return "\nEigene Fotos: Anzahl nicht lesbar – vorhandene gehen verloren.\n"; }
+  return n ? "\nDazu " + n + (n === 1 ? " eigenes Foto, noch nicht in OneDrive – geht" : " eigene Fotos, noch nicht in OneDrive – gehen") + " verloren.\n" : "";
+}
 const fruehereIds = () => new Set(lokal.map((v) => v.inst).filter((i) => !sp || i !== sp.inst));
 const zeitText = (iso) => (iso ? iso.slice(8, 10) + "." + iso.slice(5, 7) + ". " + iso.slice(11, 16) : "–");
 
@@ -380,11 +387,13 @@ async function geraetLoeschen(grund) {
     fehlerZeigen("Nichts gelöscht: " + ((x && x.message) || x) + ". Bitte die App neu laden.");
     return false;
   }
-  // v6 A: nur Internetbilder (wiederbeschaffbar) -> nach den Vorgaengen, Fehler hier egal
+  // Bilder nach den Vorgaengen: deren exklusive Pruefung faengt auch ein inzwischen aufgenommenes Foto ab (jedes
+  // eigene Foto kommt mit einem bild-Vorgang). Nicht hochgeladene Fotos hat die Rueckfrage vorher genannt (fotoText).
   bildGen++; bildSchlange.length = 0; // laufende Abrufe schreiben danach nichts mehr
   try { await Bilder.leeren(); } catch (_) { /* wiederbeschaffbar */ }
   for (const u of bildUrls.values()) if (u) URL.revokeObjectURL(u);
-  bildUrls.clear(); bildNetz.clear(); bildSpaeter.clear();
+  for (const u of fotoUrls.values()) if (u) URL.revokeObjectURL(u);
+  bildUrls.clear(); bildNetz.clear(); bildSpaeter.clear(); fotoUrls.clear();
   stand = null;
   return true;
 }
@@ -451,7 +460,7 @@ function einstellungenDialog() {
         }
         if (f.n) return melde(f.n + " Änderungen sind noch nicht abgeglichen. Erst abgleichen, dann den Ordner wechseln.");
         if (!confirm("Datenordner wechseln?\n\nDieses Gerät löscht dann seine lokale Kopie und startet mit neuer Kennung. " +
-          "Alles Bisherige liegt schon im alten Ordner und wandert nicht mit.")) return;
+          "Alles Bisherige liegt schon im alten Ordner und wandert nicht mit.\n" + (await fotoText()))) return;
         // Erst loeschen, dann den neuen Pfad speichern (Codex #5): bricht es dazwischen ab, bleibt der alte
         // Ordner mit leerem Geraet - harmlos, das liest erst wieder alles.
         if (!(await geraetLoeschen((vs, ag) => { const k = offenIn(vs, ag); return sperreIn(vs, ag) || (k ? k + " Änderungen sind noch nicht abgeglichen" : null); }))) return;
@@ -581,7 +590,7 @@ function baldZeile(x) {
   const wort = { abgelaufen: "abgelaufen", rot: "bald", gelb: "demnächst" }[x.stufe];
   const z = el("button", { className: "baldzeile " + x.stufe, "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " +
       H.baldText(x.tage) + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
-    el("span", { className: "bild", "aria-hidden": "true" }, bildOder(e.code, e.symbol || H.bildchen(e.name))),
+    el("span", { className: "bild", "aria-hidden": "true" }, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name))),
     el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
     el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)), el("span", null, x.stufe === "abgelaufen" ? "abgelaufen" : H.baldText(x.tage))));
   z.dataset.stufe = wort;
@@ -864,18 +873,107 @@ function verschiebenDialog(e) {
 // Menue-Knopf, der erst das Menue schliesst und dann fn oeffnet.
 const weiter = (fn) => (melde, schliessen) => { nachZurueck = fn; schliessen(); };
 function eintragMenue(e) {
-  dialog(kuerze(e.name, 40), [el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
+  const eig = stand && H.eigenesFoto(stand.fotoVon, e.code, e.name);
+  // v6.1 (Tobias 16.11.): grosses Bild; mit Strichcode umschaltbar auf die Inhaltsstoffe (PZN nie ans Netz)
+  const ean = offTauglich(e.code) ? e.code.slice(5) : null;
+  const grossBild = () => {
+    const b = bildOder(e.code, e.name, null);
+    if (b) { b.className = "gross"; return b; }
+    return el("div", { className: "grossbildchen", "aria-hidden": "true" }, e.symbol || H.bildchen(e.name));
+  };
+  const flaeche = el("div", { className: "produkt", role: "status", "aria-live": "polite" }, grossBild());
+  let info = false, tipp = 0; // tipp: nur die Antwort des letzten Umschaltens zaehlt
+  const bildDazu = () => { if (!info) flaeche.replaceChildren(grossBild()); }; // Foto kam erst nach dem Oeffnen
+  document.addEventListener("vorrat-bild", bildDazu);
+  const umschalt = ean && el("button", { type: "button", className: "zweit umschalt", "aria-pressed": "false", onclick: async () => {
+    const meins = ++tipp;
+    info = !info;
+    umschalt.textContent = info ? "🖼 Bild" : "🧾 Inhaltsstoffe";
+    umschalt.setAttribute("aria-pressed", String(info));
+    if (!info) return flaeche.replaceChildren(grossBild());
+    flaeche.replaceChildren(el("p", { className: "klein" }, "Lade Angaben von Open Food Facts …"));
+    const x = await offDetailsHolen(ean);
+    if (meins === tipp) flaeche.replaceChildren(...(x.offline ? [el("p", { className: "klein" }, "Open Food Facts nicht erreichbar – bitte später nochmal.")] : infoTeil(x.d)));
+  } }, "🧾 Inhaltsstoffe");
+  dialog(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
     ["−1 · eins rausgenommen" + (e.menge === 1 ? " (das letzte)" : ""), weiter(() => entnehmen(e))],
     ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
     ["↦ Verschieben nach …", weiter(() => verschiebenDialog(e))],
-  ]);
+    // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
+    ["📷 Foto" + (eig ? " ersetzen" : ""), (melde, schliessen) => { fotoWaehlen(e, eig); schliessen(); }],
+    eig && ["Foto entfernen", weiter(() => fotoEntfernen(e, eig))],
+  ], () => document.removeEventListener("vorrat-bild", bildDazu));
+}
+
+// Inhaltsstoffe je EAN, einmal je App-Start geholt; offline wird nicht gemerkt (naechster Tipp versucht es neu).
+const offInfo = new Map();
+function offDetailsHolen(ean) {
+  if (!offInfo.has(ean)) {
+    const p = offAbruf(ean, "ingredients_text_de,ingredients_text,allergens_tags,additives_tags,nutriscore_grade,nutriments,product_quantity_unit")
+      .then(({ j, offline }) => (offline ? { offline } : { d: H.offDetails(j) }));
+    offInfo.set(ean, p);
+    p.then((x) => { if (x.offline) offInfo.delete(ean); });
+  }
+  return offInfo.get(ean);
+}
+function infoTeil(d) {
+  if (!d) return [el("p", { className: "klein" }, "Open Food Facts hat zu diesem Produkt keine Angaben.")];
+  const abschnitt = (titel, ...inhalt) => [el("h3", null, titel), ...inhalt];
+  return [el("div", { className: "info" },
+    d.nutri && el("p", null, el("b", { className: "nutri n" + d.nutri }, "Nutri-Score " + d.nutri)),
+    d.allergene.length > 0 && abschnitt("Allergene", el("p", null, d.allergene.join(", "))),
+    d.zusatz.length > 0 && abschnitt("Zusatzstoffe", el("p", null, d.zusatz.join(", "))),
+    d.zutaten && abschnitt("Zutaten", el("p", { className: "klein" }, d.zutaten)),
+    d.naehrwerte.length > 0 && abschnitt("Nährwerte je 100 " + (d.ml ? "ml" : "g"), el("table", null, d.naehrwerte.map(([n, w]) => el("tr", null, el("th", null, n), el("td", null, w))))),
+    el("p", { className: "klein" }, "Quelle: Open Food Facts (von Freiwilligen gepflegt, bitte mit der Packung vergleichen)."))];
+}
+
+// ==== v6 Abschnitt B: eigenes Foto ====
+// Schluessel: Code, sonst Name (Entscheidung 4). Ohne capture-Attribut bietet Android Kamera UND Galerie an.
+// Ersetzen trifft den Schluessel des angezeigten Fotos, sonst gilt Code vor Name (Review v6 B #4).
+const fotoZiel = (e, s) => (s.startsWith("n:") ? "„" + kuerze(e.name, 30) + "“" : H.codeText(s));
+const fotoReichweite = (e, s) => "Foto für alle " + (s.startsWith("n:") ? "" : "Packungen mit ") + fotoZiel(e, s) + " – auf beiden Handys";
+function fotoWaehlen(e, eig) {
+  const wahl = el("input", { type: "file", accept: "image/*" });
+  wahl.addEventListener("change", () => { if (wahl.files && wahl.files[0]) fotoVorschau(e, eig ? eig.schluessel : e.code || Modell.namensSchluessel(e.name), wahl.files[0]); });
+  wahl.click();
+}
+async function fotoVorschau(e, schluessel, datei) {
+  if (!schluessel) return hinweis("Für diesen Namen geht kein Foto (zu lang).");
+  if (datei.size > 25 * 1024 * 1024) return hinweis("Foto zu groß (über 25 MB).");
+  // ponytail: dekodiert in voller Groesse (12 MP ~ 50 MB Arbeitsspeicher); verkleinert dekodieren, falls der Handytest stockt (R2 #15)
+  const blob = await Bilder.normalisieren(datei); // 400 x 400 aus der Mitte, neu als JPEG -> Ort/Kamera-Daten weg
+  if (!blob) return hinweis("Foto nicht lesbar (nur JPEG/PNG, höchstens 8000 Pixel Kante).");
+  const url = URL.createObjectURL(blob);
+  dialog("Foto übernehmen?", [
+    el("img", { src: url, alt: "Vorschau des Ausschnitts", className: "vorschau" }),
+    el("p", { className: "klein" }, fotoReichweite(e, schluessel) + ". So wird es gespeichert – bitte prüfen, dass nichts Persönliches zu sehen ist."),
+  ], [["Übernehmen", async (melde, schliessen) => { if (await fotoUebernehmen(schluessel, blob, melde)) schliessen(); }]],
+  () => URL.revokeObjectURL(url));
+}
+// Erst die Datei, dann der Vorgang (Bauplan Stufe 2). Scheitert der Vorgang, kommt die Datei wieder weg.
+async function fotoUebernehmen(schluessel, blob, melde) {
+  if (!stand) { melde("Daten nicht geladen – nichts geändert."); return false; }
+  const datei = fotoName(), vorher = stand.fotoVon.get(schluessel);
+  if (!(await Bilder.fotoSpeichern(datei, blob))) { melde("⚠ Foto nicht gespeichert (Speicher voll?). Nichts geändert."); return false; }
+  urlSetzen(fotoUrls, datei, blob); // vor tun(): dessen Neuzeichnen findet das Foto schon (Review v6 B #6)
+  if (!(await tun([H.fotoSchritt(stand ? stand.bilder : [], schluessel, datei)]))) { fotoUrlWeg(datei); await Bilder.fotoLoeschen(datei); return false; }
+  if (vorher) fotoUrlWeg(vorher);
+  untenZeigen("Foto gespeichert");
+  return true;
+}
+async function fotoEntfernen(e, eig) {
+  if (!confirm("Foto für " + fotoZiel(e, eig.schluessel) + " entfernen?\n\nGilt auf beiden Handys. Danach zeigt die App wieder das Internetbild, falls es eins gibt. Kein Rückgängig.")) return;
+  const jetzt = stand && stand.fotoVon.get(eig.schluessel);
+  if (!jetzt) return hinweis("Das Foto ist schon entfernt.");
+  if (await tun(H.fotoWegSchritte(stand.bilder, eig.schluessel))) { fotoUrlWeg(jetzt); untenZeigen("Foto entfernt"); }
 }
 
 // Bring-Kachel. Farbe nach Haltbarkeit; ohne Datum neutral.
 function kachel(e, kurz, lang, ziehbar) {
   const st = Modell.stufe(e.ablauf, Modell.heuteIso());
   const k = el("button", { className: "kachel" + (st === "rot" || st === "gelb" ? " " + st : "") + (e.bestandPruefen ? " pruefen" : "") },
-    el("span", { className: "bild" }, bildOder(e.code, e.symbol || H.bildchen(e.name))),
+    el("span", { className: "bild" }, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name))),
     el("span", { className: "name" }, e.name),
     e.menge >= 2 && el("span", { className: "zahl" }, "×" + e.menge),
     el("span", { className: "datum" }, H.kurzDatum(e)),
@@ -962,7 +1060,7 @@ function pruefenAnsicht(ebene) {
       if (!(await backupHerunterladen())) return;
     }
     if (!confirm("Alle Daten auf DIESEM Gerät löschen?\n\n" + f.gesamt + " eigene Vorgänge, davon " + f.n + " noch nicht in OneDrive – die gehen verloren.\n" +
-      "OneDrive bleibt unangetastet. Danach startet das Gerät mit neuer Kennung.")) return;
+      (await fotoText()) + "OneDrive bleibt unangetastet. Danach startet das Gerät mit neuer Kennung.")) return;
     // Hat ein anderer Tab seit der Rueckfrage etwas gespeichert, wird nicht geloescht (Codex #4).
     if (await geraetLoeschen((vs, ag) => (vs.length !== f.gesamt || offenIn(vs, ag) !== f.n || sperreIn(vs, ag) !== f.sperre ? "Inzwischen wurde etwas gespeichert" : null))) location.reload();
   } }, "Gerätedaten löschen (z. B. Testdaten)");
@@ -1053,7 +1151,12 @@ function dialog(titel, inhalt, knoepfe, weg, zu = "Abbrechen") {
   const melde = (t) => { meldung.textContent = t; };
   const ebene = { weg };
   const schliessen = (n) => { if (stapel[stapel.length - 1] === ebene) { ebene.zu = true; zurueck(n); } };
-  const k = knoepfe.filter(Boolean).map(([text, fn, klasse]) => el("button", { className: klasse || "", onclick: () => { if (!ebene.zu) fn(melde, schliessen); } }, text));
+  // Doppeltipp: solange eine Knopf-Aktion laeuft, zaehlt kein Knopf dieses Dialogs (Review v6 B #3, Simplify).
+  const k = knoepfe.filter(Boolean).map(([text, fn, klasse]) => el("button", { className: klasse || "", onclick: async () => {
+    if (ebene.zu || ebene.laeuft) return;
+    ebene.laeuft = true;
+    try { await fn(melde, schliessen); } finally { ebene.laeuft = false; }
+  } }, text));
   ebene.el = el("div", { className: "blatt" }, el("div", { className: "fenster" }, el("h2", null, titel), inhalt, meldung,
     el("div", { className: "knoepfe" }, k, el("button", { className: "zweit", onclick: () => schliessen() }, zu))));
   const fenster = ebene.el.firstChild;
@@ -1077,15 +1180,20 @@ const codeName = (schluessel) => (Object.hasOwn(codesLesen(), schluessel) ? code
 function codeMerken(schluessel, name) { try { localStorage.setItem(CODES_KEY, JSON.stringify(H.codesMerken(codesLesen(), schluessel, name))); } catch (_) { /* voll/gesperrt: nur nicht gemerkt */ } }
 
 // Name aus Open Food Facts. Zeitgrenze 6 s, offline sofort aufgeben, jeder Fehler = "kein Treffer" (nie blockieren).
-async function offSuchen(ean) {
-  if (navigator.onLine === false) return { name: null, offline: true };
+// Ein Abruf fuer alle OFF-Fragen: { j } = Antwort, { j: null } = Produkt unbekannt (404),
+// { offline } = kein Netz, Zeitgrenze oder Serverfehler (spaeter nochmal, nie als "keine Angaben" merken).
+async function offAbruf(ean, felder) {
+  if (navigator.onLine === false) return { offline: true };
   try {
-    const r = await fetch("https://world.openfoodfacts.org/api/v2/product/" + encodeURIComponent(ean) + ".json?fields=product_name,product_name_de,brands,image_front_url",
-      { signal: AbortSignal.timeout(6000), credentials: "omit", referrerPolicy: "no-referrer" });
-    if (!r.ok) return { name: null }; // 404 = unbekanntes Produkt
-    const j = await r.json();
-    return { name: H.offName(j), bild: H.offBild(j) };
-  } catch (_) { return { name: null, offline: true }; }
+    const r = await fetch("https://world.openfoodfacts.org/api/v2/product/" + encodeURIComponent(ean) + ".json?fields=" + felder,
+      { signal: AbortSignal.timeout(8000), credentials: "omit", referrerPolicy: "no-referrer" });
+    if (r.status === 404) return { j: null };
+    return r.ok ? { j: await r.json() } : { offline: true };
+  } catch (_) { return { offline: true }; }
+}
+async function offSuchen(ean) {
+  const { j, offline } = await offAbruf(ean, "product_name,product_name_de,brands,image_front_url");
+  return offline ? { name: null, offline: true } : { name: H.offName(j), bild: H.offBild(j) };
 }
 
 // ==== v6 Abschnitt A: Produktbilder (Internetbild je GTIN, Speicher in bilder.js) ====
@@ -1140,16 +1248,42 @@ function bildWeiter() {
     })();
   }
 }
-function bildDa(code, blob) {
-  const alt = bildUrls.get(code);
+const bildDa = (code, blob) => urlSetzen(bildUrls, code, blob);
+function urlSetzen(karte, k, blob) {
+  const alt = karte.get(k);
   if (alt) URL.revokeObjectURL(alt);
-  bildUrls.set(code, URL.createObjectURL(blob));
+  karte.set(k, URL.createObjectURL(blob));
+  bildNeuZeichnen();
+}
+function bildNeuZeichnen() {
   document.dispatchEvent(new Event("vorrat-bild"));
   clearTimeout(bildZeichnenUhr);
   bildZeichnenUhr = setTimeout(zeichnen, 150); // mehrere Bilder kurz nacheinander = einmal neu zeichnen
 }
-// Foto fuer Kachel/Zeile, sonst das Bildchen.
-const bildOder = (code, ersatz) => { const u = code ? bildFuer(code) : null; return u ? el("img", { src: u, alt: "", className: "foto", draggable: false }) : ersatz; };
+// v6 B: eigene Fotos (Speicher "fotos"). Dateien sind unveraenderlich -> einmal laden reicht.
+// datei -> blob:-Adresse | null (laedt) | false (liegt nicht auf diesem Geraet, z. B. vom anderen Handy, Abschnitt C)
+const fotoUrls = new Map();
+function fotoFuer(datei) {
+  if (fotoUrls.has(datei)) return fotoUrls.get(datei);
+  fotoUrls.set(datei, null);
+  const gen = bildGen;
+  Bilder.fotoLesen(datei).then((b) => {
+    if (gen !== bildGen) return;
+    if (b) urlSetzen(fotoUrls, datei, b);
+    else { fotoUrls.set(datei, false); bildNeuZeichnen(); } // dann das Internetbild versuchen (Review v6 B #2)
+  });
+  return null;
+}
+function fotoUrlWeg(datei) { const u = fotoUrls.get(datei); if (u) URL.revokeObjectURL(u); fotoUrls.delete(datei); }
+const fotoName = () => "foto-" + Modell.neueInstallationsId() + ".jpg"; // Zufall, nie wiederverwendet (R2 #5)
+// Bild fuer Kachel/Zeile: eigenes Foto (Code, dann Name) -> Internetbild (Code) -> Bildchen (R2 #7).
+function bildOder(code, name, ersatz) {
+  const eig = stand && H.eigenesFoto(stand.fotoVon, code, name);
+  let u = eig ? fotoFuer(eig.datei) : false;
+  if (u === null) return ersatz; // laedt gerade (Millisekunden): nicht kurz das Internetbild zeigen
+  if (u === false) u = code ? bildFuer(code) : null;
+  return u ? el("img", { src: u, alt: "", className: "foto", draggable: false }) : ersatz;
+}
 
 // Kamera + BarcodeDetector. fertig(ergebnis von H.leseCode/codeAusEingabe) nur bei einem brauchbaren Code.
 // Die Kamera wird bei Treffer, Abbrechen, Android-Zurueck, App im Hintergrund und Fehler gestoppt (stopp()).
@@ -1302,7 +1436,7 @@ function multiScan(fachId, alt) {
     const minus = () => { const g = gruppe(); pakete.splice(pakete.lastIndexOf(g[g.length - 1]), 1); render(); };
     const plus = () => { if (z.menge < 999) { pakete.push(Object.assign({}, gruppe()[0])); render(); } };
     return el("div", { className: "mzeile" + ((namen[s] || "").trim() ? "" : " ohnename") },
-      el("span", { className: "bild", "aria-hidden": "true" }, bildOder(s, H.bildchen(namen[s] || ""))), name,
+      el("span", { className: "bild", "aria-hidden": "true" }, bildOder(s, namen[s], H.bildchen(namen[s] || ""))), name,
       el("button", { type: "button", className: "mdetail", onclick: () => zeileDialog(z, gruppe) },
         (z.mhd ? "MHD " + H.deDatum(z.mhd) : "kein MHD") + (z.fach ? " · " + fachText(z.fach) : "") + " ✎"),
       el("div", { className: "plusminus" }, el("button", { type: "button", "aria-label": "eins weniger", onclick: minus }, "−"),
@@ -1600,7 +1734,16 @@ function eintragDialog(e, fachId) {
       const k = Modell.korrektur(e, n);
       if (k) daten.push(k);
     } else if (delta) daten.push({ typ: "menge", art: "eintrag", ziel: e.id, delta, grund: delta < 0 ? "entnahme" : "zugang" });
+    // v6 B (Tobias 16.11.: kopieren statt wandern): hat der alte Name ein Foto und der neue keins, bekommt der neue
+    // eine Kopie unter neuem Dateinamen; der alte Name behaelt seins (Bibliothek). Klappt die Kopie nicht: ohne Foto weiter.
+    const altS = Modell.namensSchluessel(e.name), neuS = Modell.namensSchluessel(werte.name);
+    let kopie = null;
+    if (stand && altS !== neuS && neuS && stand.fotoVon.has(altS) && !stand.fotoVon.has(neuS)) {
+      const b = await Bilder.fotoLesen(stand.fotoVon.get(altS)), d = fotoName();
+      if (b && (await Bilder.fotoSpeichern(d, b))) { kopie = d; daten.push(H.fotoSchritt(stand.bilder, neuS, d)); }
+    }
     if (!daten.length || (await tun(daten))) schliessen();
+    else if (kopie) await Bilder.fotoLoeschen(kopie);
   }
 
   dialog(e ? "Bearbeiten" : "Neuer Eintrag", [

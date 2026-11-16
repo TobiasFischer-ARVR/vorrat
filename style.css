@@ -176,6 +176,17 @@ main button.scanstart { display: block; width: 100%; margin-top: 12px; padding: 
 /* v6 A: Produktfotos statt Bildchen */
 .bild img.foto { pointer-events: none; -webkit-user-drag: none; display: block; width: 3.4rem; height: 3.4rem; object-fit: cover; border-radius: 10px; background: #fff; }
 .baldzeile .bild img.foto { width: 2.6rem; height: 2.6rem; border-radius: 8px; }
+.produkt { text-align: center; }
+.fenster img.gross { display: block; width: 100%; max-width: 260px; aspect-ratio: 1; margin: 0 auto .4rem; border-radius: 12px; object-fit: cover; background: #fff; }
+.grossbildchen { font-size: 5rem; line-height: 1.2; }
+.produkt .info { text-align: left; max-height: 50vh; overflow-y: auto; }
+.produkt .info h3 { font-size: 1rem; margin: .6rem 0 .2rem; }
+.produkt .info p { margin: 0 0 .3rem; }
+.produkt .info th { text-align: left; font-weight: normal; padding-right: 1rem; }
+.nutri { display: inline-block; padding: .15rem .6rem; border-radius: 8px; color: #fff; }
+.nutri.nA { background: #038141; } .nutri.nB { background: #85bb2f; } .nutri.nC { background: #fecb02; color: #222; } .nutri.nD { background: #ee8100; } .nutri.nE { background: #e63e11; }
+.umschalt { display: block; margin: 0 auto .4rem; }
+.fenster img.vorschau { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; margin: 0 auto .5rem; border-radius: 12px; object-fit: cover; }
 .mzeile .bild img.foto { width: 2rem; height: 2rem; border-radius: 6px; }
 .codezeile { align-items: center; }
 .codezeile > button { margin: 0; flex: none; }

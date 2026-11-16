@@ -248,4 +248,46 @@ fall("v6 A: Bildmasse aus dem Dateikopf (PNG, JPEG), Unbekanntes = null", () => 
   assert.strictEqual(H.bildMasse(null), null);
 });
 
+fall("v6 B: eigenesFoto (Code vor Name), fotoSchritt nimmt vorhandenes Objekt, fotoWegSchritte nullt alle", () => {
+  const F1 = "foto-" + "a".repeat(32) + ".jpg", F2 = "foto-" + "b".repeat(32) + ".jpg";
+  const fotoVon = new Map([["gtin:4000417025005", F1], ["n:gulasch", F2]]);
+  assert.deepStrictEqual(H.eigenesFoto(fotoVon, "gtin:4000417025005", "Gulasch"), { schluessel: "gtin:4000417025005", datei: F1 });
+  assert.deepStrictEqual(H.eigenesFoto(fotoVon, "gtin:96385074", " GULASCH "), { schluessel: "n:gulasch", datei: F2 }); // Code ohne Foto -> Name
+  assert.strictEqual(H.eigenesFoto(fotoVon, null, "Pizza"), null);
+  assert.strictEqual(H.eigenesFoto(null, null, "Gulasch"), null);
+  const bilder = [{ id: "x1-1", schluessel: "n:gulasch", datei: F1 }, { id: "x2-1", schluessel: "n:gulasch", datei: null }, { id: "x2-2", schluessel: "n:pizza", datei: F2 }];
+  assert.deepStrictEqual(H.fotoSchritt(bilder, "n:gulasch", F2), { typ: "feld", art: "bild", ziel: "x1-1", feld: "datei", wert: F2 });
+  assert.deepStrictEqual(H.fotoSchritt(bilder, "n:suppe", F2), { typ: "neu", art: "bild", werte: { schluessel: "n:suppe", datei: F2 } });
+  assert.deepStrictEqual(H.fotoWegSchritte(bilder, "n:gulasch"), [{ typ: "feld", art: "bild", ziel: "x1-1", feld: "datei", wert: null }]);
+  assert.deepStrictEqual(H.fotoWegSchritte(bilder, "n:suppe"), []);
+  // die erzeugten Schritte sind gueltige Vorgaenge (neu, feld datei, feld null)
+  let z = { inst: "aaaaaaaa1", nr: 1, uhr: 0 };
+  const neu = M.erzeuge(z, H.fotoSchritt([], "n:suppe", F1));
+  z = neu.zaehler;
+  const da = [{ id: neu.vorgang.id, schluessel: "n:suppe", datei: F1 }];
+  for (const d of [H.fotoSchritt(da, "n:suppe", F2), ...H.fotoWegSchritte(da, "n:suppe")]) z = M.erzeuge(z, d).zaehler;
+  assert.strictEqual(z.nr, 4);
+});
+
+fall("v6.1: offDetails - Allergene deutsch, E-Nummern, Naehrwerte deutsch formatiert, Unbrauchbares raus", () => {
+  const d = H.offDetails({ status: 1, product: {
+    ingredients_text_de: "  Weizenmehl, Zucker, Milch  ", ingredients_text: "wheat",
+    allergens_tags: ["en:milk", "en:gluten", "de:hafer-x", "en:milk", 5], additives_tags: ["en:e330", "en:e150a", "en:quatsch", "en:e322i"],
+    nutriscore_grade: "b", nutriments: { "energy-kcal_100g": 452.35, fat_100g: 17, sugars_100g: "viel", salt_100g: -1 } } });
+  assert.strictEqual(d.zutaten, "Weizenmehl, Zucker, Milch");
+  assert.deepStrictEqual(d.allergene, ["Milch", "Gluten", "hafer x"]);
+  assert.deepStrictEqual(d.zusatz, ["E330", "E150a", "E322i"]);
+  assert.deepStrictEqual(d.naehrwerte, [["Energie", "452,4 kcal"], ["Fett", "17 g"]]);
+  assert.strictEqual(d.nutri, "B");
+  assert.strictEqual(H.offDetails({ status: 1, product: { ingredients_text: "x", nutriscore_grade: "unknown" } }).nutri, null);
+  // Zahl als Text, nur kJ, Spuren, Getraenk
+  const g = H.offDetails({ status: 1, product: { product_quantity_unit: "ml", nutriments: { "energy-kj_100g": 180, salt_100g: "0.04", fat_100g: "1e5" } } });
+  assert.deepStrictEqual(g.naehrwerte, [["Energie", "180 kJ"], ["Salz", "0,04 g"]]);
+  assert.strictEqual(g.ml, true);
+  assert.deepStrictEqual(H.offDetails({ status: 1, product: { nutriments: { "energy-kcal_100g": 100, "energy-kj_100g": 418 } } }).naehrwerte, [["Energie", "100 kcal"]]);
+  assert.strictEqual(H.offDetails({ status: 1, product: {} }), null);
+  assert.strictEqual(H.offDetails({ status: 0 }), null);
+  assert.strictEqual(H.offDetails(null), null);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

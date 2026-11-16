@@ -274,6 +274,35 @@
     return null;
   }
   // Antwort von Open Food Facts (api/v2/product/<code>.json?fields=product_name,product_name_de,brands) -> Name oder null.
+  // v6.1 (Tobias 16.11.): Zusatzinfos fuers Produkt-Fenster. Nur Texte und Zahlen, alles andere fliegt raus.
+  // Liefert { zutaten, allergene[], zusatz[], naehrwerte[[name, wert]], nutri } oder null (keine Angaben).
+  const ALLERGENE = { gluten: "Gluten", crustaceans: "Krebstiere", eggs: "Eier", fish: "Fisch", peanuts: "Erdnüsse", soybeans: "Soja",
+    milk: "Milch", nuts: "Schalenfrüchte", celery: "Sellerie", mustard: "Senf", "sesame-seeds": "Sesam",
+    "sulphur-dioxide-and-sulphites": "Sulfite", lupin: "Lupinen", molluscs: "Weichtiere" };
+  const NAEHR = [["energy-kcal_100g", "Energie", " kcal"], ["energy-kj_100g", "Energie", " kJ"], ["fat_100g", "Fett", " g"],
+    ["saturated-fat_100g", "davon gesättigt", " g"], ["sugars_100g", "Zucker", " g"], ["salt_100g", "Salz", " g"]];
+  function offDetails(j) {
+    const p = j && typeof j === "object" && j.status === 1 && j.product && typeof j.product === "object" ? j.product : null;
+    if (!p) return null;
+    const txt = (w) => (typeof w === "string" && w.trim() ? w.trim().slice(0, 2000) : null);
+    const tags = (a) => (Array.isArray(a) ? a.filter((t) => typeof t === "string" && t.length <= 80) : []);
+    const ohneSprache = (t) => t.replace(/^[a-z]{2}:/, "");
+    const allergene = [...new Set(tags(p.allergens_tags).map((t) => (t.startsWith("en:") && ALLERGENE[t.slice(3)]) || ohneSprache(t).replace(/-/g, " ")))];
+    const zusatz = [...new Set(tags(p.additives_tags).map(ohneSprache).filter((t) => /^e\d{3,4}[a-z]?$/i.test(t)).map((t) => "E" + t.slice(1)))];
+    const n = p.nutriments && typeof p.nutriments === "object" ? p.nutriments : {};
+    // OFF schickt Zahlen manchmal als Text ("0.8"); unter 1 zwei Nachkommastellen, sonst wird 0,04 g Salz zu "0 g"
+    const zahl = (w) => {
+      if (typeof w === "string" && /^\d{1,5}(\.\d+)?$/.test(w)) w = Number(w);
+      return typeof w === "number" && Number.isFinite(w) && w >= 0 && w < 1e5 ? w.toLocaleString("de-DE", { maximumFractionDigits: w < 1 ? 2 : 1 }) : null;
+    };
+    const naehrwerte = NAEHR.map(([k, name, einheit]) => { const z = zahl(n[k]); return z && [name, z + einheit]; }).filter(Boolean)
+      .filter((x, i, a) => x[0] !== "Energie" || a.findIndex((y) => y[0] === "Energie") === i); // kcal vor kJ, nur eine Zeile
+    const nutri = typeof p.nutriscore_grade === "string" && /^[a-e]$/.test(p.nutriscore_grade) ? p.nutriscore_grade.toUpperCase() : null;
+    const zutaten = txt(p.ingredients_text_de) || txt(p.ingredients_text);
+    const ml = typeof p.product_quantity_unit === "string" && p.product_quantity_unit.toLowerCase() === "ml";
+    return zutaten || allergene.length || zusatz.length || naehrwerte.length || nutri ? { zutaten, allergene, zusatz, naehrwerte, nutri, ml } : null;
+  }
+
   function offName(j) {
     if (!j || typeof j !== "object" || j.status !== 1 || !j.product || typeof j.product !== "object") return null;
     const p = j.product;
@@ -361,13 +390,30 @@
     return [...m.values()];
   }
 
+  // ---- v6 B: eigene Fotos (Bauplan Produktbilder Fassung 3) ----
+  // Anzeige-Reihenfolge: eigenes Foto je Code, dann je Name (R2 #7). Liefert { schluessel, datei } oder null.
+  function eigenesFoto(fotoVon, code, name) {
+    for (const s of [code, Modell.namensSchluessel(name)]) if (s && fotoVon && fotoVon.has(s)) return { schluessel: s, datei: fotoVon.get(s) };
+    return null;
+  }
+  // Foto setzen: vorhandenes Objekt des Schluessels nehmen, nur ohne eins ein neues anlegen.
+  function fotoSchritt(bilder, schluessel, datei) {
+    const da = bilder.find((b) => b.schluessel === schluessel);
+    return da ? { typ: "feld", art: "bild", ziel: da.id, feld: "datei", wert: datei }
+      : { typ: "neu", art: "bild", werte: { schluessel, datei } };
+  }
+  // Entfernen: ALLE bekannten Objekte des Schluessels auf null (R2 #3), keine automatische Bereinigung (R2 #2).
+  const fotoWegSchritte = (bilder, schluessel) => bilder.filter((b) => b.schluessel === schluessel && b.datei !== null)
+    .map((b) => ({ typ: "feld", art: "bild", ziel: b.id, feld: "datei", wert: null }));
+
   function pruefe(art, werte) {
     for (const [f, w] of Object.entries(werte)) if (!Modell.FELDER[art][f](w)) return FEHLERTEXT[f] || "Ungültig: " + f;
     return null;
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse };
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
+    eigenesFoto, fotoSchritt, fotoWegSchritte, offDetails };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

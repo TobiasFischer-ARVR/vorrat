@@ -1,6 +1,7 @@
 // bilder.js - Produktbilder der Vorrats-App (v6, Bauplan Produktbilder Fassung 3, Abschnitt A). Nur Browser.
 // Eigene IndexedDB "vorrat-bilder", getrennt von den Vorgaengen: ein Bildfehler gefaehrdet nie den Vorrat.
 // Abschnitt A: Speicher "off" = Internetbild je Code (Zwischenspeicher, wiederbeschaffbar, hoechstens OFF_MAX).
+// Abschnitt B: Speicher "fotos" = eigene Fotodatei je Zufallsname { blob, hochgeladen, zeit }, nie ueberschrieben.
 // Jeder Fehler hier endet als "kein Bild" (null), nie als Ausnahme beim Aufrufer.
 (function (wurzel) {
   "use strict";
@@ -15,10 +16,11 @@
   let dbVersprechen = null;
   function oeffnen() {
     if (!dbVersprechen) dbVersprechen = new Promise((ok, nein) => {
-      const r = indexedDB.open(DB, 1);
+      const r = indexedDB.open(DB, 2);
       r.onupgradeneeded = () => {
-        const s = r.result.createObjectStore("off");
-        s.createIndex("zeit", "zeit");
+        const db = r.result;
+        if (!db.objectStoreNames.contains("off")) db.createObjectStore("off").createIndex("zeit", "zeit");
+        if (!db.objectStoreNames.contains("fotos")) db.createObjectStore("fotos");
       };
       r.onsuccess = () => { r.result.onversionchange = () => { r.result.close(); dbVersprechen = null; }; ok(r.result); };
       r.onerror = () => { dbVersprechen = null; nein(r.error); };
@@ -60,6 +62,42 @@
       return true;
     } catch (_) { return false; }
   }
+  // ---- eigene Fotos ----
+  // add statt put: ein Dateiname wird nie ueberschrieben. false = nicht gespeichert (Speicher voll o. ae.).
+  async function fotoSpeichern(datei, blob) {
+    try {
+      const db = await oeffnen();
+      const t = db.transaction("fotos", "readwrite");
+      t.objectStore("fotos").add({ blob, hochgeladen: false, zeit: Date.now() }, datei);
+      await fertig(t);
+      return true;
+    } catch (_) { return false; }
+  }
+  async function fotoLesen(datei) {
+    try {
+      const x = await anfrage((await oeffnen()).transaction("fotos").objectStore("fotos").get(datei));
+      return x && x.blob instanceof Blob ? x.blob : null;
+    } catch (_) { return null; }
+  }
+  async function fotoLoeschen(datei) {
+    try { const t = (await oeffnen()).transaction("fotos", "readwrite"); t.objectStore("fotos").delete(datei); await fertig(t); } catch (_) { /* Waise, harmlos */ }
+  }
+  // Fuer die Rueckfrage vor "Geraetedaten loeschen": nicht hochgeladene Fotos, die ein aktuelles Bild-Objekt
+  // nennt (aktuell = Set der Dateinamen; null = Stand unbekannt -> alle zaehlen). Wirft bei Lesefehler.
+  async function fotosOffen(aktuell) {
+    const r = (await oeffnen()).transaction("fotos").objectStore("fotos").openCursor();
+    let n = 0;
+    return new Promise((ok, nein) => {
+      r.onerror = () => nein(r.error);
+      r.onsuccess = () => {
+        const c = r.result;
+        if (!c) return ok(n);
+        if (!c.value.hochgeladen && (!aktuell || aktuell.has(c.key))) n++;
+        c.continue();
+      };
+    });
+  }
+
   async function leeren() {
     dbVersprechen = null;
     await new Promise((ok, nein) => { const r = indexedDB.deleteDatabase(DB); r.onsuccess = () => ok(); r.onerror = () => nein(r.error); r.onblocked = () => ok(); });
@@ -84,8 +122,9 @@
   async function normalisieren(blob) {
     let bmp = null;
     try {
-      // Erst die Masse aus dem Dateikopf (64 KB reichen fuer jeden ueblichen Kopf), dann erst dekodieren.
-      const m = H.bildMasse(new Uint8Array(await blob.slice(0, 65536).arrayBuffer()));
+      // Erst die Masse aus dem Dateikopf, dann erst dekodieren. 1 MB: bei Handykameras stehen EXIF mit Vorschaubild,
+      // MPF, XMP und ICC vor dem SOF-Marker, zusammen oft ueber 64 KB (Review v6 B #1).
+      const m = H.bildMasse(new Uint8Array(await blob.slice(0, 1 << 20).arrayBuffer()));
       if (!m || m.w > MAX_KANTE || m.h > MAX_KANTE) return null;
       bmp = await createImageBitmap(blob);
       if (!bmp.width || !bmp.height || bmp.width > MAX_KANTE || bmp.height > MAX_KANTE) return null;
@@ -113,5 +152,5 @@
     } catch (_) { return null; }
   }
 
-  wurzel.Bilder = { offLesen, offSchreiben, offLaden, normalisieren, leeren, OFF_MAX };
+  wurzel.Bilder = { offLesen, offSchreiben, offLaden, normalisieren, leeren, fotoSpeichern, fotoLesen, fotoLoeschen, fotosOffen, OFF_MAX };
 })(window);

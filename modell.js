@@ -9,7 +9,7 @@
   "use strict";
 
   const SCHEMA = 1;
-  const ARTEN = ["ort", "fach", "eintrag"];
+  const ARTEN = ["ort", "fach", "eintrag", "bild"]; // bild: v6 Abschnitt B (Foto-Zuordnung)
   const TYPEN = ["neu", "feld", "menge"];
   const GRUENDE = ["entnahme", "zugang", "korrektur"];
   // Erlaubte Schluessel auf oberster Ebene je Typ. Alles andere wird abgelehnt (Codex 1a #7, #10).
@@ -53,6 +53,15 @@
   const codeGueltig = (w) => typeof w === "string" &&
     ((/^gtin:(\d{8}|\d{13}|[1-9]\d{13})$/.test(w) && gtinOk(w.slice(5))) || (/^pzn:\d{8}$/.test(w) && pznOk(w.slice(4))));
 
+  // Bild-Schluessel (v6 B): kanonischer Code oder "n:" + Name (klein, Leerraum zusammengefasst, <= 100 Zeichen).
+  function namensSchluessel(name) {
+    const n = typeof name === "string" ? name.trim().replace(/\s+/g, " ").toLowerCase() : "";
+    return n && n.length <= 100 ? "n:" + n : null;
+  }
+  const bildSchluesselGueltig = (w) => codeGueltig(w) || (typeof w === "string" && w.startsWith("n:") && namensSchluessel(w.slice(2)) === w);
+  // Fotodatei: Zufallsname, nie wiederverwendet (kein Produktname in OneDrive). null = Foto entfernt (Fassung 3, R2 #1).
+  const FOTO = /^foto-[0-9a-f]{32}\.jpg$/;
+
   // "JJJJ-MM-TT" und ein echter Kalendertag (kein 30.02.)
   const datumGueltig = (w) => typeof w === "string" && DATUM.test(w) && isoAusTag(tagZahl(w)) === w;
   const mhdGueltig = (w) => w === null || (typeof w === "string" && MONAT.test(w)) || datumGueltig(w);
@@ -87,8 +96,13 @@
       code: (w) => w === null || codeGueltig(w), // v6: Strichcode (Produktbild), fehlt bei alten Eintraegen
       geloescht: bool,
     },
+    // Kein "geloescht": Entfernen und Ersetzen sind dasselbe Feld, der juengere Stempel gewinnt (R2 #1).
+    bild: {
+      schluessel: bildSchluesselGueltig,
+      datei: (w) => w === null || (typeof w === "string" && FOTO.test(w)),
+    },
   };
-  const PFLICHT_BEI_NEU = { ort: ["name", "reihen", "spalten"], fach: ["name", "lage"], eintrag: ["name"] };
+  const PFLICHT_BEI_NEU = { ort: ["name", "reihen", "spalten"], fach: ["name", "lage"], eintrag: ["name"], bild: ["schluessel", "datei"] };
 
   // Nur eigene Schluessel: "__proto__", "toString" usw. aus einer Datei duerfen nicht durchrutschen.
   function feldFehler(art, f, w) {
@@ -261,7 +275,17 @@
       e.ortKlaeren = e.sichtbar && (!f || f.geloescht || f.ortKlaeren);
       e.ablauf = e.sichtbar ? ablaufdatum(e) : null; // nach Jahren sind fast alle Eintraege leer
     }
-    return { orte, faecher, eintraege, maxUhr, widersprueche: widersprueche.sort(), verwaist: verwaist.sort() };
+    // Bilder: je Schluessel gilt der juengste datei-Stempel ueber ALLE Objekte des Schluessels (zwei Handys
+    // offline zugleich = zwei Objekte). fotoVon = Schluessel -> Datei, nur wo der Gewinner ein Foto hat.
+    const bilder = alle.filter((o) => o.art === "bild")
+      .map((o) => ({ id: o.id, schluessel: o.felder.schluessel, datei: o.felder.datei, dateiStempel: o.stempel.datei.slice() }));
+    const fotoVon = new Map(), juengster = new Map();
+    for (const b of bilder) {
+      if (!spaeter(b.dateiStempel, juengster.get(b.schluessel))) continue;
+      juengster.set(b.schluessel, b.dateiStempel);
+      if (b.datei) fotoVon.set(b.schluessel, b.datei); else fotoVon.delete(b.schluessel);
+    }
+    return { orte, faecher, eintraege, bilder, fotoVon, maxUhr, widersprueche: widersprueche.sort(), verwaist: verwaist.sort() };
   }
 
   // ---- Datumsrechnung (nur Kalendertage, keine Uhrzeit -> keine Zeitumstellungs-Falle) ----
@@ -339,7 +363,7 @@
   }
 
   const Modell = {
-    SCHEMA, FELDER, gtinOk, pznOk, codeGueltig,
+    SCHEMA, FELDER, gtinOk, pznOk, codeGueltig, namensSchluessel,
     pruefeVorgang, pruefeDatei, vereinige, berechne, kanonisch,
     ablaufdatum, plusMonate, tageBis, heuteIso, stufe, lokalIso,
     erzeuge, uhrNachziehen, korrektur, neueInstallationsId,
