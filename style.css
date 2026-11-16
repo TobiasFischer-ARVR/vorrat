@@ -35,13 +35,19 @@ main button.bestand { background: #e8710a; }
 main button.neben { background: #dcefe5; color: #1d6b49; }
 main button.gross { font-size: 1.15rem; padding: 14px 20px; }
 .ortbild { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; display: block; width: 100%; height: auto; max-width: 520px; margin: 0 auto; }
-.korpus { fill: #c9d6cf; }
-.boden { fill: #7d8c84; }
+.korpus { fill: #bdb7ab; }
+.pfosten { fill: #e3d9bd; }
 .platz, .frei { cursor: pointer; }
-.platz rect:first-child { stroke: #0003; stroke-width: 1.5; }
-.platz.rot rect:first-child { stroke: #d93025; stroke-width: 4; }
-.griff { fill: #0002; }
-.fname { font-size: 15px; font-weight: 600; }
+.platz rect.treffer { fill: transparent; stroke: none; }
+/* Ablauf-Warnung (Tobias 16.11.: Punkt UND Rahmen): farbiges Leuchten hinter dem Fach; steht vor .ziel/.angehoben/Fokus, die es ueberschreiben */
+.platz.rot rect.treffer { stroke: #d93025; stroke-width: 4; filter: drop-shadow(0 0 5px #d93025); }
+.platz.gelb rect.treffer { stroke: #e0a100; stroke-width: 4; filter: drop-shadow(0 0 5px #e0a100); }
+.schieber { fill: #e6c98f; stroke: #0003; }
+.griffloch { fill: #0b0b0c; stroke: #ffffff1a; }
+.etikett { fill: #fbfbf8; stroke: #0003; }
+.fname { font-size: 15px; font-weight: 700; }
+.kname { font-size: 12.5px; fill: #222; }
+.kzahl { fill: #c9c9c9; opacity: 1; }
 .fzahl { font-size: 12px; opacity: .8; }
 .punkt { fill: #d93025; stroke: #fff; stroke-width: 2; }
 .frei rect { fill: #ffffff80; stroke: #6b7d74; stroke-width: 1.5; stroke-dasharray: 6 5; }
@@ -116,7 +122,6 @@ main button.baldzeile.abgelaufen { border-left-color: #7a1410; background: #fde7
 .baldzeile .was { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .baldzeile .was b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .baldzeile .wann { display: flex; flex-direction: column; align-items: flex-end; font-size: .85rem; text-align: right; }
-.platz.gelb rect:first-child { stroke: #e0a100; stroke-width: 4; }
 .punkt.gelb { fill: #f2b632; }
 .punktzahl { font-size: 13px; font-weight: 800; fill: #fff; pointer-events: none; }
 .punktzahl.gelb { fill: #3b2a00; }

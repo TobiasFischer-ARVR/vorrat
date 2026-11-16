@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v5.3"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v5.4"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -109,7 +109,6 @@ let ortWahl = null;     // gewaehlter Reiter
 let laeuft = false;     // eine Aktion schreibt gerade
 const dauerhaftP = Speicher.dauerhaft(); // UGC #26, Ergebnis in "Pruefen"
 const MONATE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
-const FARBE = { braun: ["#8a5a32", "#fff"], "weiß": ["#fdfdfb", "#1d2b24"] }; // Ort.farben je Reihe
 
 // Element bauen: on...-Eintraege werden Ereignisse; null/false/"" als Kind fallen weg.
 const weg = (x) => x != null && x !== false && x !== "";
@@ -594,17 +593,72 @@ function zumFach(e) {
 
 // Digitales Bild des Orts: 1 Spalte = Schubladen uebereinander, sonst Boeden mit Kisten.
 // Jeder feste Platz zeigt seine Kiste oder ist frei (gestrichelt, "+").
+// v5.4 Design A (Tobias 16.11.): nah an den echten Moebeln (Fotos 08.11.) - glaenzende braune/hellgraue
+// Gefrierschubladen mit Etikettenleiste und Griffkante, schwarze Kisten mit Griffloch, Rillen und weissem Etikett
+// im cremefarbenen Regal. Erstes Kind jedes Platzes = unsichtbare Trefferflaeche (Fokus, Ablageziel, Tests).
+const ZEICHEN_DEFS = `
+<linearGradient id="zBraun" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6f5d4f"/><stop offset=".55" stop-color="#4a3c31"/><stop offset="1" stop-color="#352a22"/></linearGradient>
+<linearGradient id="zWeiss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2efe9"/><stop offset=".6" stop-color="#e2ddd3"/><stop offset="1" stop-color="#cbc5b9"/></linearGradient>
+<linearGradient id="zGlanz" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<linearGradient id="zGriff" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".35"/><stop offset="1" stop-color="#000" stop-opacity=".05"/></linearGradient>
+<linearGradient id="zInnen" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#d8d4cc"/><stop offset=".5" stop-color="#ece9e3"/><stop offset="1" stop-color="#d8d4cc"/></linearGradient>
+<linearGradient id="zKiste" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f2f31"/><stop offset="1" stop-color="#18181a"/></linearGradient>
+<linearGradient id="zDeckel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#45454a"/><stop offset="1" stop-color="#2f2f31"/></linearGradient>
+<linearGradient id="zBoden" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#efe6cf"/><stop offset="1" stop-color="#d6caa8"/></linearGradient>
+<linearGradient id="zWand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f1ede4"/><stop offset=".5" stop-color="#faf8f3"/><stop offset="1" stop-color="#f1ede4"/></linearGradient>
+<filter id="zSchatten" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="2.5" stdDeviation="2" flood-opacity=".35"/></filter>`;
+const sachenText = (n) => (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer");
+
+// Gefrierschublade: Front mit Glanz, Griffkante unten, Etikettenleiste mit Name, zwei Schieber.
+function schubladeTeile(x, y, w, h, braun, name, zahl) {
+  const fh = h - 14, mitte = x + w / 2, schrift = braun ? "#f4efe8" : "#2e2a24";
+  return [
+    sv("g", { filter: "url(#zSchatten)" },
+      sv("rect", { x, y, width: w, height: h, rx: 7, fill: braun ? "url(#zBraun)" : "url(#zWeiss)" }),
+      sv("rect", { x, y, width: w, height: fh, rx: 7, fill: "url(#zGlanz)" }),
+      sv("rect", { x: x + 10, y: y + fh, width: w - 20, height: 9, rx: 4, fill: "url(#zGriff)" }),
+      sv("rect", { x: x + 0.5, y: y + 0.5, width: w - 1, height: h - 1, rx: 7, fill: "none", stroke: braun ? "#ffffff22" : "#ffffffcc" }),
+      sv("rect", { x: x + 12, y: y + 9, width: w - 24, height: fh - 14, rx: 5, fill: braun ? "#00000055" : "#ffffffaa", stroke: braun ? "#e8e1d6" : "#5b544a", "stroke-width": 1.2 }),
+      sv("rect", { x: x + w - 34, y: y + fh - 3, width: 9, height: 7, rx: 1.5, class: "schieber" }),
+      sv("rect", { x: x + w - 23, y: y + fh - 3, width: 9, height: 7, rx: 1.5, class: "schieber" })),
+    sv("text", { x: mitte, y: y + 9 + (fh - 14) / 2 + 1, "text-anchor": "middle", fill: schrift, class: "fname" }, kuerze(name, Math.max(3, Math.floor((w - 24) / 9)))),
+    sv("text", { x: mitte, y: y + 9 + (fh - 14) / 2 + 14, "text-anchor": "middle", fill: schrift, class: "fzahl" }, zahl),
+  ];
+}
+// Kiste im Regal: schwarzer Korb (unten schmaler), Deckelrand, Griffloch, Rillen, weisses Etikett mit Name.
+function kisteTeile(x, y, w, h, name, zahl) {
+  const kh = h - 10, ky = y + 10, mitte = x + w / 2;
+  const kurz = kuerze(name, Math.max(3, Math.floor((w - 38) / 7.2)));
+  const lw = Math.min(w - 24, kurz.length * 7.2 + 14);
+  const rippen = [0, 1, 2, 3, 4].map((k) => sv("rect", { x: x + 10, y: ky + kh - 30 + k * 5, width: w - 20, height: 1.6, rx: 0.8, fill: "#ffffff14" }));
+  return [
+    sv("g", { filter: "url(#zSchatten)" },
+      sv("path", { d: `M${x + 4} ${ky + 6} H${x + w - 4} L${x + w - 8} ${ky + kh} H${x + 8} Z`, fill: "url(#zKiste)" }),
+      sv("rect", { x, y: ky, width: w, height: 9, rx: 3, fill: "url(#zDeckel)" }),
+      sv("rect", { x: mitte - 22, y: ky + 15, width: 44, height: 14, rx: 7, class: "griffloch" }),
+      ...rippen,
+      sv("rect", { x: mitte - lw / 2, y: ky + 33, width: lw, height: 19, rx: 2, class: "etikett" })),
+    sv("text", { x: mitte, y: ky + 47, "text-anchor": "middle", class: "fname kname" }, kurz),
+    sv("text", { x: mitte, y: ky + kh - 4, "text-anchor": "middle", class: "fzahl kzahl" }, zahl),
+  ];
+}
+
 function zeichnung(ort) {
-  const W = 360, rand = 12, luft = 8, schub = ort.spalten === 1, rh = schub ? 62 : 84;
+  const W = 360, schub = ort.spalten === 1, rand = schub ? 14 : 12, luft = schub ? 9 : 10, rh = schub ? 66 : 96, spalt = 6;
   const cw = (W - 2 * rand - (ort.spalten - 1) * luft) / ort.spalten;
   const hoehe = 2 * rand + ort.reihen * rh + (ort.reihen - 1) * luft;
   const marken = H.fachMarken(H.baldAb(stand.eintraege, Modell.heuteIso())); // Abschnitt 3
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${hoehe}`, class: "ortbild", role: "group", "aria-label": ort.name },
-    sv("rect", { width: W, height: hoehe, rx: 14, class: "korpus" }));
+  const defs = sv("defs", {});
+  defs.innerHTML = ZEICHEN_DEFS;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${hoehe}`, class: "ortbild", role: "group", "aria-label": ort.name }, defs);
+  if (schub) svg.append(sv("rect", { width: W, height: hoehe, rx: 16, class: "korpus" }),
+    sv("rect", { x: 7, y: 7, width: W - 14, height: hoehe - 14, rx: 11, fill: "url(#zInnen)", stroke: "#0002" }));
+  else svg.append(sv("rect", { width: W, height: hoehe, rx: 10, fill: "url(#zWand)" }),
+    sv("rect", { x: 2, y: 0, width: 7, height: hoehe, class: "pfosten" }), sv("rect", { x: W - 9, y: 0, width: 7, height: hoehe, class: "pfosten" }));
   for (let r = 0; r < ort.reihen; r++) {
     const y = rand + r * (rh + luft);
-    const [fuell, schrift] = FARBE[(ort.farben || [])[r]] || (schub ? ["#eef3f1", "#1d2b24"] : ["#d9b98d", "#3b2a17"]);
-    if (!schub) svg.append(sv("rect", { x: rand - 6, y: y + rh + 1, width: W - 2 * rand + 12, height: 5, rx: 2, class: "boden" }));
+    const braun = (ort.farben || [])[r] === "braun";
+    if (!schub) svg.append(sv("rect", { x: 0, y: y + rh + 1, width: W, height: 8, fill: "url(#zBoden)" }), sv("rect", { x: 0, y: y + rh + 9, width: W, height: 3, fill: "#0002" }));
     for (let c = 0; c < ort.spalten; c++) {
       const x = rand + c * (cw + luft);
       const hier = faecherAn(ort.id, r, c);
@@ -614,21 +668,19 @@ function zeichnung(ort) {
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fachDialog(null, { ort: ort.id, reihe: r, spalte: c }); } });
         svg.append(g);
       }
-      // ponytail: zwei Kisten auf einem Platz (gleichzeitig angelegt) teilen sich die Breite.
-      const w = cw / Math.max(1, hier.length);
+      // Mehrere Faecher auf einem Platz (Aufteilen) stehen nebeneinander, mit kleinem Spalt.
+      const w = (cw - (hier.length - 1) * spalt) / Math.max(1, hier.length);
       hier.forEach((f, i) => {
-        const es = imFach(f.id);
+        const n = imFach(f.id).length;
         const mk = marken.get(f.id); // { n, farbe } oder undefined
-        const xi = x + i * w, mitte = xi + w / 2;
+        const xi = x + i * (w + spalt), py = schub ? y + 15 : y + 26;
         const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
-          "aria-label": f.name + ", " + (es.length ? es.length + (es.length === 1 ? " Sache" : " Sachen") : "leer") +
+          "aria-label": f.name + ", " + sachenText(n) +
             (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
-          sv("rect", { x: xi, y, width: w, height: rh, rx: 8, fill: fuell }),
-          sv("rect", { x: mitte - 22, y: y + 7, width: 44, height: 6, rx: 3, class: "griff" }),
-          sv("text", { x: mitte, y: y + rh * 0.55, "text-anchor": "middle", fill: schrift, class: "fname" }, kuerze(f.name, Math.max(3, Math.floor(w / 9)))),
-          sv("text", { x: mitte, y: y + rh * 0.84, "text-anchor": "middle", fill: schrift, class: "fzahl" }, es.length ? es.length + (es.length === 1 ? " Sache" : " Sachen") : "leer"),
-          mk && sv("circle", { cx: xi + w - 15, cy: y + 15, r: 11, class: "punkt " + mk.farbe }),
-          mk && sv("text", { x: xi + w - 15, y: y + 19.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
+          sv("rect", { x: xi, y, width: w, height: rh, rx: 8, class: "treffer" }),
+          ...(schub ? schubladeTeile(xi, y, w, rh, braun, f.name, sachenText(n)) : kisteTeile(xi, y, w, rh, f.name, sachenText(n))),
+          mk && sv("circle", { cx: xi + w - 15, cy: py, r: 11, class: "punkt " + mk.farbe }),
+          mk && sv("text", { x: xi + w - 15, y: py + 4.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
         // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
         druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f), fachZug(f));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
