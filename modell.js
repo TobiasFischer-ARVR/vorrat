@@ -84,6 +84,7 @@
     fach: {
       name: (w) => text(w, 60),
       lage: lageGueltig,
+      offen: bool, // v6.4: Ablage ohne Kiste (Produkte stehen direkt im Regal); fehlt = Kiste
       geloescht: bool,
     },
     eintrag: {

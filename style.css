@@ -197,3 +197,14 @@ main button.scanstart { display: block; width: 100%; margin-top: 12px; padding: 
 .mzeile .bild img.foto { width: 2rem; height: 2rem; border-radius: 6px; }
 .codezeile { align-items: center; }
 .codezeile > button { margin: 0; flex: none; }
+/* v6.3 Suche */
+.suche { margin: 0 0 12px; }
+.suche input { width: 100%; box-sizing: border-box; font-size: 1.05rem; padding: 10px 12px; border-radius: 12px; border: 1px solid #cfe0d7; }
+.suche ul { list-style: none; margin: 6px 0 0; padding: 0; }
+main .suche button.baldzeile { border-left-color: #cfe0d7; } /* kein Warn-Gelb bei Suchtreffern */
+/* v6.4 Ablage ohne Kiste: Produktbilder stehen auf dem Regalboden */
+.ablagerand { fill: #ffffff55; stroke: #9a8f72; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.ablage { width: 100%; height: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 3px; font-size: 32px; line-height: 1; overflow: hidden; pointer-events: none; }
+.ablage span { display: flex; align-items: flex-end; min-width: 0; }
+.ablage img.foto { max-height: 58px; max-width: 52px; object-fit: contain; border-radius: 4px; }
+.ablage b { font-size: 13px; color: #555; align-self: center; }

@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.2"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.4"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -264,15 +264,22 @@ const konto = (() => {
     return {
       bereit,
       name: () => { const k = kontoBereit && !kontoFehler && app.getActiveAccount(); return k ? k.name || k.username : null; },
-      anmelden: () => app.loginRedirect({ scopes: SCOPES, prompt: "select_account" }),
+      // v6.3: Kontoauswahl nur bei "Anderes Konto"; sonst nimmt Microsoft die laufende Browser-Sitzung (meist ohne Eingabe).
+      anmelden: (auswahl) => app.loginRedirect({ scopes: SCOPES, ...(auswahl ? { prompt: "select_account" } : {}) }),
+      // v6.3: SPA-Verlaengerung (Refresh-Token) gilt bei Microsoft nur 24 h. Danach EIN Umweg ueber die Microsoft-Seite,
+      // mit dem bekannten Konto und ohne Kontoauswahl - bei laufender Microsoft-Sitzung ohne Eingabe zurueck.
+      abgelaufen: false,
+      erneuern: () => { const k = app.getActiveAccount(); return k ? app.acquireTokenRedirect({ scopes: SCOPES, account: k }) : app.loginRedirect({ scopes: SCOPES }); },
       // Kein "Abmelden": MSAL 4.30 entfernt beim Logout ALLE localStorage-Eintraege mit der homeAccountId,
       // auch die der UGC-App auf derselben Domain (geprueft im Bibliothekscode, Codex-Frage 7).
       // Konto wechseln geht ueber anmelden() mit Kontoauswahl.
       async token() { // Luecke 11: abgelaufenes Token laut melden, nicht still "offline"
         const k = kontoBereit && !kontoFehler && app.getActiveAccount();
         if (!k) throw new Error("nicht bei Microsoft angemeldet");
-        try { return (await app.acquireTokenSilent({ scopes: SCOPES, account: k })).accessToken; } catch (x) {
-          throw new Error(x instanceof msal.InteractionRequiredAuthError ? "Anmeldung abgelaufen – bitte neu anmelden (☰ → Einstellungen)" : "Anmeldung nicht erreichbar (offline?)");
+        try { const t = (await app.acquireTokenSilent({ scopes: SCOPES, account: k })).accessToken; this.abgelaufen = false; return t; } catch (x) {
+          if (!(x instanceof msal.InteractionRequiredAuthError)) throw new Error("Anmeldung nicht erreichbar (offline?)");
+          this.abgelaufen = true;
+          throw new Error("Anmeldung abgelaufen – „Neu anmelden“ antippen");
         }
       },
     };
@@ -324,7 +331,17 @@ async function abgleich(frisch) {
   } catch (x) { abFehler = (x && x.message) || String(x); }
   abLaeuft = false;
   await laden();
+  if (konto && konto.abgelaufen && neuAufloesen) autoErneuern();
   if (abNochmal) abgleich();
+}
+// v6.3 (Tobias 16.11.: "so oft anmelden"): nur beim Oeffnen/Zurueckkehren, nie mitten in einem Dialog, Ziehen oder
+// Speichern, und hoechstens alle 10 Minuten (keine Schleife, falls auch die Microsoft-Sitzung abgelaufen ist).
+// Ungespeichertes geht dabei nicht verloren: jede Aenderung liegt schon vorher im Speicher des Handys.
+function autoErneuern() {
+  const zuletzt = Number(sessionStorage.getItem("vorrat-auto-anmeldung") || 0);
+  if (dialogOffen() || zieht || laeuft || document.hidden || Date.now() - zuletzt < 600000) return;
+  sessionStorage.setItem("vorrat-auto-anmeldung", String(Date.now()));
+  konto.erneuern().catch(() => { /* Karte zeigt weiter "Neu anmelden" */ });
 }
 function abgleichBald() { clearTimeout(abUhr); abUhr = setTimeout(abgleich, 3000); }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") abgleich(true); });
@@ -354,6 +371,7 @@ function abgleichKarte() {
     el("div", null, text),
     alt.map((t) => el("div", null, "⚠ " + t)),
     (!gut || alt.length > 0) && el("div", { className: "knoepfe" },
+      konto && konto.abgelaufen && el("button", { onclick: () => konto.erneuern() }, "Neu anmelden"),
       einrichten && konto && el("button", { onclick: einstellungenDialog }, "Einstellungen"),
       konto && konto.name() && eingerichtet() && !abLaeuft && el("button", { onclick: () => abgleich() }, "Jetzt abgleichen"),
       alt.length > 0 && el("button", { onclick: () => oeffne({ art: "sicherung" }) }, "Details")));
@@ -434,7 +452,7 @@ function einstellungenDialog() {
   dialog("Einstellungen", [
     el("h3", null, "Microsoft-Konto"),
     !konto ? el("p", { className: "hinweis-rot" }, "Anmeldung nicht geladen: " + (kontoFehler || "unbekannt"))
-      : name ? el("div", { className: "zeilen" }, el("p", null, "Angemeldet: " + name), el("button", { type: "button", onclick: () => konto.anmelden() }, "Anderes Konto"))
+      : name ? el("div", { className: "zeilen" }, el("p", null, "Angemeldet: " + name), el("button", { type: "button", onclick: () => konto.anmelden(true) }, "Anderes Konto"))
         : el("button", { type: "button", onclick: () => konto.anmelden() }, "Bei Microsoft anmelden"),
     el("h3", null, "Ordner in OneDrive"),
     el("p", { className: "klein" }, "Steht nur in diesem Gerät. Eintippen (Windows-Pfad aus dem Explorer geht auch) oder 📁 durchklicken."),
@@ -519,6 +537,7 @@ const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id
 const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
 const fachWort = (o) => (o && o.spalten === 1 ? "Schublade" : "Kiste");
+const fachArt = (f, o) => (f.offen ? "Ablage" : fachWort(o)); // v6.4
 const klaeren = () => ({ kisten: stand.faecher.filter((f) => f.ortKlaeren), eintraege: stand.eintraege.filter((e) => e.ortKlaeren).sort(nachAblauf) });
 
 // ---- Ansichten ----
@@ -556,6 +575,7 @@ function startAnsicht() {
     if (f) baldJeOrt.set(f.lage.ort, (baldJeOrt.get(f.lage.ort) || 0) + m.n);
   }
   return [
+    suchTeil(),
     baldAbTeil(),
     abgleichKarte(),
     el("nav", { className: "reiter" }, orte.map((o) => {
@@ -573,6 +593,32 @@ function startAnsicht() {
     el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
+}
+
+// ---- v6.3 Suche (Tobias 16.11.): "Tomat" findet Tomatenmark, Tomatenketchup … samt Lagerort ----
+// Die Trefferliste wird beim Tippen nur IN PLACE erneuert (zeichnen() wuerde das Eingabefeld ersetzen = Tastatur zu).
+let suchText = "";
+const ohneAkzent = (t) => t.toLocaleLowerCase("de").normalize("NFD").replace(/[̀-ͯ]/g, "");
+function suchTeil() {
+  const liste = el("ul");
+  const fuellen = () => {
+    const q = ohneAkzent(suchText.trim());
+    const treffer = q ? stand.eintraege.filter((e) => e.sichtbar && ohneAkzent(e.name).includes(q)).sort(nachAblauf) : [];
+    liste.replaceChildren(...treffer.slice(0, 50).map((e) => el("li", null, el("button", {
+      className: "baldzeile", onclick: () => zumFach(e),
+      "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
+      el("span", { className: "bild", "aria-hidden": "true" }, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name))),
+      el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
+      el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)))))),
+      ...(q && !treffer.length ? [el("li", { className: "klein" }, "Nichts gefunden.")] : []));
+  };
+  const feldS = el("input", { type: "search", value: suchText, placeholder: "🔍 Suchen, z. B. Tomat", autocomplete: "off", "aria-label": "Vorrat durchsuchen",
+    oninput: () => { suchText = feldS.value; fuellen(); } });
+  fuellen();
+  // Neuzeichnen (z. B. Abgleich fertig) waehrend des Tippens: Fokus und Cursor ins neue Feld uebernehmen
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest(".suche"))
+    requestAnimationFrame(() => { feldS.focus(); feldS.setSelectionRange(feldS.value.length, feldS.value.length); });
+  return el("section", { className: "suche" }, feldS, liste);
 }
 
 // ---- Abschnitt 3: "Laeuft bald ab" (Kernfunktion), ganz oben auf der Startseite ----
@@ -661,6 +707,23 @@ function kisteTeile(x, y, w, h, name, zahl) {
   ];
 }
 
+// v6.4 (Tobias 16.11.): Ablage ohne Kiste - Getraenke, Kuechenrolle, Oel … stehen direkt im Regal. Statt der Kiste
+// stehen bis zu 3 Produktbilder auf dem Boden (Foto oder Bildchen, wie auf den Kacheln), darunter das Etikett.
+function ablageTeile(x, y, w, h, f, n) {
+  const es = imFach(f.id).sort(nachAblauf);
+  const fo = sv("foreignObject", { x: x + 4, y: y + 4, width: w - 8, height: h - 30 });
+  fo.append(el("div", { className: "ablage" }, es.slice(0, 3).map((e) => el("span", null, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name)))),
+    es.length > 3 && el("b", null, "+" + (es.length - 3))));
+  const kurz = kuerze(f.name, Math.max(3, Math.floor((w - 16) / 7.2)));
+  const lw = Math.min(w - 8, kurz.length * 7.2 + 14), mitte = x + w / 2;
+  return [
+    !n && sv("rect", { x: x + 2, y: y + 2, width: w - 4, height: h - 4, rx: 6, class: "ablagerand" }),
+    fo,
+    sv("rect", { x: mitte - lw / 2, y: y + h - 24, width: lw, height: 19, rx: 2, class: "etikett" }),
+    sv("text", { x: mitte, y: y + h - 10, "text-anchor": "middle", class: "fname kname" }, kurz),
+  ];
+}
+
 function zeichnung(ort) {
   const W = 360, schub = ort.spalten === 1, rand = schub ? 14 : 12, luft = schub ? 9 : 10, rh = schub ? 66 : 96, spalt = 6;
   const cw = (W - 2 * rand - (ort.spalten - 1) * luft) / ort.spalten;
@@ -696,7 +759,7 @@ function zeichnung(ort) {
           "aria-label": f.name + ", " + sachenText(n) +
             (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
           sv("rect", { x: xi, y, width: w, height: rh, rx: 8, class: "treffer" }),
-          ...(schub ? schubladeTeile(xi, y, w, rh, braun, f.name, sachenText(n)) : kisteTeile(xi, y, w, rh, f.name, sachenText(n))),
+          ...(schub ? schubladeTeile(xi, y, w, rh, braun, f.name, sachenText(n)) : f.offen ? ablageTeile(xi, y, w, rh, f, n) : kisteTeile(xi, y, w, rh, f.name, sachenText(n))),
           mk && sv("circle", { cx: xi + w - 15, cy: py, r: 11, class: "punkt " + mk.farbe }),
           mk && sv("text", { x: xi + w - 15, y: py + 4.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
         // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
@@ -1048,7 +1111,7 @@ function fachAnsicht(ebene) {
     if (m.size) zeichnen(); else zurueck();
   };
   return [
-    kopf(f.name, !m && el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachWort(o))),
+    kopf(f.name, !m && el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachArt(f, o))),
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
     m && el("div", { className: "knoepfe markleiste", role: "status" },
       el("b", null, m.size + " markiert"),
@@ -1830,6 +1893,7 @@ function fachDialog(f, lage, nur) {
   const wort = fachWort(ort);
   const name = el("input", { value: f ? f.name : "", maxLength: 60, placeholder: "z. B. Nudeln", autocomplete: "off" });
   let platzSel = null;
+  const ablage = !f && ort.spalten > 1 && el("input", { type: "checkbox" }); // v6.4
   if (f && nur === "platz") { // Platz: eigener + alle freien Plaetze aller Orte
     const opt = f.ortKlaeren ? [el("option", { value: "" }, "– kein gültiger Platz –")] : [];
     for (const o of orteSichtbar()) for (let r = 0; r < o.reihen; r++) for (let c = 0; c < o.spalten; c++) {
@@ -1843,12 +1907,14 @@ function fachDialog(f, lage, nur) {
   dialog(!f ? "Neue " + wort : nur === "platz" ? "„" + kuerze(f.name, 30) + "“: Platz ändern" : wort + " umbenennen", [
     !f && el("p", { className: "klein" }, ort.name + " · " + platzName(ort, lage.reihe, lage.spalte)),
     nur !== "platz" && feld("Name", name),
+    ablage && el("label", { className: "schalter" }, ablage, "🧺 Ablage ohne Kiste – die Produkte stehen direkt im Regal"),
     platzSel && feld("Platz", platzSel),
     platzSel && el("p", { className: "klein" }, "Belegter Platz = daneben legen. Der Inhalt zieht mit um. Tauschen: in der Zeichnung auf das andere Fach ziehen."),
   ], [
     ["Speichern", async (melde, schliessen) => {
       if (f && !fachVon(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
       const werte = nur === "platz" ? {} : { name: name.value.trim() };
+      if (ablage && ablage.checked) werte.offen = true; // nur wenn gewaehlt: Kisten bleiben ohne neues Feld
       if (!f) werte.lage = lage;
       else if (platzSel && platzSel.value) {
         const l = JSON.parse(platzSel.value);
@@ -1876,7 +1942,7 @@ const fachWegSchliessen = (f, schliessen) => schliessen(fachAnsichtVon(f) ? 2 : 
 function fachMenue(alt) {
   const f = fachVon(alt.id); // gezeichnetes Objekt kann veraltet sein (Abgleich waehrend des Drueckens)
   if (!f || f.geloescht) return hinweis("Dieses Fach gibt es nicht mehr.");
-  const o = ortVon(f.lage.ort), wort = fachWort(o), n = imFach(f.id).length, nb = nachbarn(f);
+  const o = ortVon(f.lage.ort), wort = fachArt(f, o), n = imFach(f.id).length, nb = nachbarn(f);
   dialog(wort + " „" + kuerze(f.name, 30) + "“", [el("p", { className: "klein" },
     (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], [
     !fachAnsichtVon(f) && ["Öffnen", weiter(() => oeffne({ art: "fach", id: f.id }))],
@@ -1884,6 +1950,11 @@ function fachMenue(alt) {
     ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
     !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
     nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
+    o && o.spalten > 1 && [f.offen ? "📦 In Kiste umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
+      const jetzt = fachVon(f.id);
+      if (!jetzt || jetzt.geloescht) return melde("Dieses Fach gibt es nicht mehr.");
+      if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "offen", wert: !jetzt.offen }])) schliessen();
+    }],
     ["Löschen", async (melde, schliessen) => {
       if (!confirm(wort + " „" + f.name + "“ löschen?" + (n ? "\n\n" + n + " Einträge darin kommen in „Ort klären“, nichts geht verloren." : ""))) return;
       if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "geloescht", wert: true }])) fachWegSchliessen(f, schliessen);
