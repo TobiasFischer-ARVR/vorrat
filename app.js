@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.8"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.10"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -601,8 +601,9 @@ function startAnsicht() {
     zeichnung(ortVon(ortWahl)),
     rasterKnoepfe(ortVon(ortWahl)),
     // v6.6 (Tobias: "da sehe ich 6 Felder"): Vorlage sichtbar anbieten, solange der Medizinschrank noch der alte Platzhalter ist.
-    ortVon(ortWahl).name === "Medizinschrank" && !ortVon(ortWahl).stil &&
-      el("button", { className: "neben gross", onclick: () => medizinEinrichten(ortWahl) }, "🩹 Wie auf dem Foto einrichten (34 Schubladen)"),
+    ortVon(ortWahl).name === "Medizinschrank" && ortVon(ortWahl).reihen !== H.MEDIZIN.reihen &&
+      el("button", { className: "neben gross", onclick: () => medizinEinrichten(ortWahl) },
+        ortVon(ortWahl).stil ? "🩹 Schubladen-Größen wie auf dem Foto übernehmen" : "🩹 Wie auf dem Foto einrichten (34 Schubladen)"),
     el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
@@ -748,7 +749,7 @@ function klarTeile(x, y, w, h, name, zahl) {
     // v6.8 (Tobias): Etikett immer mittig - rechtsbuendig wirkten kurze Namen rechts, lange mittig
     sv("rect", { x: mitte - lw / 2, y: y + 14, width: lw, height: 15, rx: 1.5, class: "etikett" }),
     sv("text", { x: mitte, y: y + 25, "text-anchor": "middle", class: "fname kname klname" }, kurz),
-    sv("text", { x: mitte, y: y + h - 7, "text-anchor": "middle", class: "fzahl klzahl" }, zahl),
+    h >= 50 && sv("text", { x: mitte, y: y + h - 7, "text-anchor": "middle", class: "fzahl klzahl" }, zahl),
   ];
 }
 
@@ -773,7 +774,8 @@ function zeichnung(ort) {
   // v6.5 Sortierkasten (Medizinschrank): breiter als der Bildschirm -> seitlich wischen; Trennwand zwischen den Schrankfaechern.
   const sk = ort.stil === "sortierkasten", tb = sk && ort.trenner && ort.trenner < ort.spalten ? 18 : 0;
   const W = sk ? Math.max(360, 100 * ort.spalten + tb) : 360, schub = !sk && ort.spalten === 1;
-  const rand = schub ? 14 : 12, luft = schub ? 9 : sk ? 6 : 10, rh = schub ? 66 : sk ? 58 : 96, spalt = 6;
+  const fein = sk && ort.reihen > 6; // v6.10: feines Raster (Medizinschrank 12 Reihen) - niedrigere Reihen
+  const rand = schub ? 14 : 12, luft = schub ? 9 : sk ? (fein ? 4 : 6) : 10, rh = schub ? 66 : sk ? (fein ? 30 : 58) : 96, spalt = 6;
   const cw = (W - 2 * rand - (ort.spalten - 1) * luft - tb) / ort.spalten;
   const xVon = (c) => rand + c * (cw + luft) + (tb && c >= ort.trenner ? tb : 0);
   const hoehe = 2 * rand + ort.reihen * rh + (ort.reihen - 1) * luft;
@@ -834,12 +836,15 @@ const skScroll = new Map();
 function sortierRahmen(svg, ortId) {
   const box = el("div", { className: "ortscroll" }, svg);
   const pfeil = (text, aria, richtung) => el("button", { type: "button", className: "ortpfeil " + (richtung < 0 ? "links" : "rechts"), "aria-label": aria,
-    onclick: () => box.scrollBy({ left: richtung * box.clientWidth * 0.9, behavior: "smooth" }) }, text);
+    onclick: () => { box.scrollLeft = richtung < 0 ? 0 : box.scrollWidth; } }, text); // v6.9: ganz an den Rand (Browser begrenzt auf das Maximum)
   const li = pfeil("◀", "Weiter nach links", -1), re = pfeil("▶", "Weiter nach rechts", 1);
-  const zeigen = () => { li.hidden = box.scrollLeft <= 2; re.hidden = box.scrollLeft + box.clientWidth >= box.scrollWidth - 2; };
+  // Klasse statt hidden: der Pfeil behaelt seinen Platz (global gilt [hidden] = display:none !important). Sonst wurde die
+  // Zeichnung beim Erscheinen des linken Pfeils schmaler, und ▶ blieb 32 px vor dem Rand stehen (Tobias 16.11.).
+  const aus = (k, ja) => { k.classList.toggle("aus", ja); k.disabled = ja; };
+  const zeigen = () => { aus(li, box.scrollLeft <= 2); aus(re, box.scrollLeft + box.clientWidth >= box.scrollWidth - 2); };
   box.addEventListener("scroll", () => { skScroll.set(ortId, box.scrollLeft); zeigen(); }, { passive: true });
   requestAnimationFrame(() => { box.scrollLeft = skScroll.get(ortId) || 0; zeigen(); });
-  return el("div", { className: "ortrahmen" }, box, li, re);
+  return el("div", { className: "ortrahmen" }, li, box, re); // v6.9: Pfeile neben der Zeichnung
 }
 
 // v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
@@ -2173,11 +2178,18 @@ function fachAufFach(id, zielId) {
 async function medizinEinrichten(id) {
   const o = ortVon(id);
   if (!o || o.geloescht) { hinweis("Diesen Ort gibt es nicht mehr."); return false; }
-  const frei = (r, c) => !faecherUeber(id, r, c).length;
-  const n = H.medizinSchritte(id, frei).filter((v) => v.typ === "neu").length;
-  if (!confirm("„" + o.name + "“ als Medizinschrank einrichten?\n\n2 Seiten nebeneinander, 8 × 6 Plätze, " + n +
-    " Schubladen und Ablagen mit den Etiketten vom Foto. Was schon da ist, bleibt liegen.")) return false;
-  if (!(await tun(H.medizinSchritte(id, frei)))) return false;
+  // Vorlagen-Schubladen, die es schon gibt, werden umgesetzt - sie zaehlen beim "frei" nicht als Hindernis.
+  const namen = new Set(H.medizinPlaetze().map((p) => p.name));
+  // je Name nur die erste (Review: doppelte Namen) - alle anderen Faecher im Ort gelten als Hindernis
+  const vorhanden = [];
+  for (const f of stand.faecher) if (!f.geloescht && f.lage.ort === id && namen.has(f.name) && !vorhanden.some((v) => v.name === f.name)) vorhanden.push(f);
+  const umzug = new Set(vorhanden.map((f) => f.id));
+  const frei = (r, c) => !faecherUeber(id, r, c).some((f) => !umzug.has(f.id));
+  const schritte = H.medizinSchritte(id, frei, vorhanden), neu = schritte.filter((v) => v.typ === "neu").length;
+  if (!confirm("„" + o.name + "“ wie auf dem Foto einrichten?\n\n2 Seiten nebeneinander, Schubladen in den Größen vom Foto." +
+    (vorhanden.length ? "\n" + vorhanden.length + " vorhandene Schubladen werden umgesetzt, der Inhalt bleibt drin." : "") +
+    (neu ? "\n" + neu + " Schubladen/Ablagen werden neu angelegt." : "") + "\nEigene Fächer mit anderen Namen bleiben, wo sie sind.")) return false;
+  if (!(await tun(schritte))) return false;
   ortWahl = id;
   return true;
 }
@@ -2210,7 +2222,7 @@ function ortDialog(o) {
       if (!daten.length || (await tun(daten))) schliessen();
     }],
     // v6.5: Raster, Aussehen und alle Schubladen wie auf den Fotos; belegte Plaetze bleiben, wie sie sind.
-    o && !o.stil && ["🩹 Als Medizinschrank einrichten (Vorlage)", async (melde, schliessen) => { if (await medizinEinrichten(o.id)) schliessen(2); }],
+    o && (!o.stil || o.reihen !== H.MEDIZIN.reihen) && [o.stil ? "🩹 Größen wie auf dem Foto übernehmen" : "🩹 Als Medizinschrank einrichten (Vorlage)", async (melde, schliessen) => { if (await medizinEinrichten(o.id)) schliessen(2); }],
     o && ["Löschen", async (melde, schliessen) => {
       const kisten = stand.faecher.filter((f) => !f.geloescht && f.lage.ort === o.id);
       const n = kisten.reduce((s, f) => s + imFach(f.id).length, 0);

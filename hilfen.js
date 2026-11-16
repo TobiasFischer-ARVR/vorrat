@@ -159,17 +159,19 @@
   // unten buendig wie im Schrank (Turm mit n Schubladen = die unteren n Reihen). Oben auf Turm 1 je eine Ablage.
   // Gleiche Etiketten bekommen eine Nummer (sonst beim Verschieben nicht unterscheidbar); kurz wie auf den Etiketten,
   // damit der Unterschied in der Zeichnung nicht abgeschnitten wird.
-  const MEDIZIN = { reihen: 6, spalten: 8, trenner: 4, tuerme: [
-    ["Klebeband", "Mullbinden", "Pflaster", "Sonderpflaster"],
-    ["Salben", "Kompressen", ["Wärmepflaster", 2]],
-    ["Ohren", "Augen", "Desinfektion", "Verband selbsthaftend", "Verband"],
-    ["Kochsalzlsg 1", "Kochsalzlsg 2", "Fingerlinge", "Thermometer & Sonstiges", "Tape & Schere"],
-    ["Magendarm 1", "Magendarm 2", "Lactose", "Kühlpack"],
-    ["Erkältung 1", "Erkältung 2", ["Schmerzen", 2]],
-    ["Baby Kochsalz", "Baby Bauch 1", "Baby Pflaster", "Baby Schmerzen"],
-    ["Baby Nasenspülung", "Baby Nase", "Baby Bauch 2", "Baby Erkältung", "Baby Zahnen", "Baby Salben"],
-  ], ablagen: [["Oben links", 0], ["Oben rechts", 4]] };
-  // Turm-Eintrag: "Name" oder ["Name", Hoehe in Reihen] (v6.7).
+  // v6.10 (Tobias 16.11., Fotos nachgemessen): feines Raster mit 12 Reihen. Kleine Schublade = 2 Reihen (ca. 120 px auf
+  // dem Foto), grosse = 3 (ca. 185 px), im breiten Turm 3 + 2 + 5 (Waermepflaster/Schmerzen doppelt). Tuerme unten buendig.
+  const MEDIZIN = { reihen: 12, spalten: 8, trenner: 4, tuerme: [
+    [["Klebeband", 2], ["Mullbinden", 3], ["Pflaster", 2], ["Sonderpflaster", 3]],
+    [["Salben", 3], ["Kompressen", 2], ["Wärmepflaster", 5]],
+    [["Ohren", 2], ["Augen", 2], ["Desinfektion", 2], ["Verband selbsthaftend", 3], ["Verband", 3]],
+    [["Kochsalzlsg 1", 2], ["Kochsalzlsg 2", 2], ["Fingerlinge", 2], ["Thermometer & Sonstiges", 3], ["Tape & Schere", 3]],
+    [["Magendarm 1", 2], ["Magendarm 2", 3], ["Lactose", 2], ["Kühlpack", 3]],
+    [["Erkältung 1", 3], ["Erkältung 2", 2], ["Schmerzen", 5]],
+    [["Baby Kochsalz", 3], ["Baby Bauch 1", 3], ["Baby Pflaster", 3], ["Baby Schmerzen", 3]],
+    [["Baby Nasenspülung", 2], ["Baby Nase", 2], ["Baby Bauch 2", 2], ["Baby Erkältung", 2], ["Baby Zahnen", 2], ["Baby Salben", 2]],
+  ], ablagen: [["Oben links", 0, 2], ["Oben rechts", 4, 2]] };
+  // Turm-Eintrag: "Name" oder ["Name", Hoehe in Reihen].
   const turmTeil = (x) => (Array.isArray(x) ? { name: x[0], hoch: x[1] } : { name: x, hoch: 1 });
   const turmHoehe = (t) => t.reduce((s, x) => s + turmTeil(x).hoch, 0);
   const medizinPlaetze = () => [
@@ -177,17 +179,29 @@
       let reihe = MEDIZIN.reihen - turmHoehe(t);
       return t.map((x) => { const { name, hoch } = turmTeil(x); const p = { name, reihe, spalte, hoch }; reihe += hoch; return p; });
     }),
-    ...MEDIZIN.ablagen.map(([name, spalte]) => ({ name, reihe: MEDIZIN.reihen - turmHoehe(MEDIZIN.tuerme[spalte]) - 1, spalte, hoch: 1, offen: true })),
+    ...MEDIZIN.ablagen.map(([name, spalte, hoch]) => ({ name, reihe: MEDIZIN.reihen - turmHoehe(MEDIZIN.tuerme[spalte]) - hoch, spalte, hoch, offen: true })),
   ];
-  // Schritte: Raster + Aussehen setzen, Faecher NUR auf freien Plaetzen anlegen (frei(reihe, spalte) -> bool).
-  const medizinSchritte = (ortId, frei) => [
+  // Schritte: Raster + Aussehen setzen. Schubladen mit Vorlagen-Namen, die es im Ort schon gibt (vorhanden), werden nur
+  // umgesetzt (Platz/Hoehe, Inhalt bleibt); fehlende werden angelegt, wenn ihre Plaetze frei sind (frei(reihe, spalte)).
+  const medizinSchritte = (ortId, frei, vorhanden = []) => [
     ...[["reihen", MEDIZIN.reihen], ["spalten", MEDIZIN.spalten], ["stil", "sortierkasten"], ["trenner", MEDIZIN.trenner]]
       .map(([feld, wert]) => ({ typ: "feld", art: "ort", ziel: ortId, feld, wert })),
-    ...medizinPlaetze().filter((p) => Array.from({ length: p.hoch }, (_, i) => frei(p.reihe + i, p.spalte)).every(Boolean)).map((p) => {
+    ...medizinPlaetze().flatMap((p) => {
+      const da = vorhanden.find((f) => f.name === p.name);
+      const platz = Array.from({ length: p.hoch }, (_, i) => frei(p.reihe + i, p.spalte)).every(Boolean);
+      if (da && !platz) return []; // Review: Zielplatz von einem eigenen Fach belegt -> vorhandene Schublade bleibt, wo sie ist
+      if (da) {
+        const lage = { ort: ortId, reihe: p.reihe, spalte: p.spalte }, alt = da.lage || {};
+        return [
+          ...(alt.ort !== ortId || alt.reihe !== p.reihe || alt.spalte !== p.spalte ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "lage", wert: lage }] : []),
+          ...((da.hoch || 1) !== p.hoch ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "hoch", wert: p.hoch > 1 ? p.hoch : null }] : []),
+        ];
+      }
+      if (!platz) return [];
       const v = fachNeu(p.name, ortId, p.reihe, p.spalte);
       if (p.offen) v.werte.offen = true;
       if (p.hoch > 1) v.werte.hoch = p.hoch;
-      return v;
+      return [v];
     }),
   ];
 
