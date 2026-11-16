@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.7"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.8"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -588,7 +588,7 @@ function startAnsicht() {
     suchTeil(),
     baldAbTeil(),
     abgleichKarte(),
-    el("nav", { className: "reiter" }, orte.map((o) => {
+    reiterLeiste(orte.map((o) => {
       const n = baldJeOrt.get(o.id) || 0; // Abschnitt 3: auch im Reiter sehen, wo etwas bald ablaeuft
       return el("button", { className: o.id === ortWahl ? "an" : "", "aria-current": o.id === ortWahl ? "true" : "false", onclick: () => { ortWahl = o.id; zeichnen(); },
         "aria-label": o.name + (n > 0 ? ", " + n + " laufen bald ab" : "") },
@@ -606,6 +606,23 @@ function startAnsicht() {
     el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
+}
+
+// v6.8 (Tobias 16.11.): Die Reiter-Leiste behaelt beim Neuzeichnen ihre Wisch-Position, der gewaehlte Reiter bleibt sichtbar
+// (vorher sprang sie nach jedem Tipp an den Anfang, der Medizinschrank verschwand rechts aus dem Bild).
+let reiterScroll = 0;
+function reiterLeiste(knoepfe) {
+  const nav = el("nav", { className: "reiter" }, knoepfe);
+  nav.addEventListener("scroll", () => { reiterScroll = nav.scrollLeft; }, { passive: true });
+  requestAnimationFrame(() => {
+    nav.scrollLeft = reiterScroll;
+    const an = nav.querySelector("button.an");
+    if (!an) return;
+    const a = an.getBoundingClientRect(), b = nav.getBoundingClientRect();
+    if (a.left < b.left) nav.scrollLeft -= b.left - a.left + 8;
+    else if (a.right > b.right) nav.scrollLeft += a.right - b.right + 8;
+  });
+  return nav;
 }
 
 // ---- v6.3 Suche (Tobias 16.11.): "Tomat" findet Tomatenmark, Tomatenketchup … samt Lagerort ----
@@ -720,7 +737,7 @@ function kisteTeile(x, y, w, h, name, zahl) {
   ];
 }
 
-// v6.5 Sortierkasten-Schublade (Medizinschrank-Foto): durchsichtig, schwarzer Rahmen, Griffmulde oben, weisses Etikett rechts.
+// v6.5 Sortierkasten-Schublade (Medizinschrank-Foto): durchsichtig, schwarzer Rahmen, Griffmulde oben, weisses Etikett (v6.8 mittig).
 function klarTeile(x, y, w, h, name, zahl) {
   const kurz = kuerze(name, Math.max(3, Math.floor((w - 12) / 5.9)));
   const lw = Math.min(w - 8, kurz.length * 5.9 + 10), mitte = x + w / 2;
@@ -728,8 +745,9 @@ function klarTeile(x, y, w, h, name, zahl) {
     sv("g", { filter: "url(#zSchatten)" },
       sv("rect", { x, y, width: w, height: h, rx: 3, class: "klar" }),
       sv("path", { d: `M${mitte - 11} ${y + 1.5} a11 8 0 0 0 22 0`, class: "klargriff" })),
-    sv("rect", { x: x + w - lw - 4, y: y + 14, width: lw, height: 15, rx: 1.5, class: "etikett" }),
-    sv("text", { x: x + w - lw / 2 - 4, y: y + 25, "text-anchor": "middle", class: "fname kname klname" }, kurz),
+    // v6.8 (Tobias): Etikett immer mittig - rechtsbuendig wirkten kurze Namen rechts, lange mittig
+    sv("rect", { x: mitte - lw / 2, y: y + 14, width: lw, height: 15, rx: 1.5, class: "etikett" }),
+    sv("text", { x: mitte, y: y + 25, "text-anchor": "middle", class: "fname kname klname" }, kurz),
     sv("text", { x: mitte, y: y + h - 7, "text-anchor": "middle", class: "fzahl klzahl" }, zahl),
   ];
 }
@@ -807,7 +825,21 @@ function zeichnung(ort) {
     }
   }
   svg.append(...faecherG);
-  return sk ? el("div", { className: "ortscroll" }, svg) : svg;
+  return sk ? sortierRahmen(svg, ort.id) : svg;
+}
+
+// v6.8 (Tobias 16.11.): Pfeile links/rechts zusaetzlich zum Wischen. Die Wisch-Position je Ort bleibt beim Neuzeichnen
+// erhalten (sonst sprang die Ansicht nach jeder Aenderung auf der rechten Seite zurueck nach links).
+const skScroll = new Map();
+function sortierRahmen(svg, ortId) {
+  const box = el("div", { className: "ortscroll" }, svg);
+  const pfeil = (text, aria, richtung) => el("button", { type: "button", className: "ortpfeil " + (richtung < 0 ? "links" : "rechts"), "aria-label": aria,
+    onclick: () => box.scrollBy({ left: richtung * box.clientWidth * 0.9, behavior: "smooth" }) }, text);
+  const li = pfeil("◀", "Weiter nach links", -1), re = pfeil("▶", "Weiter nach rechts", 1);
+  const zeigen = () => { li.hidden = box.scrollLeft <= 2; re.hidden = box.scrollLeft + box.clientWidth >= box.scrollWidth - 2; };
+  box.addEventListener("scroll", () => { skScroll.set(ortId, box.scrollLeft); zeigen(); }, { passive: true });
+  requestAnimationFrame(() => { box.scrollLeft = skScroll.get(ortId) || 0; zeigen(); });
+  return el("div", { className: "ortrahmen" }, box, li, re);
 }
 
 // v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
