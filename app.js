@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.1"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.2"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -512,6 +512,9 @@ const fachVon = (id) => stand.faecher.find((f) => f.id === id);
 const nachName = (a, b) => a.name.localeCompare(b.name, "de", { numeric: true }) || (a.id < b.id ? -1 : 1);
 const faecherAn = (ort, reihe, spalte, ausser) => stand.faecher.filter((f) => !f.geloescht && f.id !== ausser &&
   f.lage.ort === ort && f.lage.reihe === reihe && f.lage.spalte === spalte).sort(nachName);
+// Faecher, die bei einem Raster von reihen x spalten ausserhalb laegen (Ort verkleinern: Knoepfe und Ort-Dialog).
+const ausserhalb = (ortId, reihen, spalten) => stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ortId &&
+  (f.lage.reihe >= reihen || f.lage.spalte >= spalten));
 const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id);
 const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
@@ -566,6 +569,7 @@ function startAnsicht() {
       nKlaeren > 0 && el("button", { className: "ortklaeren", onclick: () => oeffne({ art: "ortKlaeren" }) }, "Ort klären (" + nKlaeren + ")"),
       nPruefen > 0 && el("button", { className: "bestand", onclick: () => oeffne({ art: "bestand" }) }, "Bestand prüfen (" + nPruefen + ")")),
     zeichnung(ortVon(ortWahl)),
+    rasterKnoepfe(ortVon(ortWahl)),
     el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
     el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
   ];
@@ -705,10 +709,41 @@ function zeichnung(ort) {
   return svg;
 }
 
+// v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
+// mehreren Spalten; Schubladen-Orte sind feste Moebel). "−" nur, wenn die letzte Reihe/Spalte leer ist.
+function rasterKnoepfe(o) {
+  if (o.spalten < 2) return null;
+  const aendern = (feld, delta) => {
+    const jetzt = ortVon(o.id);
+    if (!jetzt || jetzt.geloescht) return hinweis("Diesen Ort gibt es nicht mehr.");
+    if (jetzt.spalten < 2) return; // inzwischen (anderes Handy) ein Schubladen-Ort
+    const wert = jetzt[feld] + delta;
+    if (feld === "spalten" && wert < 2) return;
+    const fe = H.pruefe("ort", { [feld]: wert });
+    if (fe) return hinweis(fe);
+    if (delta < 0) {
+      const neu = { reihen: jetzt.reihen, spalten: jetzt.spalten, [feld]: wert };
+      if (ausserhalb(o.id, neu.reihen, neu.spalten).length) return hinweis("In der letzten " + (feld === "reihen" ? "Reihe" : "Spalte") + " steht noch eine Kiste – bitte erst wegziehen oder löschen.");
+    }
+    tun([{ typ: "feld", art: "ort", ziel: o.id, feld, wert }]);
+  };
+  const k = (text, aria, fn) => el("button", { className: "neben", "aria-label": aria, onclick: fn }, text);
+  return el("div", { className: "knoepfe raster" },
+    k("+ Reihe", "Reihe unten anfügen", () => aendern("reihen", 1)),
+    o.reihen > 1 && k("− Reihe", "Unterste Reihe entfernen", () => aendern("reihen", -1)),
+    k("+ Spalte", "Spalte rechts anfügen", () => aendern("spalten", 1)),
+    o.spalten > 2 && k("− Spalte", "Rechte Spalte entfernen", () => aendern("spalten", -1)));
+}
+
 // Antippen = kurz, lange druecken (0,5 s) = lang. Scrollen bricht ab (pointercancel).
 // Mit zieh (Abschnitt 5): nach 0,5 s ist die Kachel "angehoben"; loslassen ohne Bewegung = lang(), bewegen = ziehen.
 // Bis zum Anheben bleibt der Bildlauf frei (touch-action bleibt, kein preventDefault); erst danach verhindert
 // touchmove den Bildlauf, damit Chrome den Zug nicht als Scrollen abbricht.
+// v6.2: Nach einem langen Druck schiebt der Browser einen Klick nach. Zeichnet lang() neu oder oeffnet einen Dialog,
+// trifft er ein NEUES Element (neue Kachel, Dialogknopf) - deshalb fuer die ganze Seite schlucken, nicht nur am Knopf.
+let stummBis = 0;
+document.addEventListener("click", (ev) => { if (Date.now() < stummBis) { stummBis = 0; ev.stopPropagation(); ev.preventDefault(); } }, true);
+document.addEventListener("pointerdown", () => { stummBis = 0; }, true); // neue Beruehrung = echter Tipp, nie schlucken
 function druck(knopf, kurz, lang, zieh) {
   let uhr = null, lange = false, start = null, zug = null, zeiger = null;
   const ab = () => { clearTimeout(uhr); uhr = null; };
@@ -730,7 +765,8 @@ function druck(knopf, kurz, lang, zieh) {
   const hoch = (ev) => {
     if (ev.pointerId !== zeiger) return;
     los();
-    if (zug) { const z = zug; zug = null; z.ende(ev); return; } // der folgende click wird ignoriert (lange = true)
+    if (lange) stummBis = Date.now() + 400;
+    if (zug) { const z = zug; zug = null; z.ende(ev); return; } // den folgenden click schlucken lange / stummBis
     if (zieh && lange) lang();
   };
   const abgebrochen = (ev) => {
@@ -761,6 +797,7 @@ function druck(knopf, kurz, lang, zieh) {
   // DANN schon an der Kachel haengen, sonst ist touchmove nicht abbrechbar und Chrome scrollt (Review E #3).
   if (zieh) knopf.addEventListener("touchmove", wisch, { passive: false });
   knopf.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  // Nachklick auf DIESEN Knopf (auch wenn er schon ersetzt ist) per lange; auf andere Elemente per stummBis.
   knopf.addEventListener("click", () => { ab(); if (!lange) kurz(); lange = false; });
   // Tastatur: Kontextmenue-Taste / Umschalt+F10 = langes Druecken (Barrierefreiheit)
   knopf.addEventListener("keydown", (ev) => { if (ev.key === "ContextMenu" || (ev.shiftKey && ev.key === "F10")) { ev.preventDefault(); lang(); } });
@@ -817,23 +854,29 @@ function zug(geist, leiste, zielVon, ablegen) {
 }
 const zugStart = (e) => zug(() => [el("span", { className: "bild" }, e.symbol || H.bildchen(e.name)), el("span", null, e.name)], () => zielLeiste(e),
   (t) => { const z = t.closest("[data-fach]"); return z && z.dataset.fach !== e.fach ? z : null; },
-  (z) => verschieben(e, z.dataset.fach));
+  (z) => verschieben([e.id], z.dataset.fach));
 const fachText = (fachId) => { const f = fachVon(fachId), o = f && ortVon(f.lage.ort); return f && o ? o.name + " – " + f.name : "?"; };
 // Codex v4 #1/#2: Eintrag und Faecher immer im AKTUELLEN Stand pruefen, nicht im Objekt von Zugbeginn.
 const eintragJetzt = (id) => (stand ? stand.eintraege.find((x) => x.id === id && x.sichtbar) : null);
 const fachGueltig = (id) => { const f = id && fachVon(id); return !!f && !f.geloescht && !f.ortKlaeren; };
-async function verschieben(e, fachId) {
-  const jetzt = eintragJetzt(e.id);
-  if (!jetzt) { hinweis("Diesen Eintrag gibt es nicht mehr."); return false; }
-  const alt = jetzt.fach ?? null;
-  if (fachId === alt) return true;
+// Ein Verschieben = EIN Schritt fuer alle Eintraege (je einer ein Vorgang "fach"), ein Rueckgaengig (v6.2: auch mehrere).
+// Was schon im Ziel liegt, bleibt; zurueck wandert nur, was noch im Ziel liegt, jeder Eintrag in SEIN altes Fach.
+async function verschieben(ids, fachId) {
+  const es = ids.map(eintragJetzt).filter(Boolean);
+  if (!es.length) { hinweis("Diesen Eintrag gibt es nicht mehr."); return false; }
+  const weg = es.filter((e) => e.fach !== fachId);
+  if (!weg.length) return true;
   if (!fachGueltig(fachId)) { hinweis("Dieses Fach gibt es nicht mehr."); return false; }
-  if (!(await tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: fachId }]))) return false;
-  untenZeigen(e.name + " → " + fachText(fachId), "Rückgängig", async () => {
-    const nun = eintragJetzt(e.id);
-    if (!nun || nun.fach !== fachId) return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
-    if (alt && !fachGueltig(alt)) return hinweis("Das alte Fach gibt es nicht mehr – bitte über „Verschieben nach …“ einordnen.");
-    if (await tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: alt }])) untenZeigen(e.name + " zurück" + (alt ? " nach " + fachText(alt) : ""));
+  const alt = new Map(weg.map((e) => [e.id, e.fach ?? null]));
+  const schritte = (liste, ziel) => liste.map((e) => ({ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: ziel(e) }));
+  if (!(await tun(schritte(weg, () => fachId)))) return false;
+  const was = weg.length === 1 ? weg[0].name : sachenText(weg.length);
+  untenZeigen(was + " → " + fachText(fachId), "Rückgängig", async () => {
+    const dort = weg.filter((e) => eintragJetzt(e.id)?.fach === fachId);
+    if (!dort.length) return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
+    if (dort.some((e) => alt.get(e.id) && !fachGueltig(alt.get(e.id)))) return hinweis("Das alte Fach gibt es nicht mehr – bitte über „Verschieben nach …“ einordnen.");
+    const a1 = alt.get(dort[0].id);
+    if (await tun(schritte(dort, (e) => alt.get(e.id)))) untenZeigen(was + " zurück" + (a1 ? " nach " + fachText(a1) : ""));
   });
   return true;
 }
@@ -856,16 +899,14 @@ function zielWahl(aktFach, jetztWort = " (jetzt)") {
   fuellen();
   return { teil: [el("div", { className: "zeilen" }, feld("Ort", ortSel), fachFeld), leer], wert: () => (!ortSel.value ? undefined : fachSel.value || "") };
 }
-function verschiebenDialog(e) {
-  const z = zielWahl(e.fach);
-  dialog("„" + kuerze(e.name, 30) + "“ verschieben nach …", [
-    el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), z.teil,
-    el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch."),
-  ], [["Verschieben", async (melde, schliessen) => {
+// Ziel waehlen und verschieben, fuer einen oder mehrere Eintraege. inhalt(zielTeil) = Dialoginhalt, zu = Ebenen beim Schliessen.
+function verschiebenDialog(ids, aktFach, titel, inhalt = (t) => [t], zu = 1) {
+  const z = zielWahl(aktFach);
+  dialog(titel, inhalt(z.teil), [["Verschieben", async (melde, schliessen) => {
     const w = z.wert();
     if (w === undefined) return melde("Bitte Ort wählen.");
     if (w === "") return melde("Dieser Ort hat noch keine Kiste.");
-    if (w === e.fach || (await verschieben(e, w))) schliessen();
+    if (await verschieben(ids, w)) schliessen(zu);
   }]]);
 }
 // Antippen oder langes Druecken auf eine Kachel: kleines Menue. v5 (Tobias 15.11.): -1 nur noch hier,
@@ -898,7 +939,9 @@ function eintragMenue(e) {
   dialog(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
     ["−1 · eins rausgenommen" + (e.menge === 1 ? " (das letzte)" : ""), weiter(() => entnehmen(e))],
     ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
-    ["↦ Verschieben nach …", weiter(() => verschiebenDialog(e))],
+    ["↦ Verschieben nach …", weiter(() => verschiebenDialog([e.id], e.fach, "„" + kuerze(e.name, 30) + "“ verschieben nach …", (t) => [
+      el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), t,
+      el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch.")]))],
     // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
     ["📷 Foto" + (eig ? " ersetzen" : ""), (melde, schliessen) => { fotoWaehlen(e, eig); schliessen(); }],
     eig && ["Foto entfernen", weiter(() => fotoEntfernen(e, eig))],
@@ -995,11 +1038,27 @@ function fachAnsicht(ebene) {
   const f = stand && fachVon(id);
   if (!f || f.geloescht) return [kopf("Kiste"), el("p", null, "Diese Kiste gibt es nicht mehr.")];
   const o = ortVon(f.lage.ort);
+  const es = imFach(id).sort(nachAblauf);
+  // v6.2 (Tobias 16.11.): lange druecken = markieren, dann weitere antippen. Markieren ist eine eigene Ebene
+  // (Android-Zurueck / "Fertig" hebt sie auf). Markiert bleibt nur, was noch hier liegt.
+  const m = ebene.markiert;
+  if (m) { const da = new Set(es.map((e) => e.id)); for (const x of m) if (!da.has(x)) m.delete(x); }
+  const umschalten = (e) => {
+    if (!m.delete(e.id)) m.add(e.id);
+    if (m.size) zeichnen(); else zurueck();
+  };
   return [
-    kopf(f.name, el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachWort(o))),
+    kopf(f.name, !m && el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachWort(o))),
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
-    el("div", { className: "kacheln" }, imFach(id).sort(nachAblauf).map((e) => {
-      const k = kachel(e, () => eintragMenue(e), () => eintragMenue(e), true);
+    m && el("div", { className: "knoepfe markleiste", role: "status" },
+      el("b", null, m.size + " markiert"),
+      el("button", { onclick: () => verschiebenDialog([...m], id, sachenText(m.size) + " verschieben nach …", undefined, 2) }, "↦ Verschieben"), // 2 = Dialog + Markier-Ebene
+      m.size < es.length && el("button", { className: "neben", onclick: () => { for (const e of es) m.add(e.id); zeichnen(); } }, "Alle"),
+      el("button", { className: "neben", onclick: () => zurueck() }, "Fertig")),
+    el("div", { className: "kacheln" }, es.map((e) => {
+      const t = () => umschalten(e);
+      const k = m ? kachel(e, t, t, false) : kachel(e, () => eintragMenue(e), () => oeffne({ art: "fach", id, markiert: new Set([e.id]) }), true);
+      if (m) { k.classList.toggle("markiert", m.has(e.id)); k.setAttribute("aria-pressed", String(m.has(e.id))); }
       if (e.id === hervor) {
         k.classList.add("hervor");
         // nur beim ersten Zeichnen hinscrollen, sonst springt die Ansicht nach jedem -1 zurueck
@@ -1007,11 +1066,14 @@ function fachAnsicht(ebene) {
       }
       return k;
     }),
-      el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu")),
-      el("button", { className: "kachel neu", onclick: () => multiScan(id) }, el("span", { className: "bild" }, "📷"), el("span", { className: "name" }, "Scannen"))),
-    el("p", { className: "klein" }, "Antippen = Menü (−1, bearbeiten, verschieben) · gedrückt halten und ziehen = auf ein anderes Fach legen"),
+      ...(m ? [] : [
+        el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu")),
+        el("button", { className: "kachel neu", onclick: () => multiScan(id) }, el("span", { className: "bild" }, "📷"), el("span", { className: "name" }, "Scannen"))])),
+    el("p", { className: "klein" }, m ? "Antippen = markieren oder abwählen · Zurück = fertig"
+      : "Antippen = Menü (−1, bearbeiten, verschieben) · lange drücken = markieren, dann weitere antippen · gedrückt halten und ziehen = auf ein anderes Fach legen"),
   ];
 }
+
 
 function ortKlaerenAnsicht() {
   const { kisten, eintraege } = klaeren();
@@ -1927,20 +1989,25 @@ function ortDialog(o) {
   const zahl = (w, min, max) => el("input", { type: "number", min, max, value: String(w), inputMode: "numeric" });
   const name = el("input", { value: o ? o.name : "", maxLength: 60, autocomplete: "off" });
   const reihen = zahl(o ? o.reihen : 3, 1, 20), spalten = zahl(o ? o.spalten : 1, 1, 20);
-  const folge = zahl(o ? o.reihenfolge ?? 0 : orteSichtbar().reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0), 0, 999);
-  const werteLesen = () => ({ name: name.value.trim(), reihen: Number(reihen.value), spalten: Number(spalten.value), reihenfolge: Number(folge.value) });
+  // v6.2 (Tobias 16.11.): Reiter-Nr. laeuft unsichtbar mit, ein neuer Ort kommt ans Ende.
+  const werteLesen = () => ({ name: name.value.trim(), reihen: Number(reihen.value), spalten: Number(spalten.value) });
   const start = werteLesen();
   dialog(o ? "Ort bearbeiten" : "Neuer Ort", [
     feld("Name", name),
-    el("div", { className: "zeilen" }, feld("Reihen", reihen), feld("Spalten", spalten), feld("Reiter-Nr.", folge)),
+    el("div", { className: "zeilen" }, feld("Reihen", reihen), feld("Spalten", spalten)),
     el("p", { className: "klein" }, "1 Spalte = Schubladen übereinander, mehrere Spalten = Böden mit Kisten."),
   ], [
     ["Speichern", async (melde, schliessen) => {
       const werte = werteLesen();
       const fe = H.pruefe("ort", werte);
       if (fe) return melde(fe);
-      if (!o) { const v = await tun([{ typ: "neu", art: "ort", werte }]); if (v) { ortWahl = v[0].id; schliessen(); } return; }
-      const aussen = stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === o.id && (f.lage.reihe >= werte.reihen || f.lage.spalte >= werte.spalten)).length;
+      if (!o) { // neuer Ort ans Ende (Max ueber alle Orte, auch geloeschte)
+        werte.reihenfolge = Math.min(999, stand.orte.reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0));
+        const v = await tun([{ typ: "neu", art: "ort", werte }]);
+        if (v) { ortWahl = v[0].id; schliessen(); }
+        return;
+      }
+      const aussen = ausserhalb(o.id, werte.reihen, werte.spalten).length;
       if (aussen && !confirm(aussen + " Kisten liegen dann außerhalb und kommen in „Ort klären“. Trotzdem ändern?")) return;
       const daten = Object.entries(werte).filter(([k, w]) => w !== start[k]).map(([k, w]) => ({ typ: "feld", art: "ort", ziel: o.id, feld: k, wert: w }));
       if (!daten.length || (await tun(daten))) schliessen();
