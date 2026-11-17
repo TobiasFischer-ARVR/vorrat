@@ -61,24 +61,25 @@
     opt = opt || {};
     const token = await g.token();
     try {
-      return await g.fetch(G + pfad, Object.assign({}, opt, {
-        signal: AbortSignal.timeout(ZEIT_MS),
+      const { zeit, ...rest } = opt; // zeit = eigene Zeitgrenze (Fotos: 20 s, R2 #16)
+      return await g.fetch(G + pfad, Object.assign({}, rest, {
+        signal: AbortSignal.timeout(zeit || ZEIT_MS),
         headers: Object.assign({ Authorization: "Bearer " + token }, opt.headers),
       }));
     } catch (_) { return { ok: false, status: 0 }; }
   }
-  async function graphJson(g, pfad, was) {
-    const r = await graph(g, pfad);
+  async function graphJson(g, pfad, was, zeit) {
+    const r = await graph(g, pfad, { zeit });
     if (!r.ok) throw new Error(fehlerText(r.status, was));
     try { return await r.json(); } catch (_) { throw new Error("Antwort von OneDrive unlesbar (" + was + ")"); }
   }
 
   // Alle Eintraege eines Ordners, Seite fuer Seite (@odata.nextLink, Codex #9). Ohne value-Array ist die
   // Antwort kaputt -> Fehler, nie "leerer Ordner" (Codex #8). Folgeseiten nur auf Graph (sonst ginge das Token fremd).
-  async function eintraege(g, pfad, wo) {
+  async function eintraege(g, pfad, wo, zeit) {
     const alle = [];
     for (let seite = 1; ; seite++) {
-      const r = await graphJson(g, pfad, wo);
+      const r = await graphJson(g, pfad, wo, zeit);
       if (!r || !Array.isArray(r.value)) throw new Error(wo + ": Antwort von OneDrive unvollständig – nichts geändert");
       alle.push(...r.value);
       const weiter = r["@odata.nextLink"];
@@ -97,8 +98,8 @@
   }
   const istOrdner = (x) => !!(x.folder || (x.remoteItem && !x.remoteItem.file));
   // Nur Ordner (Namen von Ordnern duerfen angezeigt werden, Dateinamen nie).
-  async function unterordner(g, ort) {
-    const liste = await eintraege(g, `/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,folder,remoteItem,file&$top=999`, "Ordner");
+  async function unterordner(g, ort, zeit) {
+    const liste = await eintraege(g, `/drives/${ort.driveId}/items/${ort.id}/children?$select=id,name,folder,remoteItem,file&$top=999`, "Ordner", zeit);
     return liste.filter(istOrdner).map((x) => x.remoteItem
       ? x.remoteItem.parentReference && { name: x.name, driveId: x.remoteItem.parentReference.driveId, id: x.remoteItem.id, verknuepfung: true }
       : { name: x.name, driveId: ort.driveId, id: x.id, verknuepfung: ort.verknuepfung })
@@ -391,10 +392,138 @@
       try { d = (await r.json()) || {}; } catch (_) { /* egal */ }
       const weg = d.id ? await graph(g, `/drives/${ort.driveId}/items/${d.id}`, { method: "DELETE" }) : null;
       z.push([true, "Schreiben ok" + (weg && weg.ok ? "" : " (Probedatei blieb liegen, stört nicht)")]);
+      if (!istSicherung) z.push(await bilderPruefen(g, ort, inst));
     } catch (x) {
       z.push([false, ((x && x.message) || String(x)) + (x && x.ordner ? ". Vorhandene Ordner dort: " + (x.ordner.join(", ") || "keine") : "")]);
     }
     return z;
+  }
+
+  // ==== v6 Abschnitt C: eigene Fotos ueber den Unterordner "Bilder" (Bauplan Produktbilder Fassung 3, Stufe 3) ====
+  // Welches Foto zu welchem Produkt gehoert, steht in den Vorgaengen; hier wandern nur die unveraenderlichen Dateien.
+  // Die App legt den Ordner nie an (fehlt er: keinOrdner, Fotos bleiben lokal). Fremde Namen im Ordner werden nie angefasst.
+  const FOTO_DATEI = /^foto-[A-Za-z0-9]{8,40}\.jpg$/; // = Modell, Feld bild.datei
+  const BILDER = "bilder";
+  const FOTO_MAX = 400 * 1024;  // OneDrive-Download hoechstens 400 KB (Bauplan, Bildstrecke)
+  const FOTO_ZEIT_MS = 20000;   // je Anfrage (R2 #16)
+  const BILDER_BUDGET_MS = 30000; // je Lauf, danach Pause bis zum naechsten Abgleich (Codex #16)
+  const TAG_MS = 864e5;
+
+  async function bilderOrdner(g, ort, zeit) {
+    const x = (await unterordner(g, ort, zeit)).find((o) => o.name.toLowerCase() === BILDER);
+    return x || null;
+  }
+  const gleicheBytes = async (a, b) => {
+    if (a.size !== b.size) return false;
+    const x = new Uint8Array(await a.arrayBuffer()), y = new Uint8Array(await b.arrayBuffer());
+    return x.every((w, i) => w === y[i]);
+  };
+  async function fotoHolen(g, b, item) {
+    if (!(item.size <= FOTO_MAX)) return { kaputt: true };
+    const r = await graph(g, `/drives/${b.driveId}/items/${item.id}/content`, { zeit: FOTO_ZEIT_MS });
+    if (r.status === 404) return { fehlt: true };
+    if (!r.ok) return { fehler: fehlerText(r.status, "Foto") };
+    try { const blob = await r.blob(); return blob.size <= FOTO_MAX ? { blob } : { kaputt: true }; } catch (_) { return { fehler: "Foto nicht vollständig geladen" }; }
+  }
+
+  // Ein Lauf. Nur nach erfolgreichem Vorgangs-Abgleich und nur im gebundenen Ordner aufrufen (o.ort = Abgleich-Zustand).
+  // o.namen = { aktuell, tot, bekannt } (Hilfen.bilderNamen), o.aufraeumen = nichts Offenes auf diesem Handy (R2 #4),
+  // o.lokal = { liste, lesen, speichern(datei, blob), markieren, loeschen }, o.pruefe(blob) -> neu kodiertes Bild | null,
+  // o.warte = Map datei -> { n, bis, zuletzt } ueber Laeufe hinweg (wachsende Wartezeit, Reihenfolge rotiert),
+  // o.weiter() = false -> sofort aufhoeren (Geraetedaten geloescht). Wirft nie; Fehler stehen im Ergebnis.
+  async function bilderAbgleichen(o) {
+    const jetzt = o.jetzt || Date.now, budget = o.budget || BILDER_BUDGET_MS, ende = jetzt() + budget, mitte = ende - budget / 2;
+    const weiter = (bis = ende) => jetzt() < bis && (!o.weiter || o.weiter());
+    const { aktuell, tot, bekannt } = o.namen, warte = o.warte || new Map();
+    const e = { keinOrdner: false, hoch: 0, neu: [], weg: [], wartenHoch: 0, fehlen: 0, kaputt: 0, fehler: null, unfertig: false };
+    const spaeter = (d, kaputt) => {
+      const w = warte.get(d) || { n: 0 };
+      w.n++; w.zuletzt = jetzt(); w.bis = w.zuletzt + Math.min(3600e3, 30e3 * 2 ** w.n);
+      warte.set(d, w);
+      if (kaputt) e.kaputt++;
+    };
+    const dran = (liste) => liste.filter((d) => !(warte.get(d) && jetzt() < warte.get(d).bis))
+      .sort((a, b) => ((warte.get(a) || {}).zuletzt || 0) - ((warte.get(b) || {}).zuletzt || 0)); // lange nicht versucht zuerst
+    try {
+      const b = await bilderOrdner(o.g, o.ort, FOTO_ZEIT_MS); // Codex C #5: auch Auflisten hoechstens 20 s
+      e.keinOrdner = !b;
+      const listen = async () => new Map((await eintraege(o.g, `/drives/${b.driveId}/items/${b.id}/children?$select=id,name,size,file,folder&$top=999`, "Ordner Bilder", FOTO_ZEIT_MS))
+        .filter((x) => !istOrdner(x) && FOTO_DATEI.test(x.name)).map((x) => [x.name, x]));
+      const inWolke = b ? await listen() : new Map();
+      const lokal = await o.lokal.liste();
+      const daLokal = new Set(lokal.map((x) => x.datei));
+
+      // Hochladen: nur was ein aktuelles Bild-Objekt nennt und nicht tot ist (R2 #8, #9). Nie ueberschreiben.
+      const hoch = lokal.filter((x) => !x.hochgeladen && aktuell.has(x.datei) && !tot.has(x.datei)).map((x) => x.datei);
+      e.wartenHoch = hoch.length;
+      if (b) for (const d of dran(hoch)) {
+        if (!weiter(mitte)) { e.unfertig = true; break; } // Codex C #6: Uploads hoechstens das halbe Budget
+        const blob = await o.lokal.lesen(d);
+        if (!blob) continue;
+        let ok = false;
+        if (!inWolke.has(d)) {
+          const r = await graph(o.g, `/drives/${b.driveId}/items/${b.id}:/${d}:/content?@microsoft.graph.conflictBehavior=fail`,
+            { method: "PUT", headers: { "Content-Type": "image/jpeg" }, body: blob, zeit: FOTO_ZEIT_MS });
+          ok = r.ok;
+          if (!ok && r.status !== 409) { spaeter(d); e.fehler = "Hochladen: " + fehlerText(r.status, "Ordner Bilder"); continue; }
+        }
+        if (!ok) { // 409 oder schon gelistet: Antwort war verloren? Nur bei gleichen Bytes als hochgeladen werten (R2 #13).
+          const item = inWolke.get(d) || (await listen()).get(d);
+          const x = item ? await fotoHolen(o.g, b, item) : { fehlt: true };
+          ok = !!x.blob && (await gleicheBytes(x.blob, blob));
+          if (!ok) { spaeter(d); if (x.blob || x.kaputt) e.fehler = "Ein Foto liegt in OneDrive mit anderem Inhalt – es wird nicht überschrieben"; continue; }
+        }
+        await o.lokal.markieren(d);
+        warte.delete(d);
+        e.hoch++; e.wartenHoch--;
+      }
+
+      // Herunterladen: aktuelle Dateien, die hier fehlen. Nicht in OneDrive = noch nicht da, spaeter erneut (Codex #1).
+      const runter = [...aktuell].filter((d) => !daLokal.has(d) && !tot.has(d));
+      if (b) for (const d of dran(runter)) {
+        if (!weiter()) { e.unfertig = true; break; }
+        const item = inWolke.get(d);
+        if (!item) { spaeter(d); continue; }
+        const x = await fotoHolen(o.g, b, item);
+        if (x.fehler || x.fehlt) { spaeter(d); if (x.fehler) e.fehler = "Herunterladen: " + x.fehler; continue; } // fehlt: gerade weg, spaeter
+        const bild = x.blob ? await o.pruefe(x.blob) : null; // dieselbe Strecke wie jedes Bild: neu kodiert, 400 x 400
+        if (!bild) { spaeter(d, true); continue; }
+        if (!(await o.lokal.speichern(d, bild))) { spaeter(d); e.fehler = "Foto nicht gespeichert (Speicher voll?)"; continue; } // Review C #4: nicht "kaputt"
+        warte.delete(d);
+        e.neu.push(d);
+      }
+      e.fehlen = runter.length - e.neu.length;
+
+      // Aufraeumen: nur tote Namen (Namen werden nie wiederverwendet) und nur ohne Offenes (R2 #4). Lokal dazu
+      // nie zugeordnete Dateien (Absturz zwischen Datei und Vorgang), die aelter als ein Tag sind (R2 #8).
+      if (o.aufraeumen) {
+        for (const d of tot) {
+          if (!weiter()) { e.unfertig = true; break; }
+          const item = inWolke.get(d);
+          if (item) { const r = await graph(o.g, `/drives/${b.driveId}/items/${item.id}`, { method: "DELETE", zeit: FOTO_ZEIT_MS }); if (!r.ok && r.status !== 404) continue; }
+          if (daLokal.has(d)) { await o.lokal.loeschen(d); e.weg.push(d); }
+        }
+        for (const x of lokal) if (!bekannt.has(x.datei) && jetzt() - x.zeit > TAG_MS && weiter()) { await o.lokal.loeschen(x.datei); e.weg.push(x.datei); }
+      }
+    } catch (x) { e.fehler = (x && x.message) || String(x); }
+    return e;
+  }
+
+  // "Pruefen": eigene Zeile fuer den Unterordner Bilder mit Schreibprobe; dort gilt die Foto-Regel, keine Fremddatei-Sperre (Codex #6).
+  async function bilderPruefen(g, ort, inst) {
+    try {
+      const b = await bilderOrdner(g, ort);
+      if (!b) return [false, "Unterordner „Bilder“ fehlt – eigene Fotos bleiben auf diesem Handy, bis er in OneDrive angelegt ist (die App legt keine Ordner an)"];
+      const items = (await eintraege(g, `/drives/${b.driveId}/items/${b.id}/children?$select=id,name,file,folder&$top=999`, "Ordner Bilder")).filter((x) => !istOrdner(x));
+      const n = items.filter((x) => FOTO_DATEI.test(x.name)).length, rest = items.length - n;
+      const r = await graph(g, `/drives/${b.driveId}/items/${b.id}:/schreibprobe-${inst}.json:/content?@microsoft.graph.conflictBehavior=replace`,
+        { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ schreibprobe: Modell.lokalIso() }) });
+      if (!r.ok) return [false, "Bilder: " + n + " Fotos, Schreiben fehlgeschlagen: " + fehlerText(r.status, "Ordner Bilder")];
+      let d = {};
+      try { d = (await r.json()) || {}; } catch (_) { /* egal */ }
+      if (d.id) await graph(g, `/drives/${b.driveId}/items/${d.id}`, { method: "DELETE" });
+      return [true, "Bilder: " + n + " Fotos · Schreiben ok" + (rest ? " · " + rest + " andere Datei(en), werden nicht angefasst" : "")];
+    } catch (x) { return [false, "Bilder: " + ((x && x.message) || String(x))]; }
   }
 
   // ---- reine Helfer fuer die Oberflaeche ----
@@ -445,7 +574,7 @@
     }).sort((a, b) => (a.wer === "dieses Gerät" ? -1 : b.wer === "dieses Gerät" ? 1 : a.wer.localeCompare(b.wer, "de")));
   }
 
-  const Cloud = { pfadNormal, ordnerSchluessel, ordnerFinden, wurzelOrt, unterordner, abgleichen, pruefen,
+  const Cloud = { pfadNormal, ordnerSchluessel, ordnerFinden, wurzelOrt, unterordner, abgleichen, pruefen, bilderAbgleichen,
     sicherungenAussortieren, sicherungsInhalt, darfSchreiben, offene, loeschSperre, zuletzt, vorText, zusammenfuehren };
   if (typeof module !== "undefined" && module.exports) module.exports = Cloud;
   else wurzel.Cloud = Cloud;

@@ -2,6 +2,7 @@
 // Eigene IndexedDB "vorrat-bilder", getrennt von den Vorgaengen: ein Bildfehler gefaehrdet nie den Vorrat.
 // Abschnitt A: Speicher "off" = Internetbild je Code (Zwischenspeicher, wiederbeschaffbar, hoechstens OFF_MAX).
 // Abschnitt B: Speicher "fotos" = eigene Fotodatei je Zufallsname { blob, hochgeladen, zeit }, nie ueberschrieben.
+// Abschnitt C: Abgleich mit OneDrive in cloud.js (bilderAbgleichen), hier nur Liste/Markieren.
 // Jeder Fehler hier endet als "kein Bild" (null), nie als Ausnahme beim Aufrufer.
 (function (wurzel) {
   "use strict";
@@ -64,11 +65,12 @@
   }
   // ---- eigene Fotos ----
   // add statt put: ein Dateiname wird nie ueberschrieben. false = nicht gespeichert (Speicher voll o. ae.).
-  async function fotoSpeichern(datei, blob) {
+  // hochgeladen = true: kommt aus OneDrive (Abschnitt C), muss nicht wieder hoch.
+  async function fotoSpeichern(datei, blob, hochgeladen = false) {
     try {
       const db = await oeffnen();
       const t = db.transaction("fotos", "readwrite");
-      t.objectStore("fotos").add({ blob, hochgeladen: false, zeit: Date.now() }, datei);
+      t.objectStore("fotos").add({ blob, hochgeladen, zeit: Date.now() }, datei);
       await fertig(t);
       return true;
     } catch (_) { return false; }
@@ -81,6 +83,18 @@
   }
   async function fotoLoeschen(datei) {
     try { const t = (await oeffnen()).transaction("fotos", "readwrite"); t.objectStore("fotos").delete(datei); await fertig(t); } catch (_) { /* Waise, harmlos */ }
+  }
+  // Abschnitt C: alle eigenen Fotodateien ohne Bild { datei, hochgeladen, zeit }; als hochgeladen markieren.
+  async function fotosListe() {
+    const s = (await oeffnen()).transaction("fotos").objectStore("fotos");
+    const [schluessel, werte] = await Promise.all([anfrage(s.getAllKeys()), anfrage(s.getAll())]);
+    return schluessel.map((datei, i) => ({ datei, hochgeladen: !!werte[i].hochgeladen, zeit: werte[i].zeit || 0 }));
+  }
+  async function fotoMarkieren(datei) {
+    const t = (await oeffnen()).transaction("fotos", "readwrite"), s = t.objectStore("fotos");
+    const x = await anfrage(s.get(datei));
+    if (x) s.put(Object.assign({}, x, { hochgeladen: true }), datei);
+    await fertig(t);
   }
   // Fuer die Rueckfrage vor "Geraetedaten loeschen": nicht hochgeladene Fotos, die ein aktuelles Bild-Objekt
   // nennt (aktuell = Set der Dateinamen; null = Stand unbekannt -> alle zaehlen). Wirft bei Lesefehler.
@@ -152,5 +166,5 @@
     } catch (_) { return null; }
   }
 
-  wurzel.Bilder = { offLesen, offSchreiben, offLaden, normalisieren, leeren, fotoSpeichern, fotoLesen, fotoLoeschen, fotosOffen, OFF_MAX };
+  wurzel.Bilder = { offLesen, offSchreiben, offLaden, normalisieren, leeren, fotoSpeichern, fotoLesen, fotoLoeschen, fotosOffen, fotosListe, fotoMarkieren, OFF_MAX };
 })(window);

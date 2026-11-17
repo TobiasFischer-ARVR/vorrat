@@ -464,6 +464,23 @@
   const fotoWegSchritte = (bilder, schluessel) => bilder.filter((b) => b.schluessel === schluessel && b.datei !== null)
     .map((b) => ({ typ: "feld", art: "bild", ziel: b.id, feld: "datei", wert: null }));
 
+  // v6 C: Dateinamen fuer den OneDrive-Abgleich der Fotos. aktuell = was ein Bild-Objekt jetzt nennt (alle Objekte,
+  // nicht nur der angezeigte Gewinner); tot = was je in einem Vorgang an einem BEKANNTEN Bild-Objekt stand und jetzt
+  // nicht mehr (Namen werden nie wiederverwendet, also bleibt tot tot); bekannt = jeder Name aus irgendeinem Vorgang.
+  // Namen aus Vorgaengen an noch unbekannten Objekten sind weder aktuell noch tot: nie hochladen, nie loeschen.
+  function bilderNamen(vorgaenge, bilder) {
+    const ids = new Set(bilder.map((b) => b.id));
+    const aktuell = new Set(bilder.map((b) => b.datei).filter(Boolean)), tot = new Set(), bekannt = new Set();
+    for (const v of vorgaenge) {
+      if (v.art !== "bild") continue;
+      const d = v.typ === "neu" ? v.werte.datei : v.feld === "datei" ? v.wert : null;
+      if (!d) continue;
+      bekannt.add(d);
+      if (ids.has(v.ziel) && !aktuell.has(d)) tot.add(d);
+    }
+    return { aktuell, tot, bekannt };
+  }
+
   function pruefe(art, werte) {
     for (const [f, w] of Object.entries(werte)) if (!Modell.FELDER[art][f](w)) return FEHLERTEXT[f] || "Ungültig: " + f;
     return null;
@@ -471,7 +488,7 @@
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
-    eigenesFoto, fotoSchritt, fotoWegSchritte, offDetails };
+    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

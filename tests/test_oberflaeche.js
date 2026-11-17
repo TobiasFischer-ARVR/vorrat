@@ -290,4 +290,25 @@ fall("v6.1: offDetails - Allergene deutsch, E-Nummern, Naehrwerte deutsch format
   assert.strictEqual(H.offDetails(null), null);
 });
 
+fall("v6 C: bilderNamen - aktuell (alle Objekte), tot nur an bekannten Objekten, Unbekanntes weder noch", () => {
+  const F = (c) => "foto-" + c.repeat(32) + ".jpg";
+  const A = "aaaaaaaa1", B = "bbbbbbbb1";
+  let za = { inst: A, nr: 1, uhr: 0 }, zb = { inst: B, nr: 1, uhr: 0 };
+  const vs = [];
+  const a = (d) => { const e = M.erzeuge(za, d); za = e.zaehler; vs.push(e.vorgang); return e.vorgang; };
+  const b = (d) => { const e = M.erzeuge(zb, d); zb = e.zaehler; vs.push(e.vorgang); return e.vorgang; };
+  const x = a(H.fotoSchritt([], "n:gulasch", F("1")));                       // Objekt x: 1 ...
+  a({ typ: "feld", art: "bild", ziel: x.id, feld: "datei", wert: F("2") });  // ... ersetzt durch 2 -> 1 tot
+  b(H.fotoSchritt([], "n:gulasch", F("3")));                                 // zweites Objekt (offline zugleich): 3 aktuell
+  const y = a(H.fotoSchritt([], "n:pizza", F("4")));
+  a({ typ: "feld", art: "bild", ziel: y.id, feld: "datei", wert: null });    // entfernt -> 4 tot
+  const fremd = b({ typ: "feld", art: "bild", ziel: "cccccccc1-1", feld: "datei", wert: F("5") }); // Objekt noch unbekannt
+  const st = M.berechne(vs);
+  assert.deepStrictEqual(st.verwaist, [fremd.id]);
+  const n = H.bilderNamen(vs, st.bilder);
+  assert.deepStrictEqual([...n.aktuell].sort(), [F("2"), F("3")]);
+  assert.deepStrictEqual([...n.tot].sort(), [F("1"), F("4")]);
+  assert.deepStrictEqual([...n.bekannt].sort(), [F("1"), F("2"), F("3"), F("4"), F("5")]);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

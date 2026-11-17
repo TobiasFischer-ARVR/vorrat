@@ -33,10 +33,12 @@ function attrappe() {
   f.inhalt = (ordner, name) => JSON.parse(f.datei(ordner, name).inhalt);
   f.aendern = (it, inhalt) => { if (inhalt !== undefined) it.inhalt = inhalt; it.version++; it.geaendert = new Date().toISOString(); };
   const etag = (it) => '"{' + it.id + "}," + it.version + '"';
-  const meta = (it) => Object.assign({ id: it.id, name: it.name, eTag: etag(it), lastModifiedDateTime: it.geaendert, lastModifiedBy: { user: { displayName: it.von } } },
+  const groesse = (b) => (b instanceof Blob ? b.size : Buffer.byteLength(String(b ?? "")));
+  const meta = (it) => Object.assign({ id: it.id, name: it.name, eTag: etag(it), size: groesse(it.inhalt), lastModifiedDateTime: it.geaendert, lastModifiedBy: { user: { displayName: it.von } } },
     it.remote ? { remoteItem: { id: it.remote.id, parentReference: { driveId: it.remote.drive }, folder: {} } } : it.ordner ? { folder: {} } : { file: {} });
   const antwort = (status, body) => ({ ok: status >= 200 && status < 300, status,
-    json: async () => (typeof body === "string" ? JSON.parse(body) : body), text: async () => (typeof body === "string" ? body : JSON.stringify(body)) });
+    json: async () => (typeof body === "string" ? JSON.parse(body) : body), text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+    blob: async () => (body instanceof Blob ? body : new Blob([typeof body === "string" ? body : JSON.stringify(body)])) });
   f.fetch = async (url, opt) => {
     opt = opt || {};
     const pfad = url.replace("https://graph.microsoft.com/v1.0", "");
@@ -67,6 +69,7 @@ function attrappe() {
       if (art === "PUT") {
         const im = opt.headers && opt.headers["If-Match"];
         if (im && (!it || im !== etag(it))) return antwort(412, {});
+        if (it && /conflictBehavior=fail/.test(pfad)) return antwort(409, {});
         if (it) { f.aendern(it, opt.body); return antwort(200, meta(it)); }
         return antwort(201, meta(f.neu(o.drive, o.id, m[3], "datei", opt.body)));
       }
@@ -335,7 +338,8 @@ fall("Andrea: Pfad ueber Verknuepfung (remoteItem), Windows-Pfad aus dem Explore
 fall("Pruefen: Schreibprobe angelegt und weggeraeumt; Ordner fehlt -> nur Ordnernamen, nie Dateinamen", async () => {
   const x = await aufbau();
   const p = await C.pruefen(x.g, PFAD, false, x.sp.inst);
-  assert.deepStrictEqual(p.map(([ok]) => ok), [true, true, true], JSON.stringify(p));
+  assert.deepStrictEqual(p.map(([ok]) => ok), [true, true, true, false], JSON.stringify(p));
+  assert.match(p[3][1], /„Bilder“ fehlt.*bleiben auf diesem Handy/); // v6 C: eigene Zeile, kein Abbruch
   assert.strictEqual(x.f.kinder(x.f.daten).filter((d) => /schreibprobe/.test(d.name)).length, 0);
   x.f.neu("D1", x.f.gemein.id, "Geheim Kontoauszug.pdf", "datei", "x");
   const q = await C.pruefen(x.g, "Gemeinschaftsordner/Vorrat", false, x.sp.inst);
@@ -678,6 +682,174 @@ fall("Codex2 #7: frisch=true loest den Pfad neu auf -> Austausch auch in laufend
   x.f.neu("D1", x.f.gemein.id, "Vorrats App", "ordner");
   assert.strictEqual((await lauf(x)).ok, true, "ohne frisch: Sitzungs-Cache (alter, umbenannter Ordner)");
   assert.match(String((await lauf(x, { frisch: true })).fehler), /anderer Ordner/);
+  x.sp.schliessen();
+});
+
+// ==== v6 Abschnitt C: Fotos ueber den Unterordner "Bilder" (Abnahme-Faelle C, Bauplan Produktbilder) ====
+const F = (c) => "foto-" + c.repeat(32) + ".jpg";
+function fotoLager(start) { // Attrappe fuer Bilder.fotosListe/fotoLesen/fotoSpeichern/fotoMarkieren/fotoLoeschen
+  const m = new Map(start || []);
+  return { m, liste: async () => [...m].map(([datei, x]) => ({ datei, hochgeladen: x.hochgeladen, zeit: x.zeit })),
+    lesen: async (d) => (m.get(d) || {}).blob || null,
+    speichern: async (d, blob) => { if (m.has(d)) return false; m.set(d, { blob, hochgeladen: true, zeit: Date.now() }); return true; },
+    markieren: async (d) => { if (m.has(d)) m.get(d).hochgeladen = true; },
+    loeschen: async (d) => { m.delete(d); } };
+}
+const eigen = (text, alt) => ({ blob: new Blob([text]), hochgeladen: false, zeit: Date.now() - (alt || 0) });
+const namen = (aktuell, tot, bekannt) => ({ aktuell: new Set(aktuell), tot: new Set(tot || []), bekannt: new Set(bekannt || [...aktuell, ...(tot || [])]) });
+const bLauf = (x, lager, n, extra) => C.bilderAbgleichen(Object.assign({ g: x.g, ort: { driveId: "D1", id: x.f.daten.id }, namen: n, lokal: lager,
+  pruefe: async (b) => new Blob(["neu:", b]), warte: new Map() }, extra));
+const bilderAnlegen = (x) => (x.f.bilder = x.f.neu("D1", x.f.daten.id, "Bilder", "ordner"));
+
+fall("C: Ordner Bilder fehlt -> nichts angelegt, nichts geschrieben, Foto bleibt lokal und wartet", async () => {
+  const x = await aufbau();
+  const lager = fotoLager([[F("1"), eigen("A")]]);
+  const r = await bLauf(x, lager, namen([F("1"), F("2")]), { aufraeumen: true });
+  assert.deepStrictEqual([r.keinOrdner, r.hoch, r.wartenHoch, r.fehler], [true, 0, 1, null]);
+  assert.strictEqual(x.f.log.filter(([a]) => a !== "GET").length, 0, "nur gelesen");
+  assert.strictEqual(lager.m.get(F("1")).hochgeladen, false);
+  x.sp.schliessen();
+});
+
+fall("C: Upload ok (conflictBehavior=fail), danach kein zweiter Upload; tote/unbekannte Datei nie hochgeladen", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  const lager = fotoLager([[F("1"), eigen("A")], [F("9"), eigen("tot")], [F("8"), eigen("unbekannt")]]);
+  const r = await bLauf(x, lager, namen([F("1")], [F("9")]));
+  assert.strictEqual(r.hoch, 1);
+  assert.strictEqual(x.f.puts().length, 1);
+  assert.ok(x.f.puts()[0][1].endsWith(":/" + F("1") + ":/content?@microsoft.graph.conflictBehavior=fail"), x.f.puts()[0][1]);
+  assert.strictEqual(await x.f.datei(x.f.bilder, F("1")).inhalt.text(), "A");
+  assert.strictEqual(lager.m.get(F("1")).hochgeladen, true);
+  assert.ok(!x.f.datei(x.f.bilder, F("9")) && !x.f.datei(x.f.bilder, F("8")), "tot/unbekannt nicht hochgeladen");
+  await bLauf(x, lager, namen([F("1")], [F("9")]));
+  assert.strictEqual(x.f.puts().length, 1, "kein zweiter Upload");
+  x.sp.schliessen();
+});
+
+fall("C: Antwort verloren -> 409 + Bytevergleich; andere Bytes = nie ueberschreiben, nicht als hochgeladen werten", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  // PUT kam an, Antwort ging verloren: Datei erst nach dem Auflisten da, PUT meldet 409
+  x.f.vorher = async (art, pfad, opt) => {
+    if (art === "PUT" && pfad.includes(F("1"))) { x.f.vorher = null; x.f.neu("D1", x.f.bilder.id, F("1"), "datei", opt.body); return { ok: false, status: 409 }; }
+  };
+  const lager = fotoLager([[F("1"), eigen("A")], [F("2"), eigen("B")]]);
+  x.f.neu("D1", x.f.bilder.id, F("2"), "datei", new Blob(["X"])); // gleicher Name, anderer Inhalt
+  const r = await bLauf(x, lager, namen([F("1"), F("2")]));
+  assert.strictEqual(lager.m.get(F("1")).hochgeladen, true, "409 + gleiche Bytes = hochgeladen");
+  assert.strictEqual(lager.m.get(F("2")).hochgeladen, false, "andere Bytes = nicht hochgeladen");
+  assert.strictEqual(await x.f.datei(x.f.bilder, F("2")).inhalt.text(), "X", "nicht ueberschrieben");
+  assert.match(String(r.fehler), /anderem Inhalt/);
+  assert.strictEqual(r.wartenHoch, 1);
+  x.sp.schliessen();
+});
+
+fall("C: Download neu kodiert; fehlt in OneDrive = spaeter (Wartezeit), zu gross = kaputt; fremde Datei nie angefasst", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  x.f.neu("D1", x.f.bilder.id, F("2"), "datei", new Blob(["B"]));
+  const gross = x.f.neu("D1", x.f.bilder.id, F("4"), "datei", new Blob([new Uint8Array(400 * 1024 + 1)]));
+  x.f.neu("D1", x.f.bilder.id, "notiz.txt", "datei", "fremd");
+  const lager = fotoLager(), warte = new Map();
+  let uhr = 1e6;
+  const r = await bLauf(x, lager, namen([F("2"), F("3"), F("4")]), { warte, jetzt: () => uhr });
+  assert.deepStrictEqual(r.neu, [F("2")]);
+  assert.strictEqual(await lager.m.get(F("2")).blob.text(), "neu:B", "durch die Bildstrecke");
+  assert.strictEqual(lager.m.get(F("2")).hochgeladen, true, "nicht wieder hochladen");
+  assert.deepStrictEqual([r.fehlen, r.kaputt], [2, 1]);
+  assert.ok(warte.has(F("3")) && warte.has(F("4")));
+  assert.strictEqual(x.f.downloads().filter(([, p]) => p.includes("/" + gross.id + "/")).length, 0, "zu gross: gar nicht geladen");
+  const n = x.f.log.length;
+  await bLauf(x, lager, namen([F("2"), F("3"), F("4")]), { warte, jetzt: () => uhr });
+  assert.ok(!x.f.log.slice(n).some(([, p]) => p.endsWith("/content")), "Wartezeit: kein neuer Versuch");
+  x.f.neu("D1", x.f.bilder.id, F("3"), "datei", new Blob(["C"])); // das andere Handy hat hochgeladen
+  uhr += 61e3;
+  const r2 = await bLauf(x, lager, namen([F("2"), F("3"), F("4")]), { warte, jetzt: () => uhr });
+  assert.deepStrictEqual(r2.neu, [F("3")]);
+  assert.ok(!warte.has(F("3")));
+  assert.ok(x.f.datei(x.f.bilder, "notiz.txt"));
+  x.sp.schliessen();
+});
+
+fall("C: Review #4 - Datei zwischen Auflisten und Laden weg = spaeter (nicht kaputt); Speicher voll = Meldung, nicht kaputt", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  const weg = x.f.neu("D1", x.f.bilder.id, F("2"), "datei", new Blob(["B"]));
+  x.f.neu("D1", x.f.bilder.id, F("3"), "datei", new Blob(["C"]));
+  x.f.vorher = async (art, pfad) => (art === "GET" && pfad.includes("/" + weg.id + "/content") ? { ok: false, status: 404 } : null);
+  const lager = fotoLager();
+  lager.speichern = async () => false; // Speicher voll
+  const r = await bLauf(x, lager, namen([F("2"), F("3")]));
+  assert.deepStrictEqual([r.kaputt, r.fehlen, r.neu.length], [0, 2, 0]);
+  assert.match(String(r.fehler), /Speicher voll/);
+  x.sp.schliessen();
+});
+
+fall("C Codex #5/#6: Auflisten mit 20-s-Grenze; Uploads nehmen hoechstens das halbe Budget, Downloads kommen trotzdem dran", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  x.f.neu("D1", x.f.bilder.id, F("2"), "datei", new Blob(["B"]));
+  let uhr = 0;
+  const ms = [], orig = AbortSignal.timeout;
+  AbortSignal.timeout = (n) => { ms.push(n); return orig.call(AbortSignal, n); };
+  x.f.vorher = async (art) => { if (art === "PUT") { uhr += 20000; return { ok: false, status: 0 }; } return null; }; // jeder Upload haengt 20 s
+  const lager = fotoLager([[F("1"), eigen("A")], [F("3"), eigen("C")]]);
+  let r;
+  try { r = await bLauf(x, lager, namen([F("1"), F("3"), F("2")]), { jetzt: () => uhr, budget: 30000 }); } finally { AbortSignal.timeout = orig; }
+  assert.ok(ms.length > 3 && ms.every((n) => n <= 20000), "jede Anfrage des Bilder-Laufs hoechstens 20 s: " + ms.join(","));
+  assert.deepStrictEqual(r.neu, [F("2")], "Download trotz haengender Uploads");
+  assert.strictEqual(x.f.puts().length, 1, "zweiter Upload erst im naechsten Lauf (halbes Budget)");
+  x.sp.schliessen();
+});
+
+fall("C: Aufraeumen nur tote Namen und nur ohne Offenes; aktuelle und unbekannte nie; Waisen lokal erst nach 1 Tag", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  for (const c of ["1", "9", "7"]) x.f.neu("D1", x.f.bilder.id, F(c), "datei", new Blob([c]));
+  // 1 aktuell, 9 tot, 7 = Datei eines noch unbekannten Vorgangs (anderes Handy), 6 = lokale Waise (2 Tage), 5 = junge Waise
+  const lager = fotoLager([[F("1"), Object.assign(eigen("1"), { hochgeladen: true })], [F("9"), eigen("9")], [F("6"), eigen("6", 2 * 864e5)], [F("5"), eigen("5")]]);
+  const n = namen([F("1")], [F("9")]);
+  await bLauf(x, lager, n, { aufraeumen: false });
+  assert.ok(x.f.datei(x.f.bilder, F("9")) && lager.m.has(F("9")) && lager.m.has(F("6")), "mit Offenem: nichts geloescht");
+  const r = await bLauf(x, lager, n, { aufraeumen: true });
+  assert.ok(!x.f.datei(x.f.bilder, F("9")) && !lager.m.has(F("9")), "tot: in OneDrive und lokal weg");
+  assert.ok(x.f.datei(x.f.bilder, F("1")) && lager.m.has(F("1")), "aktuell bleibt");
+  assert.ok(x.f.datei(x.f.bilder, F("7")), "Datei eines unbekannten Vorgangs bleibt");
+  assert.ok(!lager.m.has(F("6")) && lager.m.has(F("5")), "Waise erst nach 1 Tag");
+  assert.deepStrictEqual(r.weg.sort(), [F("6"), F("9")]);
+  assert.strictEqual(x.f.log.filter(([a]) => a === "DELETE").length, 1);
+  x.sp.schliessen();
+});
+
+fall("C: haengender Upload blockiert nicht; Zeitbudget beendet den Lauf (unfertig); weiter()=false stoppt sofort", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  x.f.neu("D1", x.f.bilder.id, F("2"), "datei", new Blob(["B"]));
+  x.f.vorher = async (art) => (art === "PUT" ? { ok: false, status: 0 } : null); // Zeitgrenze/Netz weg
+  const lager = fotoLager([[F("1"), eigen("A")]]), warte = new Map();
+  const r = await bLauf(x, lager, namen([F("1"), F("2")]), { warte });
+  assert.deepStrictEqual([r.hoch, r.wartenHoch, r.neu], [0, 1, [F("2")]], "Download trotzdem");
+  assert.match(String(r.fehler), /keine Verbindung/);
+  assert.strictEqual(warte.get(F("1")).n, 1);
+  let uhr = 0;
+  const r2 = await bLauf(x, fotoLager([[F("3"), eigen("C")], [F("5"), eigen("E")]]), namen([F("3"), F("5")]), { jetzt: () => (uhr += 20000), budget: 30000 });
+  assert.strictEqual(r2.unfertig, true);
+  const r3 = await bLauf(x, fotoLager([[F("3"), eigen("C")]]), namen([F("3")]), { weiter: () => false });
+  assert.deepStrictEqual([r3.unfertig, r3.hoch], [true, 0]);
+  x.sp.schliessen();
+});
+
+fall("C: Pruefen mit Ordner Bilder (Zahl, Schreibprobe weg, Fremdes nur gezaehlt); Unterordner stoppt den Abgleich nicht", async () => {
+  const x = await aufbau();
+  bilderAnlegen(x);
+  x.f.neu("D1", x.f.bilder.id, F("1"), "datei", new Blob(["A"]));
+  x.f.neu("D1", x.f.bilder.id, "Urlaub.jpg", "datei", new Blob(["x"]));
+  const p = await C.pruefen(x.g, PFAD, false, x.sp.inst);
+  assert.deepStrictEqual(p[3], [true, "Bilder: 1 Fotos · Schreiben ok · 1 andere Datei(en), werden nicht angefasst"]);
+  assert.strictEqual(x.f.kinder(x.f.bilder).filter((d) => /schreibprobe/.test(d.name)).length, 0);
+  await x.sp.ausfuehren(ORT);
+  assert.strictEqual((await lauf(x)).ok, true, "Ordner Bilder im Datenordner ist keine Fremddatei");
   x.sp.schliessen();
 });
 

@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.14"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.15"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -303,7 +303,7 @@ function nichtLoeschen(x) {
 }
 // v6 B (Tobias 16.11.: Rueckfrage statt Sperre): Satz fuer die Loesch-Rueckfrage, "" ohne eigene Fotos.
 async function fotoText() {
-  const aktuell = stand ? new Set(stand.fotoVon.values()) : null; // Stand unbekannt -> alle zaehlen
+  const aktuell = stand ? new Set(stand.bilder.map((b) => b.datei).filter(Boolean)) : null; // alle Objekte (Codex C #2); Stand unbekannt -> alle
   let n;
   try { n = await Bilder.fotosOffen(aktuell); } catch (_) { return "\nEigene Fotos: Anzahl nicht lesbar – vorhandene gehen verloren.\n"; }
   return n ? "\nDazu " + n + (n === 1 ? " eigenes Foto, noch nicht in OneDrive – geht" : " eigene Fotos, noch nicht in OneDrive – gehen") + " verloren.\n" : "";
@@ -330,8 +330,56 @@ async function abgleich(frisch) {
   } catch (x) { abFehler = (x && x.message) || String(x); }
   abLaeuft = false;
   await laden();
+  if (!abFehler) bilderLauf(); // v6 C: eigener Lauf NACH dem Vorgangs-Abgleich, nie darin (Codex #16)
   if (konto && konto.abgelaufen && neuAufloesen) autoErneuern();
   if (abNochmal) abgleich();
+}
+
+// ==== v6 Abschnitt C: eigene Fotos ueber OneDrive (Unterordner "Bilder", Logik in cloud.js) ====
+// Nur nach einem erfolgreichen Abgleich und nur im dort gebundenen Ordner (ab.ort). Eigene Sperre, hoechstens ein Lauf
+// (auch ueber Tabs), 30 s Budget. Fehler bleiben still in "Sicherung & Abgleich", nie in der roten Leiste.
+let bilderLaeuft = false, bilderNochmal = false, bilderStand = null; // bilderStand = Ergebnis des letzten Laufs (Anzeige)
+const bilderWarte = new Map(); // Datei -> Wartezeit nach Fehlschlag, ueber Laeufe hinweg
+async function bilderLauf() {
+  if (bilderLaeuft) { bilderNochmal = true; return; } // Review C #1: Foto waehrend eines Laufs -> gleich danach nochmal
+  if (!sp || !darfSchreiben()) return;
+  bilderLaeuft = true; bilderNochmal = false;
+  const gen = bildGen, z = aenderungen;
+  // Codex C #3: neue Aenderung, neuer Abgleich oder "Geraetedaten loeschen" beendet den Lauf (danach startet ein frischer)
+  const gilt = () => gen === bildGen && z === aenderungen && !abLaeuft;
+  const da = () => gen === bildGen; // Codex C #4: nach "Geraetedaten loeschen" nie mehr lokal schreiben
+  const lager = { liste: () => Bilder.fotosListe(), lesen: (d) => Bilder.fotoLesen(d),
+    speichern: async (d, b) => da() && Bilder.fotoSpeichern(d, b, true), markieren: async (d) => { if (da()) await Bilder.fotoMarkieren(d); },
+    loeschen: async (d) => { if (da()) await Bilder.fotoLoeschen(d); } };
+  try {
+    // Codex C #1: Namen und "nichts Offenes" frisch aus dem Speicher, nicht aus dem angezeigten Stand (der wartet unter
+    // einem offenen Dialog und kennt dann z. B. ein inzwischen zugeordnetes Foto nicht -> waere als Waise geloescht worden).
+    const vs = await sp.alleVorgaenge(), a = mitOrdner(await sp.abgleich());
+    if (!a || !a.ort || !a.letzter || a.letzter.fehler || a.gelesen !== sp.inst) return; // nur nach Erfolg, gebundener Ordner
+    const z0 = Cloud.zusammenfuehren(vs, a.dateien);
+    if (!z0.ok) return;
+    const lauf = () => Cloud.bilderAbgleichen({ g, ort: a.ort, namen: H.bilderNamen(z0.vorgaenge, Modell.berechne(z0.vorgaenge).bilder),
+      aufraeumen: Cloud.offene(a, vs) === 0, lokal: lager, pruefe: Bilder.normalisieren, warte: bilderWarte, weiter: gilt });
+    const r = navigator.locks ? await navigator.locks.request("vorrat-bilder", { ifAvailable: true }, (l) => (l ? lauf() : null)) : await lauf();
+    if (!r || gen !== bildGen) return;
+    bilderStand = r;
+    for (const d of r.neu) if (fotoUrls.get(d) === false) fotoUrls.delete(d); // war "liegt nicht hier" -> jetzt laden
+    for (const d of r.weg) fotoUrlWeg(d);
+    if (r.neu.length || r.weg.length) bildNeuZeichnen();
+    else if (stapel[stapel.length - 1].art === "sicherung") zeichnen();
+  } catch (x) { bilderStand = { fehler: (x && x.message) || String(x) }; // Review C #7: still anzeigen, nie unbehandelt
+  } finally { bilderLaeuft = false; if (bilderNochmal) bilderLauf(); }
+}
+function bilderText() {
+  const r = bilderStand;
+  if (!r) return "Noch nicht abgeglichen.";
+  if (r.keinOrdner) return "Ordner „Bilder“ fehlt in OneDrive – eigene Fotos bleiben vorerst auf diesem Handy" +
+    (r.wartenHoch ? " (" + r.wartenHoch + " warten)" : "") + ". Bitte anlegen: " + einst.datenPfad + "/Bilder";
+  const t = [];
+  if (r.wartenHoch) t.push(r.wartenHoch + (r.wartenHoch === 1 ? " Foto wartet" : " Fotos warten") + " auf Upload");
+  if (r.fehlen) t.push(r.fehlen + (r.fehlen === 1 ? " Foto" : " Fotos") + " vom anderen Handy noch nicht da" + (r.kaputt ? " (" + r.kaputt + " nicht ladbar)" : ""));
+  if (r.fehler) t.push("⚠ " + r.fehler);
+  return t.length ? t.join(" · ") : "✓ Alle Fotos abgeglichen";
 }
 // v6.3 (Tobias 16.11.: "so oft anmelden"): nur beim Oeffnen/Zurueckkehren, nie mitten in einem Dialog, Ziehen oder
 // Speichern, und hoechstens alle 10 Minuten (keine Schleife, falls auch die Microsoft-Sitzung abgelaufen ist).
@@ -518,6 +566,8 @@ function sicherungAnsicht() {
     el("p", { className: s && s.fehler ? "hinweis-rot" : "" }, !s ? "Noch keine angelegt." : s.fehler ? "⚠ " + s.fehler
       : "Zuletzt " + zeitText(s.zeit) + (s.weg ? " · " + s.weg + " alte in den Papierkorb" : "")),
     el("p", { className: "klein" }, "Einmal am Tag beim Abgleich, dazu eine vor jeder neuen App-Version. Aufbewahrt: die 4 neuesten und je Woche eine für 4 Wochen. Ordner: " + einst.sicherPfad),
+    el("h3", null, "Eigene Fotos in OneDrive"),
+    el("p", { className: "klein fotostand" }, bilderText()),
     el("button", { className: "zeile", onclick: backupHerunterladen }, "⬇ Backup herunterladen")];
 }
 
