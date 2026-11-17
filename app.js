@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.12"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.13"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -180,6 +180,7 @@ async function laden() {
   // mit dem alten Stand (z. B. Nachzaehlen = gezaehlt minus bekannte Summe). Danach nachholen.
   if (laeuft || dialogOffen() || zieht) { nachladen = true; return; }
   nachladen = false;
+  let neu;
   try {
     sp = sp || (await Speicher.oeffnen());
     let vs, a, z;
@@ -189,15 +190,13 @@ async function laden() {
     const neuAb = a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null;
     const r = Cloud.zusammenfuehren(vs, neuAb ? neuAb.dateien : {});
     if (!r.ok) throw new Error(r.fehler);
-    ab = neuAb;
-    lokal = vs;
-    liste = r.vorgaenge;
-    stand = Modell.berechne(liste);
-    ladeFehler = null;
+    neu = () => { ab = neuAb; lokal = vs; liste = r.vorgaenge; stand = Modell.berechne(liste); ladeFehler = null; };
   } catch (x) {
-    stand = null;
-    ladeFehler = "Daten konnten nicht gelesen werden: " + ((x && x.message) || x) + ". Es wurde nichts verändert.";
+    neu = () => { stand = null; ladeFehler = "Daten konnten nicht gelesen werden: " + ((x && x.message) || x) + ". Es wurde nichts verändert."; };
   }
+  // Codex R2 #1: waehrend des Lesens kann ein Zug oder Dialog begonnen haben -> auch jetzt nicht darunter tauschen
+  if (laeuft || dialogOffen() || zieht) { nachladen = true; return; }
+  neu();
   zeichnen();
 }
 
@@ -938,7 +937,7 @@ function druck(knopf, kurz, lang, zieh) {
   const horcher = [["pointermove", bewegt, undefined], ["pointerup", hoch, undefined], ["pointercancel", abgebrochen, undefined],
     ["touchmove", wisch, { passive: false }], ["visibilitychange", hintergrund, undefined]];
   knopf.addEventListener("pointerdown", (ev) => {
-    if (ev.button > 0 || zeiger !== null) return;
+    if (ev.button > 0 || !ev.isPrimary || zeiger !== null) return; // Codex R2 #3: nur der erste Finger zieht (zieht ist EIN Schalter)
     lange = false; ab(); start = { x: ev.clientX, y: ev.clientY }; zeiger = ev.pointerId;
     for (const [t, f, o] of horcher) document.addEventListener(t, f, o);
     uhr = setTimeout(() => {
@@ -1901,9 +1900,13 @@ function eintragDialog(e, fachId) {
   let code = null;
   const scanAnz = el("p", { className: "klein", role: "status" });
   const setzeName = (n) => { name.value = n; name.dispatchEvent(new Event("input")); };
-  let scanMhd = null; // MHD, das der letzte Scan gesetzt hat
+  let scanMhd = null, scanName = null; // MHD und Name, die der letzte Scan gesetzt hat
+  const scanNameSetzen = (n) => { setzeName(n); scanName = n; };
   async function codeUebernehmen(c) {
     code = c;
+    // Codex R2 #5: wie beim MHD - ein Name vom vorigen Scan gehoert nicht zur naechsten Packung (Getipptes bleibt)
+    if (scanName !== null && name.value === scanName) setzeName("");
+    scanName = null;
     // Codex v4 #4: ein MHD vom vorigen Scan nicht an die naechste Packung vererben (von Hand Geaendertes bleibt)
     if (!c.mhd && scanMhd && mhd === scanMhd) { mhd = null; genau.value = ""; jahrHand = false; mhdZeigen(); }
     scanMhd = c.mhd || null;
@@ -1918,14 +1921,14 @@ function eintragDialog(e, fachId) {
     }
     const kennt = c.anzeige + (c.mhd ? " · MHD " + H.deDatum(c.mhd) : "");
     const gemerkt = codeName(c.schluessel);
-    if (gemerkt) { bildFuer(c.schluessel); setzeName(gemerkt); scanAnz.textContent = kennt + " · Name von früher"; return; } // v6: Bild trotzdem holen
+    if (gemerkt) { bildFuer(c.schluessel); scanNameSetzen(gemerkt); scanAnz.textContent = kennt + " · Name von früher"; return; } // v6: Bild trotzdem holen
     if (!c.ean) { scanAnz.textContent = kennt + " · Name bitte eintippen – wird für diesen Code gemerkt."; name.focus(); return; }
     scanAnz.textContent = kennt + " · suche Namen …";
     const vorher = name.value;
     const r = await offSuchen(c.ean);
     if (r.bild) bildMitUrl(c.schluessel, r.bild);
     if (code !== c) return; // inzwischen anders gescannt
-    if (r.name && name.value === vorher) { setzeName(r.name); scanAnz.textContent = kennt + " · Name aus Open Food Facts, bitte prüfen."; }
+    if (r.name && name.value === vorher) { scanNameSetzen(r.name); scanAnz.textContent = kennt + " · Name aus Open Food Facts, bitte prüfen."; }
     else if (r.name) scanAnz.textContent = kennt + " · Vorschlag „" + r.name + "“ nicht übernommen (Name schon getippt).";
     else scanAnz.textContent = kennt + (r.offline ? " · offline/keine Antwort" : " · unbekannt") + " – Name bitte eintippen, wird gemerkt.";
   }
