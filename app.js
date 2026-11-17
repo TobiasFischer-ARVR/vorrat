@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.13"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.14"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -1606,13 +1606,16 @@ function scanDialog(fertig, mehr) {
 }
 
 // ==== v5: Multiscan (Tobias 15.11.) ====
-// Kompakte MHD-Wahl: Monat antippen (naechstes passendes Jahr, bis das Jahr von Hand gewaehlt ist), "kein MHD".
-// geaendert(mhd) bei jeder Wahl. Ein genaues Datum (DataMatrix) wird angezeigt, ein Monat ersetzt es.
-function mhdWahl(start, geaendert) {
+// MHD-Wahl fuer Multiscan und Eintrag-Dialog (Offen 21: eine Funktion statt zwei). Monat antippen (naechstes passendes
+// Jahr, bis das Jahr von Hand gewaehlt ist), "kein MHD". geaendert(mhd) bei jeder Wahl. Ein genaues Datum (DataMatrix)
+// wird angezeigt, ein Monat ersetzt es. mitDatum: zusaetzlich Feld "oder genaues Datum" (Eintrag-Dialog).
+// Rueckgabe: das Element; .setzen(mhd, jahrHand) setzt von aussen (Scan), Jahr folgt dem MHD.
+function mhdWahl(start, geaendert, mitDatum) {
   const heute = Modell.heuteIso();
   let mhd = start || null, jahr = (H.mhdTeile(mhd) || { jahr: Number(heute.slice(0, 4)) }).jahr, jahrHand = !!mhd;
   const anz = el("b"), jahrAnz = el("b"), monate = el("div", { className: "monate" });
-  const setze = (m) => { mhd = m; zeigen(); geaendert(mhd); };
+  const genau = mitDatum && el("input", { type: "date", value: mhd && mhd.length === 10 ? mhd : "" });
+  const setze = (m) => { mhd = m; if (genau) genau.value = m && m.length === 10 ? m : ""; zeigen(); geaendert(mhd); };
   const zeigen = () => {
     const t = mhd && mhd.length === 7 ? H.mhdTeile(mhd) : null;
     anz.textContent = mhd ? H.deDatum(mhd) : "kein MHD";
@@ -1624,11 +1627,15 @@ function mhdWahl(start, geaendert) {
     jahr += d; jahrHand = true;
     if (mhd && mhd.length === 7) setze(H.mhdMonat(jahr, H.mhdTeile(mhd).monat)); else zeigen();
   } }, t);
+  if (genau) genau.addEventListener("change", () => { if (genau.value) { jahr = Number(genau.value.slice(0, 4)); jahrHand = true; } setze(genau.value || null); });
   zeigen();
-  return el("div", null,
-    el("div", { className: "zeilen mhdkopf" }, el("div", { className: "feld" }, el("span", null, "MHD"), anz),
-      el("button", { type: "button", className: "zweit", onclick: () => setze(null) }, "kein MHD")),
-    el("div", { className: "jahr" }, jahrKnopf(-1, "‹"), jahrAnz, jahrKnopf(1, "›")), monate);
+  const anzeige = el("div", { className: "feld" }, el("span", null, "MHD"), anz);
+  const keins = el("button", { type: "button", className: "zweit", onclick: () => setze(null) }, "kein MHD");
+  const jahrZeile = el("div", { className: "jahr" }, jahrKnopf(-1, "‹"), jahrAnz, jahrKnopf(1, "›"));
+  const teil = genau ? el("div", null, anzeige, jahrZeile, monate, el("div", { className: "zeilen" }, feld("oder genaues Datum", genau), keins))
+    : el("div", null, el("div", { className: "zeilen mhdkopf" }, anzeige, keins), jahrZeile, monate);
+  teil.setzen = (m, hand) => { if (m) jahr = Number(m.slice(0, 4)); jahrHand = hand; setze(m); };
+  return teil;
 }
 
 // Ablauf: Liste oeffnen, Kamera sofort darueber. Jeder Treffer = eine Packung, darunter gleich die MHD-Wahl fuer
@@ -1816,33 +1823,9 @@ function eintragDialog(e, fachId) {
     feld("Nachgezählt (ersetzt +/−)", nachgezaehlt)];
   if (e) mengeZeigen();
 
-  // MHD: Schnellauswahl Monat/Jahr, alternativ genaues Datum
+  // MHD: Schnellauswahl Monat/Jahr, alternativ genaues Datum (gemeinsame mhdWahl, Offen 21)
   let mhd = e ? e.mhd ?? null : null;
-  let jahr = (H.mhdTeile(mhd) || { jahr: Number(heute.slice(0, 4)) }).jahr;
-  let jahrHand = !!mhd; // solange das Jahr nicht gewaehlt ist, schlaegt der Monat das naechste Vorkommen vor
-  const mhdAnz = el("b"), jahrAnz = el("b"), monate = el("div", { className: "monate" });
-  const genau = el("input", { type: "date", value: mhd && mhd.length === 10 ? mhd : "" });
-  const mhdZeigen = () => {
-    const t = mhd && mhd.length === 7 ? H.mhdTeile(mhd) : null;
-    jahrAnz.textContent = String(jahr);
-    mhdAnz.textContent = mhd ? H.deDatum(mhd) : "kein MHD";
-    monate.replaceChildren(...MONATE.map((m, i) => el("button", { type: "button", className: t && t.jahr === jahr && t.monat === i + 1 ? "an" : "",
-      onclick: () => { if (!jahrHand) jahr = H.mhdJahr(i + 1, heute); mhd = H.mhdMonat(jahr, i + 1); genau.value = ""; mhdZeigen(); } }, m)));
-  };
-  genau.addEventListener("change", () => { mhd = genau.value || null; if (mhd) { jahr = Number(mhd.slice(0, 4)); jahrHand = true; } mhdZeigen(); });
-  const jahrKnopf = (d, t) => el("button", { type: "button", onclick: () => {
-    jahr += d;
-    jahrHand = true;
-    if (mhd && mhd.length === 7) mhd = H.mhdMonat(jahr, H.mhdTeile(mhd).monat);
-    mhdZeigen();
-  } }, t);
-  const mhdTeil = el("div", null,
-    el("div", { className: "feld" }, el("span", null, "MHD"), mhdAnz),
-    el("div", { className: "jahr" }, jahrKnopf(-1, "‹"), jahrAnz, jahrKnopf(1, "›")),
-    monate,
-    el("div", { className: "zeilen" }, feld("oder genaues Datum", genau),
-      el("button", { type: "button", className: "zweit", onclick: () => { mhd = null; genau.value = ""; mhdZeigen(); } }, "kein MHD")));
-  mhdZeigen();
+  const mhdTeil = mhdWahl(mhd, (m) => { mhd = m; }, true);
 
   // Selbst eingefroren: Einfrierdatum + Frist -> "essen bis". Stichwort im Namen belegt die Frist vor
   // (Fisch 3, Gefluegel 6, Rind 9 ...); ohne Stichwort bleibt sie leer und ist Pflicht (Entscheidung Tobias, Abschnitt 3).
@@ -1908,16 +1891,12 @@ function eintragDialog(e, fachId) {
     if (scanName !== null && name.value === scanName) setzeName("");
     scanName = null;
     // Codex v4 #4: ein MHD vom vorigen Scan nicht an die naechste Packung vererben (von Hand Geaendertes bleibt)
-    if (!c.mhd && scanMhd && mhd === scanMhd) { mhd = null; genau.value = ""; jahrHand = false; mhdZeigen(); }
+    if (!c.mhd && scanMhd && mhd === scanMhd) mhdTeil.setzen(null, false);
     scanMhd = c.mhd || null;
     if (c.mhd) { // Verfall aus dem DataMatrix-Code
       frost.checked = false;
       frostZeigen();
-      mhd = c.mhd;
-      jahr = Number(c.mhd.slice(0, 4));
-      jahrHand = true;
-      genau.value = c.mhd.length === 10 ? c.mhd : "";
-      mhdZeigen();
+      mhdTeil.setzen(c.mhd, true);
     }
     const kennt = c.anzeige + (c.mhd ? " · MHD " + H.deDatum(c.mhd) : "");
     const gemerkt = codeName(c.schluessel);
