@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.18"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.19"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -176,10 +176,20 @@ const daumenBald = el("button", { type: "button", "aria-label": "Läuft bald ab"
   if (b) b.scrollIntoView({ block: "start", behavior: "smooth" });
   else hinweis(stand ? "Nichts läuft in den nächsten 30 Tagen ab." : "Daten noch nicht geladen.");
 }) }, el("span", { className: "ikon", "aria-hidden": "true" }, "⏰"), el("span", null, "Läuft bald ab"), baldZahl);
+// v6.19 (Tobias 18.11.): ✎ Bearbeiten sitzt in der Leiste (vorher Knopf ueber der Zeichnung). Im Modus „✓ Fertig“ (orange).
+// Aus einem Fach heraus: zur Startseite, Reiter auf den Ort dieses Fachs, Modus an.
+const stiftIkon = el("span", { className: "ikon", "aria-hidden": "true" }, "✎"), stiftWort = el("span", null, "Bearbeiten");
+const daumenStift = el("button", { type: "button", className: "stift", "aria-pressed": "false", onclick: () => {
+  if (!stand) return hinweis("Daten noch nicht geladen.");
+  if (imBearbeiten()) return bearbeitenUmschalten();
+  const fe = [...stapel].reverse().find((x) => x.art === "fach"), f = fe && fachVon(fe.id);
+  zuStart(() => { if (f && !f.ortKlaeren && ortVon(f.lage.ort)) ortWahl = f.lage.ort; bearbeitenUmschalten(); });
+} }, stiftIkon, stiftWort);
 const daumenLeiste = el("nav", { id: "daumen", "aria-label": "Schnellzugriff" },
   el("button", { type: "button", onclick: () => { if (!stand) return hinweis("Daten noch nicht geladen."); if (!dialogOffen()) multiScan(null); } },
     el("span", { className: "ikon", "aria-hidden": "true" }, "📷"), el("span", null, "Scannen")),
   daumenBald,
+  daumenStift,
   el("button", { type: "button", onclick: () => zuStart(() => scrollTo({ top: 0, behavior: "smooth" })) }, el("span", { className: "ikon", "aria-hidden": "true" }, "🏠"), el("span", null, "Start")));
 document.body.append(daumenLeiste);
 function daumenZeigen() {
@@ -187,6 +197,11 @@ function daumenZeigen() {
   baldZahl.hidden = !n;
   baldZahl.textContent = n > 99 ? "99+" : String(n);
   daumenBald.setAttribute("aria-label", "Läuft bald ab" + (n ? ", " + n + " Einträge" : ""));
+  const an = imBearbeiten();
+  daumenStift.classList.toggle("an", an);
+  daumenStift.setAttribute("aria-pressed", String(an));
+  stiftIkon.textContent = an ? "✓" : "✎";
+  stiftWort.textContent = an ? "Fertig" : "Bearbeiten";
 }
 function fehlerZeigen(text) {
   fehlerLeiste.replaceChildren(el("b", null, "⚠ " + text), el("button", { onclick: () => location.reload() }, "App neu laden"));
@@ -706,12 +721,10 @@ function startAnsicht(ebene) {
 }
 function zeichenKopf(o, bearb) {
   const h = hilfe("start", "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern" +
-    " · „✎ Bearbeiten“ = Reihen, Spalten, Vorlage und Ort ändern");
+    " · „✎ Bearbeiten“ unten = Reihen, Spalten, Vorlage und Ort ändern");
   return [el("div", { className: "zeichenkopf" + (bearb ? " bearbeiten" : "") },
     bearb ? el("b", { className: "modus" }, "✎ Bearbeiten: " + o.name) : el("span", { className: "modus" }),
-    h.knopf,
-    el("button", { type: "button", className: "modusknopf" + (bearb ? " an" : ""), "aria-pressed": String(bearb), onclick: bearbeitenUmschalten },
-      bearb ? "✓ Fertig" : "✎ Bearbeiten")), h.text];
+    h.knopf), h.text];
 }
 
 // v6.8 (Tobias 16.11.): Die Reiter-Leiste behaelt beim Neuzeichnen ihre Wisch-Position, der gewaehlte Reiter bleibt sichtbar

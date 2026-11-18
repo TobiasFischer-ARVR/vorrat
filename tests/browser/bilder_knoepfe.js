@@ -37,7 +37,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   await ort("Gefrierschrank"); await bild("1-start.png");
   await ort("Vorrats-Regal"); await bild("2-regal.png", ".reiter");
   await ort("Medizinschrank");
-  const neu = await knopf("Bearbeiten"); // nach dem Umbau: Bearbeiten-Modus einschalten (vorher gibt es den Knopf nicht)
+  const neu = await knopf("Bearbeiten"); // v6.19: Knopf sitzt unten in der Leiste; nach dem Umbau: Bearbeiten-Modus einschalten (vorher gibt es den Knopf nicht)
   await bild("3-medizin" + (neu ? "-bearbeiten" : "") + ".png", ".reiter");
   await ort("Gefrierschrank");
   await s.evaluate(() => { const e = stand.eintraege.find((x) => x.name === "Pizza Salami"); oeffne({ art: "fach", id: e.fach }); });

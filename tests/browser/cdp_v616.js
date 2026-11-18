@@ -39,7 +39,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   };
   const klick = (sel, text) => js(`(() => { const e = [...document.querySelectorAll(${JSON.stringify(sel)})].find((x) => ${text ? `x.textContent.includes(${JSON.stringify(text)})` : "true"}); if (!e) throw new Error("nicht gefunden: ${sel} ${text || ""}"); e.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true; })()`);
   // v6.16: Bearbeiten-Modus ein/aus (Umbau-Knoepfe gibt es nur darin)
-  const bearb = async (an) => { if ((await js(`imBearbeiten()`)) !== an) { await klick("main button.modusknopf"); await warte(300); } };
+  const bearb = async (an) => { if ((await js(`imBearbeiten()`)) !== an) { await klick("#daumen button.stift"); await warte(300); } };
   const pruefe = (bed, text) => { console.log((bed ? "ok    " : "FEHLT ") + text); if (!bed) process.exitCode = 1; };
 
   await senden("Runtime.enable"); await senden("Log.enable"); await senden("Page.enable");
@@ -562,9 +562,9 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   pruefe(await js(`!document.querySelector(".knoepfe.raster")`), "Gefrierschrank (Schubladen): keine Raster-Knöpfe");
   await klick(".reiter button", "Vorrats-Regal"); await warte(300);
   pruefe(await js(`!document.querySelector(".knoepfe.raster") && !document.querySelector(".umbau") && !document.querySelector("main .scanstart")`), "v6.16 Normalmodus: keine Umbau-Knöpfe unter der Zeichnung");
-  pruefe(await js(`document.querySelector("main button.modusknopf").textContent === "✎ Bearbeiten" && document.querySelector("main button.modusknopf").getAttribute("aria-pressed") === "false"`), "v6.16: Schalter „✎ Bearbeiten“ an der Zeichnung");
+  pruefe(await js(`!document.querySelector("main button.modusknopf") && document.querySelector("#daumen .stift").textContent === "✎Bearbeiten" && document.querySelector("#daumen .stift").getAttribute("aria-pressed") === "false"`), "v6.19: Schalter „✎ Bearbeiten“ unten in der Leiste, nicht mehr an der Zeichnung");
   await bearb(true);
-  pruefe(await js(`stapel.length === 2 && imBearbeiten() && document.querySelector("main button.modusknopf").textContent === "✓ Fertig" && !!document.querySelector(".zeichenfeld.bearbeiten") && document.querySelector(".zeichenkopf .modus").textContent.includes("Vorrats-Regal")`), "v6.16: Bearbeiten-Modus erkennbar (Fertig, Rahmen, Ortsname), eigene Ebene");
+  pruefe(await js(`stapel.length === 2 && imBearbeiten() && document.querySelector("#daumen .stift").textContent === "✓Fertig" && document.querySelector("#daumen .stift.an") && !!document.querySelector(".zeichenfeld.bearbeiten") && document.querySelector(".zeichenkopf .modus").textContent.includes("Vorrats-Regal")`), "v6.16: Bearbeiten-Modus erkennbar (Fertig, Rahmen, Ortsname), eigene Ebene");
   pruefe(await js(`[...document.querySelectorAll(".umbau .umbauname")].map((x) => x.textContent).join("|")`) === "Reihen|Spalten|Ort", "v6.16: Umbau-Knöpfe gruppiert (Reihen, Spalten, Ort)");
   await klick(".reiter button", "Gefrierschrank"); await warte(300);
   pruefe(await js(`imBearbeiten() && !document.querySelector(".knoepfe.raster") && [...document.querySelectorAll(".umbau button")].map((b) => b.textContent).join("|") === "✎ Name und Größe …"`), "v6.16: Gefrierschrank im Modus: nur „Name und Größe“");
@@ -881,7 +881,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   await bearb(false);
 
   console.log("9j. v6.16: Daumenleiste, Menüs gruppiert, ⓘ statt Erklärzeilen");
-  pruefe(await js(`[...document.querySelectorAll("#daumen button")].map((b) => b.textContent.replace(/\\d+/g, "")).join("|")`) === "📷Scannen|⏰Läuft bald ab|🏠Start", "Leiste unten: Scannen · Läuft bald ab · Start");
+  pruefe(await js(`[...document.querySelectorAll("#daumen button")].map((b) => b.textContent.replace(/\\d+/g, "")).join("|")`) === "📷Scannen|⏰Läuft bald ab|✎Bearbeiten|🏠Start", "Leiste unten: Scannen · Läuft bald ab · Bearbeiten · Start");
   pruefe(await js(`getComputedStyle(document.querySelector("#daumen")).position === "fixed" && document.querySelector("#daumen").getBoundingClientRect().bottom <= innerHeight + 1`), "Leiste fest am unteren Rand");
   pruefe(await js(`!!document.querySelector(".suche input") && document.querySelector("main").firstElementChild.classList.contains("suche")`), "Suchfeld bleibt oben");
   await js(`(document.body.append(Object.assign(document.createElement("div"), { className: "zuggeist", id: "__geist" })), 1)`);
@@ -950,13 +950,19 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   pruefe(await js(`(() => { const n = H.baldAb(stand.eintraege, Modell.heuteIso()).length; return n > 5 && document.querySelectorAll("main .bald li").length === n; })()`), "v6.17: ⏰ zeigt gleich die ganze Liste (mehr als 5)");
   await js(`Promise.all(stand.eintraege.filter((e) => e.name.startsWith("Baldtest ")).map((e) => tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert: true }]))).then(() => 1)`); await warte(300);
   await senden("Emulation.setDeviceMetricsOverride", { width: 360, height: 640, deviceScaleFactor: 2, mobile: true }); await warte(200);
-  pruefe(await js(`(() => { const b = [...document.querySelectorAll("#daumen button")]; return b.every((k) => k.querySelector("span:not(.ikon):not(.reiterzahl)").getBoundingClientRect().width <= 1) && b.map((k) => k.textContent.replace(/\\d+/g, "")).join("|") === "📷Scannen|⏰Läuft bald ab|🏠Start"; })()`), "v6.17: kleines Handy (360×640) nur Symbole, Text bleibt für Vorleser");
+  pruefe(await js(`(() => { const b = [...document.querySelectorAll("#daumen button")]; return b.every((k) => k.querySelector("span:not(.ikon):not(.reiterzahl)").getBoundingClientRect().width <= 1) && b.map((k) => k.textContent.replace(/\\d+/g, "")).join("|") === "📷Scannen|⏰Läuft bald ab|✎Bearbeiten|🏠Start"; })()`), "v6.17: kleines Handy (360×640) nur Symbole, Text bleibt für Vorleser");
   await senden("Emulation.setDeviceMetricsOverride", { width: 412, height: 915, deviceScaleFactor: 2, mobile: true }); await warte(200);
   pruefe(await js(`document.querySelector("#daumen button span:not(.ikon)").getBoundingClientRect().width > 1`), "v6.17: normales Handy (412×915) mit Text");
   await bearb(true);
   await klick("svg .platz"); await warte(300);
   await klick("#daumen button", "Start"); await warte(500);
   pruefe(await js(`stapel.length === 1 && !imBearbeiten()`), "🏠 Start aus Fach im Bearbeiten-Modus: alle Ebenen zu, Normalmodus");
+  // v6.19: ✎ aus einem Fach eines anderen Orts: zur Startseite, Reiter = Ort des Fachs, Modus an
+  await js(`(ortWahl = stand.orte.find((o) => !o.geloescht && o.name === "Vorrats-Regal").id, zeichnen(), oeffne({ art: "fach", id: ${JSON.stringify(nf)} }), 1)`); await warte(300);
+  await klick("#daumen button.stift"); await warte(600);
+  pruefe(await js(`stapel.length === 2 && imBearbeiten() && ortWahl === fachVon(${JSON.stringify(nf)}).lage.ort && document.querySelector("#daumen .stift").textContent === "✓Fertig"`), "v6.19: ✎ aus dem Fach → Startseite, Reiter des Fachs, Bearbeiten an");
+  await klick("#daumen button.stift"); await warte(500);
+  pruefe(await js(`stapel.length === 1 && !imBearbeiten() && document.querySelector("#daumen .stift").textContent === "✎Bearbeiten"`), "v6.19: ✓ Fertig in der Leiste beendet den Modus");
   await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(nid)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(300);
   await js(`scrollTo(0, 0), 1`);
 
