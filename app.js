@@ -166,6 +166,7 @@ document.body.append(untenLeiste);
 // zuStart(fn): alle Ebenen schliessen (auch Bearbeiten-Modus, Markieren), dann fn auf der frisch gezeichneten Startseite.
 function zuStart(fn) {
   if (dialogOffen()) return; // ein Dialog liegt darueber (Knoepfe sind dann ohnehin verdeckt)
+  if (Number(history.state) !== stapel.length) return; // Zurueck laeuft noch (Doppeltipp): sonst ginge es aus der App heraus
   if (stapel.length > 1) { nachZurueck = fn; zurueck(stapel.length - 1); } else fn();
 }
 const baldZahl = el("span", { className: "reiterzahl", hidden: true, "aria-hidden": "true" });
@@ -173,12 +174,12 @@ const daumenBald = el("button", { type: "button", "aria-label": "Läuft bald ab"
   const b = document.querySelector("main .bald");
   if (b) b.scrollIntoView({ block: "start", behavior: "smooth" });
   else hinweis(stand ? "Nichts läuft in den nächsten 30 Tagen ab." : "Daten noch nicht geladen.");
-}) }, el("span", { className: "ikon" }, "⏰"), el("span", null, "Läuft bald ab"), baldZahl);
+}) }, el("span", { className: "ikon", "aria-hidden": "true" }, "⏰"), el("span", null, "Läuft bald ab"), baldZahl);
 const daumenLeiste = el("nav", { id: "daumen", "aria-label": "Schnellzugriff" },
   el("button", { type: "button", onclick: () => { if (!stand) return hinweis("Daten noch nicht geladen."); if (!dialogOffen()) multiScan(null); } },
-    el("span", { className: "ikon" }, "📷"), el("span", null, "Scannen")),
+    el("span", { className: "ikon", "aria-hidden": "true" }, "📷"), el("span", null, "Scannen")),
   daumenBald,
-  el("button", { type: "button", onclick: () => zuStart(() => scrollTo({ top: 0, behavior: "smooth" })) }, el("span", { className: "ikon" }, "🏠"), el("span", null, "Start")));
+  el("button", { type: "button", onclick: () => zuStart(() => scrollTo({ top: 0, behavior: "smooth" })) }, el("span", { className: "ikon", "aria-hidden": "true" }, "🏠"), el("span", null, "Start")));
 document.body.append(daumenLeiste);
 function daumenZeigen() {
   const n = stand ? H.baldAb(stand.eintraege, Modell.heuteIso()).length : 0;
@@ -652,6 +653,7 @@ function hilfe(schluessel, text) {
 // Android-Zurueck und der Zurueck-Knopf ihn verlassen. Nur darin stehen die Umbau-Knoepfe unter der Zeichnung.
 const imBearbeiten = () => { const o = stapel[stapel.length - 1]; return o.art === "start" && !!o.bearbeiten; };
 function bearbeitenUmschalten() {
+  if (Number(history.state) !== stapel.length) return; // Doppeltipp, waehrend das Zurueck noch laeuft
   if (imBearbeiten()) zurueck(); else if (stapel[stapel.length - 1].art === "start") oeffne({ art: "start", bearbeiten: true });
 }
 
@@ -703,7 +705,7 @@ function zeichenKopf(o, bearb) {
   const h = hilfe("start", "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern" +
     " · „✎ Bearbeiten“ = Reihen, Spalten, Vorlage und Ort ändern");
   return [el("div", { className: "zeichenkopf" + (bearb ? " bearbeiten" : "") },
-    bearb ? el("b", { className: "modus", role: "status" }, "✎ Bearbeiten: " + o.name) : el("span", { className: "modus" }),
+    bearb ? el("b", { className: "modus" }, "✎ Bearbeiten: " + o.name) : el("span", { className: "modus" }),
     h.knopf,
     el("button", { type: "button", className: "modusknopf" + (bearb ? " an" : ""), "aria-pressed": String(bearb), onclick: bearbeitenUmschalten },
       bearb ? "✓ Fertig" : "✎ Bearbeiten")), h.text];

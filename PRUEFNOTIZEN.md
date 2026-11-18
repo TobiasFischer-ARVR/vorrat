@@ -181,7 +181,7 @@ Abschnitt C war fertig (letzter Commit kein „WIP:“) → Schritt 1 entfiel.
 | 2c | Claude | eigene Durchsicht des Diffs + unabhängige Zweitprüfung, echte Funde behoben (eigener Commit) |
 | 2d | Claude | Vorher-/Nachher-Bilder 412 px nach `pruefung/nacht-knoepfe/` |
 | 3 | Tobias | Handy-Prüfliste unten, Bilder ansehen, entscheiden |
-| 4 | Tobias | nach `main` übernehmen – oder zurücknehmen: `git revert <Umbau-Commit> <Fix-Commit>` |
+| 4 | Tobias | nach `main` übernehmen – oder zurücknehmen: `git revert` der drei v6.16-Commits (Umbau, Leiste beim Ziehen, Zweitprüfung); die Notizen/Bilder dürfen bleiben |
 
 ## (2) Was in v6.16 steckt
 
@@ -199,6 +199,7 @@ Abschnitt C war fertig (letzter Commit kein „WIP:“) → Schritt 1 entfiel.
 | K10 | Fix (alt seit v5.2): In der eigenen Schublade bot das Fach-Menü „Öffnen“ an und öffnete sie ein zweites Mal | eigener Fund (Browsertest) |
 | K11 | Erklärzeilen (Startseite, Fach, Markieren) nur hinter ⓘ; bleibt beim Neuzeichnen offen/zu | Auftrag 4 |
 | K12 | Reine Funktionen `H.umbauKnoepfe(ort, bearbeiten)` und `H.menueTeile(teile)` (testbar, ohne DOM) | Auftrag Prüfen |
+| K12b | Zweitprüfung (unabhängig), 3 kleine Funde behoben: Doppeltipp auf „✓ Fertig“/🏠 ging ein Zurück zu weit (im Browser-Tab aus der App heraus) → Sperre, solange das Zurück läuft; „Bearbeiten: <Ort>“ wurde bei jedem Neuzeichnen neu vorgelesen (role=status weg); Emojis der Leiste nicht mehr vorgelesen. Nicht geändert (gering): Vorlage aus „Name und Größe“ beendet den Modus (schließt 2 Ebenen wie aus ☰), aus dem Vorlage-Knopf bleibt er an | Zweitprüfung |
 | K13 | Version v6.16, Cache `vorrat-v6.16`; keine neuen Daten/Felder → v6.12–v6.15 lesen alles weiter | Auftrag |
 
 ## (3) Inventar-Abhakliste (vor dem Umbau aus dem Code erhoben, danach einzeln geprüft)
