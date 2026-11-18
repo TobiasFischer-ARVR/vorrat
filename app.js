@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.15"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.16"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -162,6 +162,30 @@ haupt.before(el("header", { className: "kopf" }, el("h1", null, "Vorrat"),
   el("button", { "aria-label": "Menü", onclick: () => { if (stapel[stapel.length - 1].art !== "menue") oeffne({ art: "menue" }); } }, "☰")),
 fehlerLeiste);
 document.body.append(untenLeiste);
+// v6.16 (Tobias 18.11.): feste Leiste unten fuer den Alltag (am Daumen). Liegt unter Dialogen (z-index), Suchfeld bleibt oben.
+// zuStart(fn): alle Ebenen schliessen (auch Bearbeiten-Modus, Markieren), dann fn auf der frisch gezeichneten Startseite.
+function zuStart(fn) {
+  if (dialogOffen()) return; // ein Dialog liegt darueber (Knoepfe sind dann ohnehin verdeckt)
+  if (stapel.length > 1) { nachZurueck = fn; zurueck(stapel.length - 1); } else fn();
+}
+const baldZahl = el("span", { className: "reiterzahl", hidden: true, "aria-hidden": "true" });
+const daumenBald = el("button", { type: "button", "aria-label": "Läuft bald ab", onclick: () => zuStart(() => {
+  const b = document.querySelector("main .bald");
+  if (b) b.scrollIntoView({ block: "start", behavior: "smooth" });
+  else hinweis(stand ? "Nichts läuft in den nächsten 30 Tagen ab." : "Daten noch nicht geladen.");
+}) }, el("span", { className: "ikon" }, "⏰"), el("span", null, "Läuft bald ab"), baldZahl);
+const daumenLeiste = el("nav", { id: "daumen", "aria-label": "Schnellzugriff" },
+  el("button", { type: "button", onclick: () => { if (!stand) return hinweis("Daten noch nicht geladen."); if (!dialogOffen()) multiScan(null); } },
+    el("span", { className: "ikon" }, "📷"), el("span", null, "Scannen")),
+  daumenBald,
+  el("button", { type: "button", onclick: () => zuStart(() => scrollTo({ top: 0, behavior: "smooth" })) }, el("span", { className: "ikon" }, "🏠"), el("span", null, "Start")));
+document.body.append(daumenLeiste);
+function daumenZeigen() {
+  const n = stand ? H.baldAb(stand.eintraege, Modell.heuteIso()).length : 0;
+  baldZahl.hidden = !n;
+  baldZahl.textContent = n > 99 ? "99+" : String(n);
+  daumenBald.setAttribute("aria-label", "Läuft bald ab" + (n ? ", " + n + " Einträge" : ""));
+}
 function fehlerZeigen(text) {
   fehlerLeiste.replaceChildren(el("b", null, "⚠ " + text), el("button", { onclick: () => location.reload() }, "App neu laden"));
   fehlerLeiste.hidden = false;
@@ -606,11 +630,33 @@ function zeichnen() {
   if (zieht) { nachZeichnen = true; return; } // waehrend Drag and Drop nichts austauschen (gezogene Kachel bliebe sonst haengen)
   const oben = stapel[stapel.length - 1];
   haupt.replaceChildren(...ANSICHTEN[oben.art](oben).flat(Infinity).filter(weg));
+  daumenZeigen();
 }
 const kopf = (titel, ...extra) => el("div", { className: "ansichtkopf" },
   el("button", { className: "zurueck", "aria-label": "Zurück", onclick: () => zurueck() }, "←"), el("h2", null, titel), ...extra);
 
-function startAnsicht() {
+// v6.16 (Tobias 18.11.): Erklaerzeilen nur noch hinter einem ⓘ-Knopf. Auf/zu bleibt beim Neuzeichnen erhalten.
+const hilfeOffen = new Set();
+function hilfe(schluessel, text) {
+  const auf = hilfeOffen.has(schluessel);
+  const p = el("p", { className: "klein hilfetext", id: "hilfe-" + schluessel, hidden: !auf }, text);
+  const k = el("button", { type: "button", className: "ikon", "aria-label": "Erklärung", "aria-expanded": String(auf), "aria-controls": p.id, onclick: () => {
+    const jetzt = !hilfeOffen.delete(schluessel);
+    if (jetzt) hilfeOffen.add(schluessel);
+    p.hidden = !jetzt;
+    k.setAttribute("aria-expanded", String(jetzt));
+  } }, "ⓘ");
+  return { knopf: k, text: p };
+}
+// v6.16: Bearbeiten-Modus = eigene Ebene ueber der Startseite ({ art: "start", bearbeiten: true }), damit
+// Android-Zurueck und der Zurueck-Knopf ihn verlassen. Nur darin stehen die Umbau-Knoepfe unter der Zeichnung.
+const imBearbeiten = () => { const o = stapel[stapel.length - 1]; return o.art === "start" && !!o.bearbeiten; };
+function bearbeitenUmschalten() {
+  if (imBearbeiten()) zurueck(); else if (stapel[stapel.length - 1].art === "start") oeffne({ art: "start", bearbeiten: true });
+}
+
+function startAnsicht(ebene) {
+  const bearb = !!(ebene && ebene.bearbeiten);
   if (!stand) return [el("div", { className: "karte warnung" }, ladeFehler || "Lädt …")];
   const orte = orteSichtbar();
   if (!orte.length && !darfSchreiben()) // sonst legen beide Handys die Grundausstattung an
@@ -647,15 +693,20 @@ function startAnsicht() {
     (nKlaeren > 0 || nPruefen > 0) && el("div", { className: "knoepfe" },
       nKlaeren > 0 && el("button", { className: "ortklaeren", onclick: () => oeffne({ art: "ortKlaeren" }) }, "Ort klären (" + nKlaeren + ")"),
       nPruefen > 0 && el("button", { className: "bestand", onclick: () => oeffne({ art: "bestand" }) }, "Bestand prüfen (" + nPruefen + ")")),
-    zeichnung(ortVon(ortWahl)),
-    rasterKnoepfe(ortVon(ortWahl)),
-    // v6.6 (Tobias: "da sehe ich 6 Felder"): Vorlage sichtbar anbieten, solange der Medizinschrank noch der alte Platzhalter ist.
-    ortVon(ortWahl).name === "Medizinschrank" && ortVon(ortWahl).reihen !== H.MEDIZIN.reihen &&
-      el("button", { className: "neben gross", onclick: () => medizinEinrichten(ortWahl) },
-        ortVon(ortWahl).stil ? "🩹 Schubladen-Größen wie auf dem Foto übernehmen" : "🩹 Wie auf dem Foto einrichten (34 Schubladen)"),
-    el("p", { className: "klein" }, "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern"),
-    el("button", { className: "neben scanstart", onclick: () => multiScan(null) }, "📷 Scannen und einräumen"),
+    zeichenKopf(ortVon(ortWahl), bearb),
+    el("div", { className: "zeichenfeld" + (bearb ? " bearbeiten" : "") }, zeichnung(ortVon(ortWahl))),
+    // v6.6 Vorlage, v6.2/v6.12 Raster: seit v6.16 nur im Bearbeiten-Modus (Scannen steht in der Daumenleiste unten)
+    umbauTeil(ortVon(ortWahl), bearb),
   ];
+}
+function zeichenKopf(o, bearb) {
+  const h = hilfe("start", "Fach antippen = öffnen · lange drücken = Menü (umbenennen, aufteilen, …) · gedrückt halten und ziehen = Platz ändern" +
+    " · „✎ Bearbeiten“ = Reihen, Spalten, Vorlage und Ort ändern");
+  return [el("div", { className: "zeichenkopf" + (bearb ? " bearbeiten" : "") },
+    bearb ? el("b", { className: "modus", role: "status" }, "✎ Bearbeiten: " + o.name) : el("span", { className: "modus" }),
+    h.knopf,
+    el("button", { type: "button", className: "modusknopf" + (bearb ? " an" : ""), "aria-pressed": String(bearb), onclick: bearbeitenUmschalten },
+      bearb ? "✓ Fertig" : "✎ Bearbeiten")), h.text];
 }
 
 // v6.8 (Tobias 16.11.): Die Reiter-Leiste behaelt beim Neuzeichnen ihre Wisch-Position, der gewaehlte Reiter bleibt sichtbar
@@ -898,8 +949,9 @@ function sortierRahmen(svg, ortId) {
 
 // v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
 // mehreren Spalten; Schubladen-Orte sind feste Moebel). "−" nur, wenn die letzte Reihe/Spalte leer ist.
-function rasterKnoepfe(o) {
-  if (o.spalten < 2) return null;
+function umbauTeil(o, bearbeiten) {
+  const liste = H.umbauKnoepfe(o, bearbeiten);
+  if (!liste.length) return null;
   const aendern = (feld, delta) => {
     const jetzt = ortVon(o.id);
     if (!jetzt || jetzt.geloescht) return hinweis("Diesen Ort gibt es nicht mehr.");
@@ -929,15 +981,21 @@ function rasterKnoepfe(o) {
     tun([{ typ: "feld", art: "ort", ziel: o.id, feld: "spalten", wert: spalten }, { typ: "feld", art: "ort", ziel: o.id, feld: "trenner", wert: t + delta },
       ...imOrt.filter((f) => f.lage.spalte >= t).map((f) => ({ typ: "feld", art: "fach", ziel: f.id, feld: "lage", wert: { ...f.lage, spalte: f.lage.spalte + delta } }))]);
   };
-  const k = (text, aria, fn) => el("button", { className: "neben", "aria-label": aria, onclick: fn }, text);
-  const zwei = o.trenner && o.trenner < o.spalten;
-  return el("div", { className: "knoepfe raster" },
-    k("+ Reihe", "Reihe unten anfügen", () => aendern("reihen", 1)),
-    o.reihen > 1 && k("− Reihe", "Unterste Reihe entfernen", () => aendern("reihen", -1)),
-    zwei && k("+ Spalte links", "Spalte auf der linken Seite anfügen", () => linksAendern(1)),
-    zwei && o.trenner > 1 && k("− Spalte links", "Äußere Spalte der linken Seite entfernen", () => linksAendern(-1)),
-    k(zwei ? "+ Spalte rechts" : "+ Spalte", "Spalte rechts anfügen", () => aendern("spalten", 1)),
-    o.spalten > (zwei ? o.trenner + 1 : 2) && k(zwei ? "− Spalte rechts" : "− Spalte", "Rechte Spalte entfernen", () => aendern("spalten", -1)));
+  const tat = { "reihe+": () => aendern("reihen", 1), "reihe-": () => aendern("reihen", -1), "links+": () => linksAendern(1), "links-": () => linksAendern(-1),
+    "spalte+": () => aendern("spalten", 1), "spalte-": () => aendern("spalten", -1), vorlage: () => medizinEinrichten(o.id),
+    ort: () => { const j = ortVon(o.id); if (!j || j.geloescht) return hinweis("Diesen Ort gibt es nicht mehr."); ortDialog(j); } };
+  // v6.16: je Gruppe eine Zeile (Beschriftung + Knoepfe). Raster-Knoepfe behalten die Klasse "raster" (Browsertest).
+  const gruppen = [];
+  for (const x of liste) {
+    let g = gruppen.find((y) => y.name === x.gruppe);
+    if (!g) gruppen.push((g = { name: x.gruppe, k: [] }));
+    g.k.push(el("button", { className: "neben" + (x.id === "vorlage" ? " gross" : ""), "aria-label": x.aria, onclick: tat[x.id] }, x.text));
+  }
+  const raster = (n) => ["Reihen", "Spalten", "Linke Seite", "Rechte Seite"].includes(n);
+  return el("section", { className: "umbau", "aria-label": "Umbau " + o.name },
+    gruppen.map((g) => el("div", { className: "umbaugruppe" }, el("span", { className: "umbauname" }, g.name),
+      el("div", { className: "knoepfe" + (raster(g.name) ? " raster" : "") }, g.k))),
+    o.spalten < 2 && el("p", { className: "klein" }, "Schubladen-Orte haben feste Reihen – Anzahl über „Name und Größe“."));
 }
 
 // Antippen = kurz, lange druecken (0,5 s) = lang. Scrollen bricht ab (pointercancel).
@@ -1106,7 +1164,7 @@ function zielWahl(aktFach, jetztWort = " (jetzt)") {
 }
 // v6.12 (Tobias 16.11.: "alle Produkte aus Schublade 1 auf einmal loeschen"): markierte Eintraege in EINEM Schritt loeschen,
 // ein Rueckgaengig. Weg: lange druecken -> "Alle" -> "Loeschen".
-async function mehrLoeschen(ids) {
+async function mehrLoeschen(ids, markierEbene = true) {
   const es = ids.map(eintragJetzt).filter(Boolean);
   if (!es.length) return hinweis("Die markierten Sachen gibt es nicht mehr.");
   const stueck = es.reduce((s, e) => s + e.menge, 0);
@@ -1114,7 +1172,7 @@ async function mehrLoeschen(ids) {
     es.slice(0, 8).map((e) => "• " + e.name).join(String.fromCharCode(10)) + (es.length > 8 ? String.fromCharCode(10) + "…" : ""))) return;
   const schritte = (wert) => es.map((e) => ({ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert }));
   if (!(await tun(schritte(true)))) return;
-  zurueck(); // Markier-Ebene schliessen
+  if (markierEbene) zurueck(); // Markier-Ebene schliessen (aus dem Produkt-Menue gibt es keine)
   untenZeigen(sachenText(es.length) + " gelöscht", "Rückgängig", async () => { if (await tun(schritte(false))) untenZeigen(sachenText(es.length) + " zurückgeholt"); });
 }
 
@@ -1155,16 +1213,22 @@ function eintragMenue(e) {
     const x = await offDetailsHolen(ean);
     if (meins === tipp) flaeche.replaceChildren(...(x.offline ? [el("p", { className: "klein" }, "Open Food Facts nicht erreichbar – bitte später nochmal.")] : infoTeil(x.d)));
   } }, "🧾 Inhaltsstoffe");
-  dialog(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], [
-    ["−1 · eins rausgenommen" + (e.menge === 1 ? " (das letzte)" : ""), weiter(() => entnehmen(e))],
-    ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
-    ["↦ Verschieben nach …", weiter(() => verschiebenDialog([e.id], e.fach, "„" + kuerze(e.name, 30) + "“ verschieben nach …", (t) => [
-      el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), t,
-      el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch.")]))],
-    // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
-    ["📷 Foto" + (eig ? " ersetzen" : ""), (melde, schliessen) => { fotoWaehlen(e, eig); schliessen(); }],
-    eig && ["Foto entfernen", weiter(() => fotoEntfernen(e, eig))],
-  ], () => document.removeEventListener("vorrat-bild", bildDazu));
+  menue(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], {
+    oben: [
+      ["−1" + (e.menge === 1 ? " (das letzte)" : " · eins raus"), weiter(() => entnehmen(e)), "an"],
+      ["↦ Verschieben", weiter(() => verschiebenDialog([e.id], e.fach, "„" + kuerze(e.name, 30) + "“ verschieben nach …", (t) => [
+        el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), t,
+        el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch.")]))],
+      ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
+    ],
+    liste: [
+      // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
+      ["📷 Foto" + (eig ? " ersetzen" : " aufnehmen oder wählen"), (melde, schliessen) => { fotoWaehlen(e, eig); schliessen(); }],
+      eig && ["✖ Foto entfernen", weiter(() => fotoEntfernen(e, eig))],
+    ],
+    // v6.16: Loeschen auch direkt im Menue (wie bisher ueber Bearbeiten oder Markieren), mit Rueckfrage und Rueckgaengig
+    gefahr: [["🗑 Löschen", weiter(() => mehrLoeschen([e.id], false))]],
+  }, () => document.removeEventListener("vorrat-bild", bildDazu));
 }
 
 // Inhaltsstoffe je EAN, einmal je App-Start geholt; offline wird nicht gemerkt (naechster Tipp versucht es neu).
@@ -1266,8 +1330,11 @@ function fachAnsicht(ebene) {
     if (!m.delete(e.id)) m.add(e.id);
     if (m.size) zeichnen(); else zurueck();
   };
+  const h = m ? hilfe("markieren", "Antippen = markieren oder abwählen · Zurück = fertig")
+    : hilfe("fach", "Antippen = Menü (−1, bearbeiten, verschieben) · lange drücken = markieren, dann weitere antippen · gedrückt halten und ziehen = auf ein anderes Fach legen");
   return [
-    kopf(f.name, !m && el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachArt(f, o))),
+    kopf(f.name, h.knopf, !m && el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachArt(f, o))),
+    h.text,
     el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
     m && el("div", { className: "knoepfe markleiste", role: "status" },
       el("b", null, m.size + " markiert"),
@@ -1289,8 +1356,6 @@ function fachAnsicht(ebene) {
       ...(m ? [] : [
         el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu")),
         el("button", { className: "kachel neu", onclick: () => multiScan(id) }, el("span", { className: "bild" }, "📷"), el("span", { className: "name" }, "Scannen"))])),
-    el("p", { className: "klein" }, m ? "Antippen = markieren oder abwählen · Zurück = fertig"
-      : "Antippen = Menü (−1, bearbeiten, verschieben) · lange drücken = markieren, dann weitere antippen · gedrückt halten und ziehen = auf ein anderes Fach legen"),
   ];
 }
 
@@ -1429,18 +1494,34 @@ async function dreiJahresTest(ausgabe, knopf) {
 // weg (optional) laeuft beim Schliessen; zu = Beschriftung des Schliessen-Knopfs.
 // Rueckgabe { melde, schliessen } fuer Dialoge, die von aussen schliessen.
 function dialog(titel, inhalt, knoepfe, weg, zu = "Abbrechen") {
+  return blatt(titel, inhalt, (k, schliessKnopf) => [el("div", { className: "knoepfe" }, knoepfe.filter(Boolean).map((x) => k(x)), schliessKnopf(zu))], weg);
+}
+// v6.16 (Tobias 18.11., Knoepfe uebersichtlicher): Menue = haeufige Aktionen gross oben nebeneinander, Rest als Liste
+// mit Symbolen, Gefahr (Loeschen) rot, abgesetzt, ganz unten. Schliessen = ✕ oben rechts (und Zurueck/Escape wie bisher).
+// teile = { oben, liste, gefahr }: je Liste von [text, fn] oder falsch (faellt weg), siehe H.menueTeile.
+function menue(titel, inhalt, teile, weg) {
+  const t = H.menueTeile(teile);
+  return blatt(titel, inhalt, (k, schliessKnopf) => [
+    t.oben.length > 0 && el("div", { className: "menueoben" }, t.oben.map((x) => k(x, "gross"))),
+    t.liste.length > 0 && el("div", { className: "menueliste" }, t.liste.map((x) => k(x, "zeile"))),
+    t.gefahr.length > 0 && el("div", { className: "menuegefahr" }, t.gefahr.map((x) => k(x, "gefahr zeile"))),
+  ], weg, (schliessKnopf) => schliessKnopf("✕", "schliessen", "Schließen"));
+}
+// Gemeinsamer Rahmen fuer dialog() und menue(). rumpf(k, schliessKnopf) baut die Knoepfe; titelZusatz kommt neben den Titel.
+function blatt(titel, inhalt, rumpf, weg, titelZusatz) {
   const meldung = el("p", { className: "meldung", role: "alert" });
   const melde = (t) => { meldung.textContent = t; };
   const ebene = { weg };
   const schliessen = (n) => { if (stapel[stapel.length - 1] === ebene) { ebene.zu = true; zurueck(n); } };
   // Doppeltipp: solange eine Knopf-Aktion laeuft, zaehlt kein Knopf dieses Dialogs (Review v6 B #3, Simplify).
-  const k = knoepfe.filter(Boolean).map(([text, fn, klasse]) => el("button", { className: klasse || "", onclick: async () => {
+  const k = ([text, fn, klasse], extra) => el("button", { className: [klasse, extra].filter(Boolean).join(" "), onclick: async () => {
     if (ebene.zu || ebene.laeuft) return;
     ebene.laeuft = true;
     try { await fn(melde, schliessen); } finally { ebene.laeuft = false; }
-  } }, text));
-  ebene.el = el("div", { className: "blatt" }, el("div", { className: "fenster" }, el("h2", null, titel), inhalt, meldung,
-    el("div", { className: "knoepfe" }, k, el("button", { className: "zweit", onclick: () => schliessen() }, zu))));
+  } }, text);
+  const schliessKnopf = (text, klasse = "zweit", aria) => el("button", { className: klasse, "aria-label": aria || text, onclick: () => schliessen() }, text);
+  const kopfZeile = titelZusatz ? el("div", { className: "fensterkopf" }, el("h2", null, titel), titelZusatz(schliessKnopf)) : el("h2", null, titel);
+  ebene.el = el("div", { className: "blatt" }, el("div", { className: "fenster" }, kopfZeile, inhalt, meldung, rumpf(k, schliessKnopf)));
   const fenster = ebene.el.firstChild;
   fenster.setAttribute("role", "dialog");
   fenster.setAttribute("aria-modal", "true");
@@ -2086,24 +2167,30 @@ function fachMenue(alt) {
   const f = fachVon(alt.id); // gezeichnetes Objekt kann veraltet sein (Abgleich waehrend des Drueckens)
   if (!f || f.geloescht) return hinweis("Dieses Fach gibt es nicht mehr.");
   const o = ortVon(f.lage.ort), wort = fachArt(f, o), n = imFach(f.id).length, nb = nachbarn(f);
-  dialog(wort + " „" + kuerze(f.name, 30) + "“", [el("p", { className: "klein" },
-    (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], [
-    !fachAnsichtVon(f) && ["Öffnen", weiter(() => oeffne({ art: "fach", id: f.id }))],
-    ["✎ Umbenennen", weiter(() => fachDialog(f, null, "name"))],
-    ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
-    !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
-    nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
-    ...hoehenKnoepfe(f),
-    o && o.spalten > 1 && [f.offen ? "📦 In Kiste umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
-      const jetzt = fachVon(f.id);
-      if (!jetzt || jetzt.geloescht) return melde("Dieses Fach gibt es nicht mehr.");
-      if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "offen", wert: !jetzt.offen }])) schliessen();
-    }],
-    ["Löschen", async (melde, schliessen) => {
+  menue(wort + " „" + kuerze(f.name, 30) + "“", [el("p", { className: "klein" },
+    (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], {
+    oben: [
+      // v6.16: beim Bauen liegt das Menue noch nicht auf dem Stapel -> oberste Ebene pruefen (vorher stand „Öffnen“
+      // auch in der eigenen Schublade und oeffnete sie ein zweites Mal)
+      !(stapel[stapel.length - 1].art === "fach" && stapel[stapel.length - 1].id === f.id) && ["📂 Öffnen", weiter(() => oeffne({ art: "fach", id: f.id })), "an"],
+      ["✎ Umbenennen", weiter(() => fachDialog(f, null, "name"))],
+      ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
+    ],
+    liste: [
+      !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
+      nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
+      ...hoehenKnoepfe(f),
+      o && o.spalten > 1 && [f.offen ? "📦 In Kiste umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
+        const jetzt = fachVon(f.id);
+        if (!jetzt || jetzt.geloescht) return melde("Dieses Fach gibt es nicht mehr.");
+        if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "offen", wert: !jetzt.offen }])) schliessen();
+      }],
+    ],
+    gefahr: [["🗑 Löschen", async (melde, schliessen) => {
       if (!confirm(wort + " „" + f.name + "“ löschen?" + (n ? "\n\n" + n + " Einträge darin kommen in „Ort klären“, nichts geht verloren." : ""))) return;
       if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "geloescht", wert: true }])) fachWegSchliessen(f, schliessen);
-    }, "gefahr"],
-  ]);
+    }]],
+  });
 }
 
 // v6.7 (Tobias 16.11.): Faecher in der Hoehe verbinden. Nur fuer Faecher, die ihren Platz allein haben (nicht aufgeteilt).
@@ -2136,7 +2223,7 @@ function hoehenKnoepfe(alt) {
         (J) => H.verbindenSchritte(alt.id, J.h + hoeheVon(J.untenFach), J.untenFach.id, imFach(J.untenFach.id).map((e) => e.id)))(melde, schliessen);
     }],
     L.obenFrei && passt(L, 1) && ["↑ Nach oben vergrößern", tu((J) => J.obenFrei && passt(J, 1), (J) => [fach("lage", { ...J.f.lage, reihe: J.r - 1 }), fach("hoch", J.h + 1)])],
-    L.h > 1 && ["Wieder 1 Platz hoch (bleibt oben)", tu((J) => J.h > 1, () => [fach("hoch", null)])],
+    L.h > 1 && ["⤒ Wieder 1 Platz hoch (bleibt oben)", tu((J) => J.h > 1, () => [fach("hoch", null)])],
   ];
 }
 

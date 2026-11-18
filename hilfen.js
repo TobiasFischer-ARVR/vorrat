@@ -481,6 +481,36 @@
     return { aktuell, tot, bekannt };
   }
 
+  // v6.16 (Tobias 18.11.): Menue-Gliederung. Falsche Eintraege (Bedingung nicht erfuellt) fallen weg, die Reihenfolge
+  // bleibt; Gefahr (Loeschen) steht immer zuletzt. Kein DOM, damit testbar.
+  function menueTeile(teile) {
+    const t = (l) => (l || []).filter(Boolean);
+    return { oben: t(teile.oben), liste: t(teile.liste), gefahr: t(teile.gefahr) };
+  }
+
+  // v6.16: Umbau-Knoepfe unter der Zeichnung - NUR im Bearbeiten-Modus. Liefert { id, gruppe, text, aria } in Anzeige-
+  // Reihenfolge; dieselben Bedingungen wie bisher (Raster nur bei mehreren Spalten, "−" nur wenn moeglich,
+  // Spalte links/rechts bei Trennwand, Vorlage solange der Medizinschrank nicht das 12er-Raster hat).
+  function umbauKnoepfe(o, bearbeiten) {
+    if (!bearbeiten || !o) return [];
+    const k = [], dazu = (id, gruppe, text, aria) => k.push({ id, gruppe, text, aria: aria || text });
+    if (o.spalten >= 2) {
+      const zwei = !!o.trenner && o.trenner < o.spalten;
+      dazu("reihe+", "Reihen", "+ Reihe", "Reihe unten anfügen");
+      if (o.reihen > 1) dazu("reihe-", "Reihen", "− Reihe", "Unterste Reihe entfernen");
+      if (zwei) {
+        dazu("links+", "Linke Seite", "+ Spalte links", "Spalte auf der linken Seite anfügen");
+        if (o.trenner > 1) dazu("links-", "Linke Seite", "− Spalte links", "Äußere Spalte der linken Seite entfernen");
+      }
+      dazu("spalte+", zwei ? "Rechte Seite" : "Spalten", zwei ? "+ Spalte rechts" : "+ Spalte", "Spalte rechts anfügen");
+      if (o.spalten > (zwei ? o.trenner + 1 : 2)) dazu("spalte-", zwei ? "Rechte Seite" : "Spalten", zwei ? "− Spalte rechts" : "− Spalte", "Rechte Spalte entfernen");
+    }
+    if (o.name === "Medizinschrank" && o.reihen !== MEDIZIN.reihen)
+      dazu("vorlage", "Vorlage", o.stil ? "🩹 Schubladen-Größen wie auf dem Foto übernehmen" : "🩹 Wie auf dem Foto einrichten (34 Schubladen)");
+    dazu("ort", "Ort", "✎ Name und Größe …", "Ort " + o.name + " bearbeiten: Name, Reihen, Spalten");
+    return k;
+  }
+
   function pruefe(art, werte) {
     for (const [f, w] of Object.entries(werte)) if (!Modell.FELDER[art][f](w)) return FEHLERTEXT[f] || "Ungültig: " + f;
     return null;
@@ -488,7 +518,7 @@
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
-    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails };
+    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

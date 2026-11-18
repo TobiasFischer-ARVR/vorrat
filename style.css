@@ -1,5 +1,5 @@
 body { margin: 0; font-family: system-ui, sans-serif; background: #f4fbf7; color: #1d2b24; }
-main { padding: 12px 16px 96px; }
+main { padding: 12px 16px calc(150px + env(safe-area-inset-bottom)); } /* v6.16: Platz fuer Daumenleiste + Rueckgaengig-Leiste */
 [hidden] { display: none !important; }
 #updateleiste { position: sticky; top: 0; z-index: 30; display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: #1d6b49; color: #fff; }
 #updateleiste span { flex: 1; }
@@ -15,7 +15,7 @@ input[type=checkbox] { width: 22px; height: 22px; }
 .kopf h1 { margin: 0; font-size: 1.3rem; }
 .kopf button { background: transparent; color: #fff; font-size: 1.6rem; padding: 2px 12px; }
 #fehler { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 16px; background: #b3261e; color: #fff; }
-#unten { position: fixed; left: 12px; right: 12px; bottom: 16px; z-index: 20; display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: 12px; background: #1d2b24; color: #fff; box-shadow: 0 4px 16px #0004; }
+#unten { position: fixed; left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); /* v6.16: ueber der Daumenleiste */ z-index: 20; display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: 12px; background: #1d2b24; color: #fff; box-shadow: 0 4px 16px #0004; }
 #unten span { flex: 1; font-weight: 600; }
 #unten button { background: transparent; color: #7fe0b0; font-weight: 700; }
 .karte { padding: 12px 14px; border-radius: 12px; margin-bottom: 12px; }
@@ -223,3 +223,39 @@ main .suche button.baldzeile { border-left-color: #cfe0d7; } /* kein Warn-Gelb b
 .ortrahmen .ortscroll { flex: 1; min-width: 0; margin: 0; padding: 0; }
 main button.ortpfeil { flex: none; width: 28px; height: 64px; padding: 0; border-radius: 10px; background: #1d6b49; color: #fff; font-size: 1.1rem; }
 main button.ortpfeil.aus { visibility: hidden; } /* Platz bleibt, nichts springt */
+
+/* v6.16 (Tobias 18.11.): Knoepfe uebersichtlicher */
+/* Daumenleiste unten: Scannen · Laeuft bald ab · Start. Unter Dialogen (40), Rueckgaengig-Leiste (20) und Zug-Leiste (50). */
+#daumen { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; display: grid; grid-template-columns: repeat(3, 1fr);
+  padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid #cfe0d7; box-shadow: 0 -2px 10px #0001; }
+#daumen button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 2px; background: transparent; color: #1d6b49; font-size: .8rem; font-weight: 600; }
+#daumen .ikon { font-size: 1.45rem; line-height: 1.1; }
+#daumen .reiterzahl { position: absolute; top: 2px; left: 50%; margin-left: 10px; }
+body:has(main input:focus) #daumen { display: none; } /* Tastatur offen (Suche): Leiste nicht ueber der Tastatur */
+/* Bearbeiten-Modus an der Zeichnung */
+.zeichenkopf { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; min-height: 40px; }
+.zeichenkopf .modus { flex: 1; color: #7a4a00; }
+main button.ikon { background: transparent; color: #1d6b49; font-size: 1.35rem; padding: 2px 8px; }
+main button.modusknopf { background: #dcefe5; color: #1d6b49; font-weight: 600; }
+main button.modusknopf.an { background: #e8710a; color: #fff; }
+.zeichenkopf.bearbeiten { padding: 6px 8px; border-radius: 10px; background: #fff1e0; }
+.zeichenfeld.bearbeiten { outline: 3px dashed #e8710a; outline-offset: 3px; border-radius: 8px; }
+.hilfetext { margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: #eef1f0; }
+.umbau { margin: 14px 0 0; padding: 10px 12px; border-radius: 12px; background: #fff1e0; border: 1px solid #f3c99a; }
+.umbaugruppe { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; }
+.umbaugruppe + .umbaugruppe { border-top: 1px solid #f3dcbf; }
+.umbauname { color: #7a4a00; font-size: .85rem; font-weight: 600; }
+.umbau .knoepfe { flex: 1; margin: 0; justify-content: flex-start; }
+.umbau .knoepfe.raster { margin: 0; justify-content: flex-start; }
+.umbau p { margin: 6px 0 0; }
+/* Menues: haeufiges gross oben, Rest als Liste, Loeschen rot ganz unten */
+.fensterkopf { display: flex; align-items: flex-start; gap: 8px; }
+.fensterkopf h2 { flex: 1; }
+.fenster .fensterkopf button.schliessen { flex: none; background: #eef1f0; color: #44524b; font-size: 1.1rem; padding: 6px 12px; margin-top: -2px; }
+.menueoben { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin: 4px 0 10px; }
+.fenster .menueoben button { padding: 14px 6px; font-weight: 600; line-height: 1.2; }
+.fenster .menueoben button.an { background: #1d6b49; color: #fff; }
+.menueliste { display: flex; flex-direction: column; gap: 0; margin-bottom: 4px; }
+.fenster .menueliste button.zeile { margin: 0; padding: 12px 10px; border-radius: 0; background: transparent; color: #1d2b24; border-bottom: 1px solid #e3ece7; }
+.menuegefahr { margin-top: 14px; padding-top: 10px; border-top: 2px solid #f0c9c5; }
+.fenster .menuegefahr button.gefahr { margin: 0; padding: 12px 10px; background: #fde7e5; color: #b3261e; font-weight: 700; text-align: center; }

@@ -311,4 +311,36 @@ fall("v6 C: bilderNamen - aktuell (alle Objekte), tot nur an bekannten Objekten,
   assert.deepStrictEqual([...n.bekannt].sort(), [F("1"), F("2"), F("3"), F("4"), F("5")]);
 });
 
+fall("v6.16 Bearbeiten-Modus: Umbau-Knoepfe NUR im Modus, sonst keiner", () => {
+  const regal = { name: "Vorrats-Regal", reihen: 4, spalten: 2 };
+  const schub = { name: "Gefrierschrank", reihen: 6, spalten: 1 };
+  const medAlt = { name: "Medizinschrank", reihen: 3, spalten: 2 };
+  const med = { name: "Medizinschrank", reihen: 12, spalten: 8, stil: "sortierkasten", trenner: 4 };
+  for (const o of [regal, schub, medAlt, med, { ...med, reihen: 11 }]) {
+    assert.deepStrictEqual(H.umbauKnoepfe(o, false), [], "Normalmodus: " + o.name);
+    assert.ok(H.umbauKnoepfe(o, true).length > 0, "Bearbeiten: " + o.name);
+  }
+  assert.deepStrictEqual(H.umbauKnoepfe(null, true), []);
+  const t = (o) => H.umbauKnoepfe(o, true).map((k) => k.text);
+  assert.deepStrictEqual(t(regal), ["+ Reihe", "− Reihe", "+ Spalte", "✎ Name und Größe …"], "Regal 4x2: kein − Spalte bei 2");
+  assert.deepStrictEqual(t({ ...regal, spalten: 3, reihen: 1 }), ["+ Reihe", "+ Spalte", "− Spalte", "✎ Name und Größe …"]);
+  assert.deepStrictEqual(t(schub), ["✎ Name und Größe …"], "Schubladen-Ort: kein Raster, nur Ort");
+  assert.deepStrictEqual(t(medAlt), ["+ Reihe", "− Reihe", "+ Spalte", "🩹 Wie auf dem Foto einrichten (34 Schubladen)", "✎ Name und Größe …"]);
+  assert.deepStrictEqual(t(med), ["+ Reihe", "− Reihe", "+ Spalte links", "− Spalte links", "+ Spalte rechts", "− Spalte rechts", "✎ Name und Größe …"],
+    "Medizinschrank mit Trennwand: links/rechts, keine Vorlage mehr");
+  assert.ok(t({ ...med, reihen: 11 }).includes("🩹 Schubladen-Größen wie auf dem Foto übernehmen"));
+  assert.ok(!t({ ...med, trenner: 1 }).includes("− Spalte links"), "Trennwand nach Spalte 1: links nicht kleiner");
+  assert.ok(!t({ ...med, spalten: 5 }).includes("− Spalte rechts"), "rechts nur eine Spalte: nicht kleiner");
+  const gruppen = [...new Set(H.umbauKnoepfe(med, true).map((k) => k.gruppe))];
+  assert.deepStrictEqual(gruppen, ["Reihen", "Linke Seite", "Rechte Seite", "Ort"], "sauber gruppiert, Gruppen zusammenhaengend");
+  assert.ok(H.umbauKnoepfe(med, true).every((k) => k.aria && k.id), "jeder Knopf hat Kennung und Vorlese-Text");
+});
+
+fall("v6.16 Menue-Gliederung: nichts geht verloren, Bedingungen fallen weg, Loeschen zuletzt", () => {
+  const a = ["−1", () => 1], b = ["Bearbeiten", () => 2], c = ["Foto", () => 3], d = ["🗑 Löschen", () => 4];
+  const t = H.menueTeile({ oben: [a, false, b], liste: [null, c, undefined], gefahr: [d] });
+  assert.deepStrictEqual(t, { oben: [a, b], liste: [c], gefahr: [d] });
+  assert.deepStrictEqual(H.menueTeile({}), { oben: [], liste: [], gefahr: [] });
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

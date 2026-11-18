@@ -12,7 +12,7 @@ python3 -m http.server 8765 --bind 127.0.0.1 > "$AUS/server.log" 2>&1 & SERVER=$
 "$CHROME" --headless=new --no-sandbox --remote-debugging-port=9333 --user-data-dir="$AUS/profil" --window-size=412,915 \
   --no-first-run --disable-extensions about:blank > "$AUS/chrome.log" 2>&1 & BROWSER=$!
 sleep 2
-VORRAT_AUS="$AUS/bilder/" VORRAT_DL="$AUS/downloads" node tests/browser/cdp_v615.js 9333 8765; ERG=$?
+VORRAT_AUS="$AUS/bilder/" VORRAT_DL="$AUS/downloads" node tests/browser/cdp_v616.js 9333 8765; ERG=$?
 kill $SERVER $BROWSER 2>/dev/null
 echo "Ergebnis: $ERG (Bilder in $AUS/bilder)"
 exit $ERG
