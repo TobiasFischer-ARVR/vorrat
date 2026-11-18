@@ -232,6 +232,11 @@ main button.ortpfeil.aus { visibility: hidden; } /* Platz bleibt, nichts springt
 #daumen .reiterzahl { position: absolute; top: 2px; left: 50%; margin-left: 10px; }
 body:has(main input:focus) #daumen { display: none; } /* Tastatur offen (Suche): Leiste nicht ueber der Tastatur */
 body:has(.zuggeist) #daumen { display: none; } /* beim Ziehen: Faecher am unteren Rand bleiben Ablageziele */
+/* v6.17 (Tobias 18.11.): kleine Handys nur Symbole. Text bleibt fuer Vorleser (clip statt display:none). Schwelle bei Bedarf anpassen. */
+@media (max-width: 359px), (max-height: 640px) {
+  #daumen button > span:not(.ikon):not(.reiterzahl) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #daumen .reiterzahl { margin-left: 6px; }
+}
 /* Bearbeiten-Modus an der Zeichnung */
 .zeichenkopf { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; min-height: 40px; }
 .zeichenkopf .modus { flex: 1; color: #7a4a00; }

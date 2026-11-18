@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.16"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.17"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -171,6 +171,7 @@ function zuStart(fn) {
 }
 const baldZahl = el("span", { className: "reiterzahl", hidden: true, "aria-hidden": "true" });
 const daumenBald = el("button", { type: "button", "aria-label": "Läuft bald ab", onclick: () => zuStart(() => {
+  if (!baldAlle) { baldAlle = true; zeichnen(); } // v6.17 (Tobias 18.11.): ⏰ zeigt gleich die ganze Liste
   const b = document.querySelector("main .bald");
   if (b) b.scrollIntoView({ block: "start", behavior: "smooth" });
   else hinweis(stand ? "Nichts läuft in den nächsten 30 Tagen ab." : "Daten noch nicht geladen.");

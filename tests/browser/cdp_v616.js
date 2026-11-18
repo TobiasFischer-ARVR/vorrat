@@ -941,6 +941,15 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   await klick("#daumen button", "Läuft bald ab"); await warte(900);
   pruefe(await js(`stapel.length === 1 && !!document.querySelector("main .bald") && document.querySelector("main .bald").getBoundingClientRect().top < innerHeight`), "⏰ Läuft bald ab: springt zur Liste auf der Startseite");
   pruefe(Number(await js(`document.querySelector("#daumen .reiterzahl").textContent`)) === await js(`H.baldAb(stand.eintraege, Modell.heuteIso()).length`), "Zahl an ⏰ = Einträge in „Läuft bald ab“");
+  // v6.17: mehr als BALD_KURZ (5) Eintraege, damit der Test ohne das Aufklappen scheitert
+  await js(`(async () => { baldAlle = false; for (let i = 0; i < 6; i++) await tun([{ typ: "neu", art: "eintrag", werte: { name: "Baldtest " + i, mhd: new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10), fach: ${JSON.stringify(nf)} }, menge: 1 }]); return 1; })()`); await warte(300);
+  await klick("#daumen button", "Läuft bald ab"); await warte(900);
+  pruefe(await js(`(() => { const n = H.baldAb(stand.eintraege, Modell.heuteIso()).length; return n > 5 && document.querySelectorAll("main .bald li").length === n; })()`), "v6.17: ⏰ zeigt gleich die ganze Liste (mehr als 5)");
+  await js(`Promise.all(stand.eintraege.filter((e) => e.name.startsWith("Baldtest ")).map((e) => tun([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert: true }]))).then(() => 1)`); await warte(300);
+  await senden("Emulation.setDeviceMetricsOverride", { width: 360, height: 640, deviceScaleFactor: 2, mobile: true }); await warte(200);
+  pruefe(await js(`(() => { const b = [...document.querySelectorAll("#daumen button")]; return b.every((k) => k.querySelector("span:not(.ikon):not(.reiterzahl)").getBoundingClientRect().width <= 1) && b.map((k) => k.textContent.replace(/\\d+/g, "")).join("|") === "📷Scannen|⏰Läuft bald ab|🏠Start"; })()`), "v6.17: kleines Handy (360×640) nur Symbole, Text bleibt für Vorleser");
+  await senden("Emulation.setDeviceMetricsOverride", { width: 412, height: 915, deviceScaleFactor: 2, mobile: true }); await warte(200);
+  pruefe(await js(`document.querySelector("#daumen button span:not(.ikon)").getBoundingClientRect().width > 1`), "v6.17: normales Handy (412×915) mit Text");
   await bearb(true);
   await klick("svg .platz"); await warte(300);
   await klick("#daumen button", "Start"); await warte(500);
