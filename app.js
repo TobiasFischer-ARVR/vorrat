@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.17"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.18"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -619,6 +619,8 @@ const platzFrei = (ort, r, c, ausser, h = 1) => { const o = ortVon(ort); return 
 const ausserhalb = (ortId, reihen, spalten) => stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ortId &&
   (f.lage.reihe + hoeheVon(f) > reihen || f.lage.spalte >= spalten));
 const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id);
+// v6.18 (Tobias 18.11.): Anzeige zaehlt Stueck, nicht Eintraege (Muesli x2 = "2 Sachen"). Sichtbar mit Menge 0 (Bestand pruefen) zaehlt 1.
+const stueckImFach = (id) => imFach(id).reduce((s, e) => s + Math.max(1, e.menge), 0);
 const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
 const fachWort = (o) => (o && (o.spalten === 1 || o.stil === "sortierkasten") ? "Schublade" : "Kiste");
@@ -911,7 +913,7 @@ function zeichnung(ort) {
       // Mehrere Faecher auf einem Platz (Aufteilen) stehen nebeneinander, mit kleinem Spalt.
       const w = (cw - (hier.length - 1) * spalt) / Math.max(1, hier.length);
       hier.forEach((f, i) => {
-        const n = imFach(f.id).length, hp = hoeheVon(f) * rh + (hoeheVon(f) - 1) * luft;
+        const n = stueckImFach(f.id), hp = hoeheVon(f) * rh + (hoeheVon(f) - 1) * luft;
         const mk = marken.get(f.id); // { n, farbe } oder undefined
         const xi = x + i * (w + spalt), py = schub ? y + 15 : sk ? y + 12 : y + 26;
         const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
@@ -2169,7 +2171,7 @@ const fachWegSchliessen = (f, schliessen) => schliessen(fachAnsichtVon(f) ? 2 : 
 function fachMenue(alt) {
   const f = fachVon(alt.id); // gezeichnetes Objekt kann veraltet sein (Abgleich waehrend des Drueckens)
   if (!f || f.geloescht) return hinweis("Dieses Fach gibt es nicht mehr.");
-  const o = ortVon(f.lage.ort), wort = fachArt(f, o), n = imFach(f.id).length, nb = nachbarn(f);
+  const o = ortVon(f.lage.ort), wort = fachArt(f, o), n = stueckImFach(f.id), nb = nachbarn(f);
   menue(wort + " „" + kuerze(f.name, 30) + "“", [el("p", { className: "klein" },
     (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], {
     oben: [

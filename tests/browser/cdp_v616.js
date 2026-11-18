@@ -904,6 +904,9 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   await klick(".reiter button", "Gefrierschrank"); await warte(300);
   const nf = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Schublade 3").id`);
   const nid = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Leistentest", mhd: new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10), fach: ${JSON.stringify(nf)} }, menge: 2 }]).then((v) => v[0].id)`); await warte(300);
+  // v6.18 (Tobias 18.11., Muesli x2 zeigte „1 Sache“): Zeichnung zaehlt Stueck, nicht Eintraege
+  pruefe(await js(`(() => { const es = stand.eintraege.filter((e) => e.sichtbar && e.fach === ${JSON.stringify(nf)}), st = es.reduce((s, e) => s + Math.max(1, e.menge), 0);
+    const l = document.querySelector('[data-fach="${nf}"]').getAttribute("aria-label"); return st > es.length && l.includes(st + " Sachen"); })()`), "v6.18: Fach zeigt Stückzahl (Menge 2 = 2 Sachen)");
   await js(`(oeffne({ art: "fach", id: ${JSON.stringify(nf)} }), 1)`); await warte(300);
   pruefe(await js(`![...document.querySelectorAll("main p")].some((p) => !p.hidden && p.textContent.includes("Antippen ="))`), "Fach: Erklärzeile hinter ⓘ");
   await klick(".ansichtkopf button.ikon"); await warte(200);
