@@ -162,3 +162,123 @@ Aufgaben A–E sind fertig. Offen ist nur, was ein Lauf nicht kann:
 2. Codex-Gegenprüfung der Verdachtsstellen.
 3. Handy-Prüfliste (Kamera, Drag and Drop, OneDrive zwischen zwei Handys mit v3 + v4 gemischt: v4 schreibt nur Schema-1-Vorgänge, v3 muss die Dateien weiter lesen).
 4. Erst danach (Tobias) nach `main`.
+
+---
+
+# Nachtlauf 18.11. – Knöpfe übersichtlicher (Zweig `nacht-knoepfe`, App-Version v6.16)
+
+Nachtlauf ohne Aufsicht, Grundlage `abschnitt-3-5` (v6.15). `main` ist unverändert. **Push auf GitHub hat geklappt** (Zweig `nacht-knoepfe`).
+Abschnitt C war fertig (letzter Commit kein „WIP:“) → Schritt 1 entfiel.
+
+## (1) Ablaufplan
+
+| Schritt | wer | was |
+|---|---|---|
+| 0 | Claude (Nachtlauf) | Zweig `nacht-knoepfe` angelegt, Push-Probe ok |
+| 1 | – | entfiel: v6.15 (Abschnitt C) ist fertig, kein WIP |
+| 2a | Claude | Browsertest unter Linux/Chromium lauffähig (`lauf_linux.sh`), Vorher-Stand 315/315 grün; Inventar aus dem Code (unten) |
+| 2b | Claude | Umbau v6.16 in **einem** Commit (`v6.16: Knoepfe uebersichtlicher …`) + Tests |
+| 2c | Claude | eigene Durchsicht des Diffs + unabhängige Zweitprüfung, echte Funde behoben (eigener Commit) |
+| 2d | Claude | Vorher-/Nachher-Bilder 412 px nach `pruefung/nacht-knoepfe/` |
+| 3 | Tobias | Handy-Prüfliste unten, Bilder ansehen, entscheiden |
+| 4 | Tobias | nach `main` übernehmen – oder zurücknehmen: `git revert <Umbau-Commit> <Fix-Commit>` |
+
+## (2) Was in v6.16 steckt
+
+| Punkt | Was | Woher |
+|---|---|---|
+| K1 | Feste Leiste unten (am Daumen): 📷 Scannen (= bisher „Scannen und einräumen“, Multiscan ohne Fach), ⏰ Läuft bald ab (rote Zahl, springt zur Liste auf der Startseite, aus jeder Ansicht), 🏠 Start (schließt alle Ebenen). Suchfeld oben unverändert | Auftrag 1 |
+| K2 | Leiste verschwindet bei offener Tastatur (Suche) und während des Ziehens (sonst wären Fächer am unteren Rand kein Ablageziel) | eigene Prüfung |
+| K3 | Rückgängig-Leiste sitzt 76 px höher (über der Daumenleiste), Verhalten gleich | nötig, sonst verdeckt |
+| K4 | Schalter „✎ Bearbeiten“ rechts über der Zeichnung. Im Modus: Kopfzeile orange „✎ Bearbeiten: <Ort>“, Knopf wird „✓ Fertig“, Zeichnung orange gestrichelt umrandet, darunter Kasten „Umbau“ mit Gruppen *Reihen · Spalten* bzw. *Reihen · Linke Seite · Rechte Seite*, *Vorlage* (Medizinschrank), *Ort* | Auftrag 2 |
+| K5 | Modus = eigene Ebene im Verlauf: Fertig, ←/Android-Zurück, 🏠 verlassen ihn. Reiter wechseln bleibt im Modus. Fach antippen/lange drücken/ziehen wirkt im Modus wie sonst | Auftrag 2 |
+| K6 | Neu im Modus: „✎ Name und Größe …“ = der bekannte Ort-Dialog (bisher nur ☰ → Ort). Damit ist der Modus auch beim Gefrierschrank nicht leer | eigene Entscheidung |
+| K7 | Menüs (Produkt antippen, Fach lange drücken, „⋯ Schublade“): oben groß nebeneinander, darunter Liste mit Symbolen, 🗑 Löschen rot, abgesetzt, ganz unten, ✕ oben rechts statt „Abbrechen“ (Zurück/Escape schließen weiter) | Auftrag 3 |
+| K8 | Produkt-Menü: oben −1 · ↦ Verschieben · ✎ Bearbeiten; Liste 📷 Foto (ersetzen), ✖ Foto entfernen; unten 🗑 Löschen (**neu im Menü**, mit Rückfrage + Rückgängig; bisher nur über Bearbeiten oder Markieren) | Auftrag 3 |
+| K9 | Fach-Menü: oben 📂 Öffnen · ✎ Umbenennen · ⇄ Platz ändern; Liste ✂ Aufteilen, ⊕ Zusammenlegen, ↕/↑ vergrößern, ↕ verbinden, ⤒ Wieder 1 Platz hoch, 📦/🧺 umwandeln; unten 🗑 Löschen | Auftrag 3 |
+| K10 | Fix (alt seit v5.2): In der eigenen Schublade bot das Fach-Menü „Öffnen“ an und öffnete sie ein zweites Mal | eigener Fund (Browsertest) |
+| K11 | Erklärzeilen (Startseite, Fach, Markieren) nur hinter ⓘ; bleibt beim Neuzeichnen offen/zu | Auftrag 4 |
+| K12 | Reine Funktionen `H.umbauKnoepfe(ort, bearbeiten)` und `H.menueTeile(teile)` (testbar, ohne DOM) | Auftrag Prüfen |
+| K13 | Version v6.16, Cache `vorrat-v6.16`; keine neuen Daten/Felder → v6.12–v6.15 lesen alles weiter | Auftrag |
+
+## (3) Inventar-Abhakliste (vor dem Umbau aus dem Code erhoben, danach einzeln geprüft)
+
+✔ = erreichbar und im Browsertest geprüft · ◐ = erreichbar, Code unverändert, nicht eigens geprüft
+
+| # | Ansicht | Knopf/Aktion vorher | wo jetzt | ✔ |
+|---|---|---|---|---|
+| S1 | Start | Suchfeld + Treffer antippen | unverändert oben | ✔ |
+| S2 | Start | „Läuft bald ab“: Zeile antippen/lange/ziehen, „Alle N zeigen“ | unverändert; zusätzlich ⏰ unten | ✔ |
+| S3 | Start | Abgleich-Karte (Neu anmelden, Einstellungen, Jetzt abgleichen, Details) | unverändert | ✔ |
+| S4 | Start | Reiter-Leiste (Zahl, Wischposition) | unverändert | ✔ |
+| S5 | Start | Ort klären (N), Bestand prüfen (N) | unverändert | ✔ |
+| S6 | Start | Fach antippen / lange drücken / ziehen, freier Platz „+“, Tastatur | unverändert, auch im Modus | ✔ |
+| S7 | Start | Pfeile ◀ ▶ am Medizinschrank | unverändert, auch im Modus | ✔ |
+| S8 | Start | + Reihe, − Reihe | ✎ Bearbeiten → Reihen | ✔ |
+| S9 | Start | + Spalte, − Spalte | ✎ Bearbeiten → Spalten | ✔ |
+| S10 | Start | + / − Spalte links, + / − Spalte rechts | ✎ Bearbeiten → Linke/Rechte Seite | ✔ |
+| S11 | Start | 🩹 Wie auf dem Foto einrichten / Schubladen-Größen übernehmen | ✎ Bearbeiten → Vorlage (auch weiter im Ort-Dialog) | ✔ |
+| S12 | Start | Erklärzeile | ⓘ an der Zeichnung | ✔ |
+| S13 | Start | 📷 Scannen und einräumen | 📷 Scannen in der Leiste unten | ✔ |
+| S14 | Start | ☰ Menü, Grundausstattung anlegen | unverändert | ✔ |
+| S15 | alle | Rückgängig-Leiste | unverändert, sitzt über der Daumenleiste | ✔ |
+| F1 | Fach | ← Zurück | unverändert | ✔ |
+| F2 | Fach | ⋯ Schublade/Kiste/Ablage | unverändert (öffnet gruppiertes Menü) | ✔ |
+| F3 | Fach | Kachel antippen = Menü, lange = markieren, ziehen = verschieben | unverändert | ✔ |
+| F4 | Fach | Kacheln + Neu, 📷 Scannen | unverändert | ✔ |
+| F5 | Fach | Markierleiste: Verschieben, Löschen, Alle, Fertig | unverändert | ✔ |
+| F6 | Fach | Erklärzeile (normal/markiert) | ⓘ im Kopf | ✔ |
+| P1 | Produkt-Menü | 🧾 Inhaltsstoffe / 🖼 Bild | unverändert | ✔ |
+| P2 | Produkt-Menü | −1 · eins rausgenommen | oben groß „−1 · eins raus“ | ✔ |
+| P3 | Produkt-Menü | ✎ Bearbeiten | oben | ✔ |
+| P4 | Produkt-Menü | ↦ Verschieben nach … | oben „↦ Verschieben“ | ✔ |
+| P5 | Produkt-Menü | 📷 Foto / Foto ersetzen | Liste | ✔ |
+| P6 | Produkt-Menü | Foto entfernen | Liste „✖ Foto entfernen“ | ✔ |
+| P7 | Produkt-Menü | Abbrechen | ✕ oben rechts, Zurück, Escape | ✔ |
+| M1 | Fach-Menü | Öffnen | oben (nur außerhalb der eigenen Schublade) | ✔ |
+| M2–M3 | Fach-Menü | Umbenennen, Platz ändern | oben | ✔ |
+| M4–M5 | Fach-Menü | Aufteilen, Zusammenlegen | Liste | ✔ |
+| M6–M9 | Fach-Menü | nach unten/oben vergrößern, verbinden, wieder 1 Platz hoch | Liste | ✔ |
+| M10 | Fach-Menü | In Kiste/Ablage umwandeln | Liste | ✔ |
+| M11 | Fach-Menü | Löschen | ganz unten, rot | ✔ |
+| M12 | Fach-Menü | Abbrechen | ✕ oben rechts | ✔ |
+| X1 | Ort klären, Bestand prüfen, ☰ Menü, Prüfen, Sicherung, alle Dialoge (Eintrag, Fach, Ort, Scan, Multiscan, Verschieben, Foto) | – | unverändert (Dialoge laufen über denselben Rahmen `blatt()`) | ✔ |
+| X2 | Fach ziehen → Fach (Tauschen/Daneben) | – | unverändert | ◐ |
+
+Nichts gestrichen. Zusätzlich: 🗑 Löschen im Produkt-Menü, „Name und Größe“ im Bearbeiten-Modus, ⏰/🏠 unten.
+
+## (4) Testzahlen
+
+| Test | vorher (v6.15) | nachher (v6.16) |
+|---|---|---|
+| test_cloud | 42 | 42 |
+| test_codes | 9 | 9 |
+| test_geruest | ok | ok |
+| test_medizin | ok | ok |
+| test_modell | 21 | 21 |
+| test_oberflaeche | 19 | 21 (+ Knöpfe nur im Modus, + Menü-Gliederung) |
+| test_speicher | 20 | 20 |
+| Browsertest (Chromium headless, 412 px) | 315/315 | 353/353 (`tests/browser/cdp_v616.js`, Raster-/Vorlage-Prüfungen schalten vorher den Modus ein; neu Abschnitt 9j) |
+
+Browser: Playwright-Chromium im Cloud-Container über `bash tests/browser/lauf_linux.sh` (keine App-Abhängigkeit). Bilder: `pruefung/nacht-knoepfe/vorher|nachher/` (1 Start, 2 Regal, 3 Medizinschrank [nachher im Bearbeiten-Modus], 4 Produkt-Menü, 5 Fach-Menü), erzeugt mit `tests/browser/bilder_knoepfe.js`.
+
+## (5) Handy-Prüfliste für Tobias
+
+1. Update laden, ☰ → Prüfen zeigt **v6.16**.
+2. Startseite: unten Leiste 📷 · ⏰ · 🏠. In die Suche tippen → Leiste verschwindet über der Tastatur, danach wieder da.
+3. ⏰ aus einer geöffneten Schublade → Startseite, Liste „Läuft bald ab“ im Bild; Zahl an ⏰ stimmt.
+4. 📷 Scannen → Multiscan wie früher „Scannen und einräumen“.
+5. Regal: „✎ Bearbeiten“ → orange Rahmen + Kasten Umbau. + Reihe / − Reihe / + Spalte ausprobieren. **Android-Zurück** → Modus aus. Nochmal rein, „✓ Fertig“ → aus.
+6. Medizinschrank im Modus: Linke Seite / Rechte Seite, Pfeile ◀ ▶ gehen weiter.
+7. Kachel antippen → Menü: −1 · Verschieben · Bearbeiten oben, Löschen rot unten. ✕ schließt. Löschen → Rückfrage → Rückgängig unten (über der Leiste!).
+8. Fach lange drücken und „⋯ Schublade“ → Menü gruppiert, kein „Öffnen“ in der eigenen Schublade.
+9. Kachel halten und auf ein Fach **ganz unten** ziehen → Leiste ist beim Ziehen weg, Ablegen klappt.
+10. Gemischt: Andrea noch auf v6.12–v6.15 → Abgleich läuft (keine neuen Daten).
+
+## (6) Offene Fragen
+
+1. **Löschen im Produkt-Menü** ist neu (vorher nur über Bearbeiten/Markieren). Behalten? (Rückfrage + Rückgängig sind da.)
+2. **„✎ Name und Größe …“** im Bearbeiten-Modus ist eine Abkürzung zum Ort-Dialog (☰ → Ort geht weiter). Gewünscht?
+3. Der Vorlage-Knopf am alten Medizinschrank ist jetzt nur im Bearbeiten-Modus zu sehen (v6.6 hatte ihn bewusst sichtbar gemacht). Ist Andreas Handy schon eingerichtet, spielt das keine Rolle mehr.
+4. Soll ⏰ bei langer Liste gleich „Alle N zeigen“ aufklappen? (Jetzt: springt nur hin.)
+5. Die Leiste kostet unten ~70 px Höhe; bei kleinen Handys ggf. nur Symbole ohne Text?

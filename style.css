@@ -176,7 +176,6 @@ main button.kachel.angehoben, main button.baldzeile.angehoben { transform: scale
 .mzeile .plusminus { grid-area: zahl; gap: 10px; }
 .mzeile .plusminus button { padding: 2px 14px; }
 .weiterscannen { width: 100%; margin-bottom: 4px; }
-main button.scanstart { display: block; width: 100%; margin-top: 12px; padding: 12px; font-size: 1rem; }
 /* v5.3 Faecher ziehen */
 .platz.angehoben rect:first-child { stroke: #1d6b49; stroke-width: 5; stroke-dasharray: 8 4; }
 .frei.ziel rect { stroke: #1d6b49; stroke-width: 6; stroke-dasharray: none; fill: #dcefe5; }
@@ -232,6 +231,7 @@ main button.ortpfeil.aus { visibility: hidden; } /* Platz bleibt, nichts springt
 #daumen .ikon { font-size: 1.45rem; line-height: 1.1; }
 #daumen .reiterzahl { position: absolute; top: 2px; left: 50%; margin-left: 10px; }
 body:has(main input:focus) #daumen { display: none; } /* Tastatur offen (Suche): Leiste nicht ueber der Tastatur */
+body:has(.zuggeist) #daumen { display: none; } /* beim Ziehen: Faecher am unteren Rand bleiben Ablageziele */
 /* Bearbeiten-Modus an der Zeichnung */
 .zeichenkopf { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; min-height: 40px; }
 .zeichenkopf .modus { flex: 1; color: #7a4a00; }
