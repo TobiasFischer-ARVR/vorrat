@@ -2,7 +2,7 @@
 "use strict";
 const fs = require("fs");
 const port = process.argv[2] || 9333;
-const AUS = "D:/tmp/vorrat-2/";
+const AUS = process.env.VORRAT_AUS || "D:/tmp/vorrat-2/";
 const warte = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
@@ -42,7 +42,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
 
   await senden("Runtime.enable"); await senden("Log.enable"); await senden("Page.enable");
   // Backups nie in Tobias' Downloads-Ordner (Hauptsession 17.11.): eigener Ordner, Inhalt prueft kein Test
-  await senden("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: "D:\\tmp\\vorrat-2\\downloads" });
+  await senden("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: process.env.VORRAT_DL || "D:\\tmp\\vorrat-2\\downloads" });
   await senden("Emulation.setDeviceMetricsOverride", { width: 412, height: 915, deviceScaleFactor: 2, mobile: true });
   await senden("Page.navigate", { url: `http://localhost:${process.argv[3] || 8765}/` });
   await warte(1500);
