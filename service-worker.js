@@ -1,8 +1,8 @@
 // Service Worker der Vorrats-App (Muster: UGC-App, schlanker)
-const CACHE = "vorrat-v6.19"; // UGC #71: im Gleichschritt mit APP_VERSION in app.js ("v6.19")
+const CACHE = "vorrat-v6.20"; // UGC #71: im Gleichschritt mit APP_VERSION in app.js ("v6.20")
 // konto-test.html steht bewusst NICHT hier: der fetch-Handler beantwortet nur Dateien aus
 // DATEIEN, alles andere geht direkt ans Netz. msal-browser.min.js seit v3 (Login in der App).
-const DATEIEN = ["./", "index.html", "style.css", "app.js", "modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "bilder.js",
+const DATEIEN = ["./", "index.html", "style.css", "app.js", "modell.js", "speicher.js", "kunstdaten.js", "hilfen.js", "erinnerung.js", "bilder.js",
                  "msal-browser.min.js", "cloud.js",
                  "manifest.webmanifest",
                  "icons/icon-192.png", "icons/icon-512.png",
@@ -18,6 +18,29 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("message", (e) => {
   if (e.data === "uebernehmen") self.skipWaiting();
+  if (e.data === "erinnerung-pruefen") e.waitUntil(erinnern()); // Browsertest; im Alltag weckt Chrome per periodicsync
+});
+
+// v6.20 (Tobias 18.11.): Erinnerung bei Ablauf, Logik in erinnerung.js (nutzt hilfen.js/modell.js wie die Seite).
+importScripts("modell.js", "hilfen.js", "erinnerung.js");
+async function erinnern() {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const heute = Modell.heuteIso(); // einmal: ueber Mitternacht sonst falscher Tag gemerkt
+  const m = await Erinnerung.pruefen(heute);
+  if (!m) return;
+  await self.registration.showNotification(m.titel, { body: m.text, tag: "erinnerung", icon: "icons/icon-192.png" });
+  await Erinnerung.schreiben("gemeldet", heute);
+}
+self.addEventListener("periodicsync", (e) => { if (e.tag === "erinnerung") e.waitUntil(erinnern()); });
+// Antippen: offene Vorrats-App nach vorn (nicht die KPI-App auf derselben Origin), sonst neu starten.
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cs) => {
+    const start = new URL(self.registration.scope).pathname; // Codex v6.20 #7: nur ./ oder ./index.html
+    const c = cs.find((x) => { const p = new URL(x.url).pathname; return p === start || p === start + "index.html"; });
+    if (c) { c.postMessage("bald"); return c.focus(); }
+    return self.clients.openWindow("./?bald");
+  }));
 });
 
 // #74: alte eigene Caches wegraeumen. NUR Praefix "vorrat-": die KPI-App liegt auf derselben

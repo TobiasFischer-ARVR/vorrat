@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.19"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.20"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -69,6 +69,8 @@ if ("serviceWorker" in navigator) {
     });
   }).catch(() => {}); // ohne Service Worker (z. B. http) laeuft die App trotzdem
 
+  // v6.20: Meldung angetippt, App war offen -> zur Liste "Laeuft bald ab"
+  navigator.serviceWorker.addEventListener("message", (e) => { if (e.data === "bald") { if (dialogOffen()) baldBeimStart = true; else daumenBald.click(); } }); // Codex v6.20 #8: nach dem Dialog
   // UGC #77: einmal neu laden, Schleifenschutz + Hinweis nach dem Neuladen
   let neuGeladen = false;
   let hatteController = !!navigator.serviceWorker.controller;
@@ -202,7 +204,11 @@ function daumenZeigen() {
   daumenStift.setAttribute("aria-pressed", String(an));
   stiftIkon.textContent = an ? "✓" : "✎";
   stiftWort.textContent = an ? "Fertig" : "Bearbeiten";
+  // v6.20: per Meldung gestartet (?bald): einmal zur Liste, sobald Daten da sind
+  // Codex R2 #2: Vormerkung erst beim echten Sprung loeschen (oeffnet das Zurueck gleich einen Folgedialog, bleibt sie stehen)
+  if (baldBeimStart && stand) { history.replaceState(history.state, "", location.pathname); setTimeout(() => { if (!baldBeimStart || dialogOffen()) return; baldBeimStart = false; daumenBald.click(); }); }
 }
+let baldBeimStart = new URLSearchParams(location.search).has("bald");
 function fehlerZeigen(text) {
   fehlerLeiste.replaceChildren(el("b", null, "⚠ " + text), el("button", { onclick: () => location.reload() }, "App neu laden"));
   fehlerLeiste.hidden = false;
@@ -238,6 +244,7 @@ async function laden() {
   // Codex R2 #1: waehrend des Lesens kann ein Zug oder Dialog begonnen haben -> auch jetzt nicht darunter tauschen
   if (laeuft || dialogOffen() || zieht) { nachladen = true; return; }
   neu();
+  erinnerungAblegen();
   zeichnen();
 }
 
@@ -264,6 +271,7 @@ async function tun(datenListe) {
   } finally {
     laeuft = false;
     stand = Modell.berechne(liste);
+    erinnerungAblegen();
     zeichnen();
     if (fertig) abgleichBald();
     if (nachladen) laden();
@@ -274,6 +282,56 @@ async function tun(datenListe) {
 const CLIENT_ID = "d95d99d1-c6b1-47ce-b533-86ae39816199"; // Entra "Vorrats-App", kein Geheimnis
 const SCOPES = ["User.Read", "Files.ReadWrite"];
 const EINST_KEY = "vorrat-einst";
+// v6.20: Erinnerung bei Ablauf. Eigener Schluessel, NICHT in einst: ein Eintrag unter EINST_KEY macht das
+// Geraet "eingerichtet" und startet den Abgleich ohne bestaetigte Ordner.
+const ERINNERUNG_KEY = "vorrat-erinnerung-an";
+const erinnerungIstAn = () => localStorage.getItem(ERINNERUNG_KEY) === "1";
+// Codex v6.20 #1: auch synchrone Fehler (z. B. erinnerung.js nicht geladen) duerfen laden()/tun() nie unterbrechen
+const erinnerungAblegen = () => { try { if (stand && erinnerungIstAn()) Erinnerung.ablegen(stand.eintraege).catch(() => {}); } catch { /* nur Erinnerung */ } };
+// Codex v6.20 #2: ohne aktiven Service Worker nicht ewig warten
+const swBereit = () => Promise.race([navigator.serviceWorker.ready, new Promise((_, nein) => setTimeout(() => nein(new Error("Hintergrund-Dienst der App läuft nicht (App einmal neu laden)")), 5000))]);
+// Liefert null (ok) oder den Grund, warum es nicht geht.
+async function erinnerungEinschalten() {
+  if (!("Notification" in window) || !navigator.serviceWorker) return "Dieser Browser kann keine Meldungen.";
+  const reg = await swBereit();
+  if (!reg.periodicSync) return "Chrome bietet hier keine Prüfung im Hintergrund an. Die App muss installiert sein (Chrome-Menü → „App installieren“ bzw. „Zum Startbildschirm“).";
+  if ((await Notification.requestPermission()) !== "granted") return "Meldungen sind nicht erlaubt. In den Android-Einstellungen bei der App erlauben, dann nochmal.";
+  const st = await navigator.permissions.query({ name: "periodic-background-sync" }).catch(() => null);
+  if (st && st.state === "denied") return "Chrome erlaubt die Prüfung im Hintergrund nicht. Ist die App installiert?";
+  localStorage.setItem(ERINNERUNG_KEY, "1"); // Codex v6.20 #3: erst der Schalter, dann Chrome (sonst Anmeldung ohne Ausschaltweg)
+  try { await reg.periodicSync.register("erinnerung", { minInterval: 12 * 3600e3 }); } // Chrome entscheidet selbst, oft seltener
+  catch (x) { localStorage.removeItem(ERINNERUNG_KEY); throw x; }
+  erinnerungAblegen();
+  return null;
+}
+async function erinnerungAusschalten() {
+  localStorage.removeItem(ERINNERUNG_KEY);
+  // Codex v6.20 #3 / R2 #1: beide Schritte unabhaengig versuchen (Liste leer = auch ein spaetes Wecken meldet nichts)
+  const fehler = [];
+  await Erinnerung.schreiben("liste", null).catch((x) => fehler.push(x));
+  await swBereit().then((r) => r.periodicSync && r.periodicSync.unregister("erinnerung")).catch((x) => fehler.push(x));
+  if (fehler.length) throw fehler[0];
+}
+function erinnerungTeil() {
+  const p = el("p", { className: "klein" }), k = el("button", { type: "button" });
+  const zeigen = () => {
+    const an = erinnerungIstAn();
+    k.textContent = an ? "🔕 Ausschalten" : "🔔 Einschalten";
+    p.textContent = an ? "An: höchstens 1× am Tag eine Meldung, wenn etwas rot oder abgelaufen ist. Grundlage ist der Stand vom letzten Öffnen der App."
+      : "Aus. Chrome prüft im Hintergrund etwa 1× am Tag (nicht garantiert, im Stromsparmodus seltener).";
+  };
+  k.onclick = async () => {
+    k.disabled = true;
+    try {
+      const grund = erinnerungIstAn() ? (await erinnerungAusschalten(), null) : await erinnerungEinschalten();
+      zeigen();
+      if (grund) p.textContent = grund;
+    } catch (x) { zeigen(); p.textContent = "Ging nicht: " + ((x && x.message) || x); } // R2 #1: Knopf passt immer zum Schalter
+    k.disabled = false;
+  };
+  zeigen();
+  return el("div", null, p, k);
+}
 // Offen-Punkt 10 = (a): Sicherungen als Unterordner des Datenordners.
 const STANDARD = { datenPfad: "Gemeinschaftsordner/Vorrats App", sicherPfad: "Gemeinschaftsordner/Vorrats App/Sicherungen" };
 // UGC #42: Ordner stehen im Geraet (localStorage), nie im Datenbestand.
@@ -546,6 +604,8 @@ function einstellungenDialog() {
     el("p", { className: "klein" }, "Steht nur in diesem Gerät. Eintippen (Windows-Pfad aus dem Explorer geht auch) oder 📁 durchklicken."),
     el("div", { className: "zeilen" }, feld("Datenordner", daten), waehlen(daten)),
     el("div", { className: "zeilen" }, feld("Sicherungsordner", sicher), waehlen(sicher)),
+    el("h3", null, "Erinnerung bei Ablauf"),
+    erinnerungTeil(),
     !eingerichtet() && lokal.length > 0 && el("p", { className: "hinweis-rot" }, "Auf diesem Gerät liegen schon " + lokal.length +
       " Vorgänge (z. B. Testdaten aus v2). Mit „Übernehmen“ wandern sie beim ersten Abgleich nach OneDrive. Lieber vorher löschen: ☰ → Prüfen → 7× auf die Version tippen."),
     ausgabe,

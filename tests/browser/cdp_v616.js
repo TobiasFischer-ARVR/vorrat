@@ -1330,6 +1330,36 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   await js(`(konto.name = __alt17.name, Cloud.abgleichen = __alt17.ab, g.fetch = __alt17.fetch, g.token = __alt17.token, 1)`);
 
+  console.log("18. v6.20: Erinnerung bei Ablauf (Service Worker, höchstens 1× am Tag, nur rot + abgelaufen)");
+  {
+    await senden("Browser.grantPermissions", { origin: `http://localhost:${process.argv[3] || 8765}`, permissions: ["notifications"] });
+    const einstVorher = await js(`localStorage.getItem(EINST_KEY)`);
+    await js(`(einstellungenDialog(), 1)`); await warte(300);
+    pruefe(await js(`[...document.querySelectorAll(".blatt h3")].some((h) => h.textContent === "Erinnerung bei Ablauf") && [...document.querySelectorAll(".blatt button")].some((b) => b.textContent === "🔔 Einschalten")`), "Einstellungen: Abschnitt „Erinnerung bei Ablauf“ mit Schalter");
+    await js(`history.back(), 1`); await warte(300);
+    // Einschalten ohne periodicSync (headless) geht nicht ueber Chrome -> Schalter direkt setzen, Rest echt
+    await js(`(localStorage.setItem(ERINNERUNG_KEY, "1"), 1)`);
+    const fid = await js(`stand.faecher.find((f) => !f.geloescht).id`);
+    const mhd = Hilfen_plus(new Date().toISOString().slice(0, 10), 2); // rot (<= 7 Tage)
+    const rid = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Erinnerungstest", mhd: ${JSON.stringify(mhd)}, fach: ${JSON.stringify(fid)} }, menge: 2 }]).then((v) => v[0].id)`); await warte(600);
+    pruefe(await js(`Erinnerung.lesen("liste").then((l) => !!l && l.some((e) => e.name === "Erinnerungstest" && e.menge === 2))`), "App legt die Liste nach dem Laden ab");
+    pruefe(await js(`localStorage.getItem(EINST_KEY)`) === einstVorher, "Schalter macht das Gerät nicht „eingerichtet“ (kein Abgleich ohne Ordner)");
+    const meld = () => js(`navigator.serviceWorker.ready.then((r) => r.getNotifications()).then((ns) => ns.map((n) => n.title + " | " + n.body))`);
+    const wecken = async () => { await js(`navigator.serviceWorker.ready.then((r) => (r.active.postMessage("erinnerung-pruefen"), 1))`); await warte(1200); };
+    await js(`Erinnerung.schreiben("gemeldet", null).then(() => navigator.serviceWorker.ready).then((r) => r.getNotifications()).then((ns) => (ns.forEach((n) => n.close()), 1))`);
+    await wecken();
+    const m1 = await meld();
+    console.log("  Meldung: " + JSON.stringify(m1));
+    pruefe(m1.length === 1 && m1[0].startsWith("Vorrat: ") && m1[0].includes("Erinnerungstest ×2"), "Service Worker zeigt eine Meldung mit dem roten Eintrag");
+    await js(`navigator.serviceWorker.ready.then((r) => r.getNotifications()).then((ns) => (ns.forEach((n) => n.close()), 1))`);
+    await wecken();
+    pruefe((await meld()).length === 0, "am selben Tag keine zweite Meldung");
+    // Antippen startet mit ?bald -> Liste „Läuft bald ab“ ganz
+    await js(`(baldAlle = false, baldBeimStart = true, zeichnen(), 1)`); await warte(900);
+    pruefe(await js(`stapel.length === 1 && baldAlle && !!document.querySelector("main .bald") && !baldBeimStart`), "Start per Meldung (?bald): springt zur ganzen Liste");
+    await js(`(localStorage.removeItem(ERINNERUNG_KEY), tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(rid)}, feld: "geloescht", wert: true }]).then(() => 1))`); await warte(300);
+  }
+
   console.log(fehler.length ? "Konsole:\n  " + fehler.join("\n  ") : "Konsole: keine Fehler");
   if (fehler.length) process.exitCode = 1;
   senden("Browser.close", {}); await warte(500);
