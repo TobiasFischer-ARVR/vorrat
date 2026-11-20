@@ -183,29 +183,108 @@
     }),
     ...MEDIZIN.ablagen.map(([name, spalte, hoch]) => ({ name, reihe: MEDIZIN.reihen - turmHoehe(MEDIZIN.tuerme[spalte]) - hoch, spalte, hoch, offen: true })),
   ];
-  // Schritte: Raster + Aussehen setzen. Schubladen mit Vorlagen-Namen, die es im Ort schon gibt (vorhanden), werden nur
-  // umgesetzt (Platz/Hoehe, Inhalt bleibt); fehlende werden angelegt, wenn ihre Plaetze frei sind (frei(reihe, spalte)).
-  const medizinSchritte = (ortId, frei, vorhanden = []) => [
-    ...[["reihen", MEDIZIN.reihen], ["spalten", MEDIZIN.spalten], ["stil", "sortierkasten"], ["trenner", MEDIZIN.trenner]]
-      .map(([feld, wert]) => ({ typ: "feld", art: "ort", ziel: ortId, feld, wert })),
-    ...medizinPlaetze().flatMap((p) => {
-      const da = vorhanden.find((f) => f.name === p.name);
-      const platz = Array.from({ length: p.hoch }, (_, i) => frei(p.reihe + i, p.spalte)).every(Boolean);
-      if (da && !platz) return []; // Review: Zielplatz von einem eigenen Fach belegt -> vorhandene Schublade bleibt, wo sie ist
-      if (da) {
-        const lage = { ort: ortId, reihe: p.reihe, spalte: p.spalte }, alt = da.lage || {};
-        return [
-          ...(alt.ort !== ortId || alt.reihe !== p.reihe || alt.spalte !== p.spalte ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "lage", wert: lage }] : []),
-          ...((da.hoch || 1) !== p.hoch ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "hoch", wert: p.hoch > 1 ? p.hoch : null }] : []),
-        ];
-      }
-      if (!platz) return [];
-      const v = fachNeu(p.name, ortId, p.reihe, p.spalte);
-      if (p.offen) v.werte.offen = true;
-      if (p.hoch > 1) v.werte.hoch = p.hoch;
-      return [v];
-    }),
+  // ---- v6.24 Kuechenschublade (Bauplan Kuechenschublade Fassung 2, Foto 20.11.) ----
+  // Deckelfarben: gespeichert wird nur der Schluessel. Farbwert und Wort kommen NUR aus dieser Tabelle (Codex R1 #4),
+  // Object.hasOwn statt DECKEL[k], weil "constructor" die lockere Modellpruefung besteht. Unbekannt/keine = grau.
+  const DECKEL = {
+    pink: { fill: "#c63a5c", wort: "pink", aria: "pinker Deckel" },
+    rot: { fill: "#c8282e", wort: "rot", aria: "roter Deckel" },
+    dunkelblau: { fill: "#263372", wort: "dunkelblau", aria: "dunkelblauer Deckel" },
+    schwarz: { fill: "#262626", wort: "schwarz", aria: "schwarzer Deckel" },
+    hellgruen: { fill: "#b8de8f", wort: "hellgrün", aria: "hellgrüner Deckel", hell: true },
+    petrol: { fill: "#12706a", wort: "petrol", aria: "petrolfarbener Deckel" },
+    weiss: { fill: "#f3f3ef", wort: "weiß", aria: "weißer Deckel", hell: true, rand: "#8a8a86" },
+    durchsichtig: { fill: "#e6ecf2", wort: "durchsichtig", aria: "durchsichtiger Deckel", hell: true, rand: "#8a8a86", deck: 0.5 },
+  };
+  const OHNE_DECKEL = { schluessel: null, fill: "#9a9da0", wort: "keine", aria: "ohne Farbangabe", hell: true };
+  const deckel = (k) => (typeof k === "string" && Object.hasOwn(DECKEL, k) ? { schluessel: k, ...DECKEL[k] } : OHNE_DECKEL);
+  // Etikett zweizeilig ohne Wischen (K8): Umbruch an Leerzeichen, "/" oder "-" (das Zeichen bleibt oben), so dass die
+  // laengere Zeile moeglichst kurz ist; ohne passende Stelle ein langes Wort in der Mitte mit "-".
+  // Zu lange Zeilen kuerzt die Zeichnung.
+  function etikettZeilen(name, max) {
+    if (name.length <= max) return [name];
+    let best = null;
+    for (let i = 1; i < name.length - 1; i++) {
+      const z = name[i];
+      if (z !== " " && z !== "/" && z !== "-") continue;
+      const teile = [name.slice(0, z === " " ? i : i + 1).trim(), name.slice(i + 1).trim()];
+      const laenge = Math.max(teile[0].length, teile[1].length);
+      if (teile[0] && teile[1] && (!best || laenge < best[0])) best = [laenge, teile];
+    }
+    return best ? best[1] : ((k) => [name.slice(0, k) + "-", name.slice(k)])(Math.min(max - 1, Math.ceil(name.length / 2)));
+  }
+  // Raster 8 x 5 vom Foto (Reihe 0 = hinten): [Name, Reihe, Spalte, hoch, Farbe | "ablage" | "alt"]. Spalte 1 ist oben
+  // buendig (vorne links frei), deshalb feste Plaetze statt Tuerme. "alt" = Grundausstattungs-Fach "Schublade" (stand auf
+  // dem Platz von Reis): wird nur nach vorne links umgesetzt (Inhalt bleibt), nie neu angelegt (R10).
+  const KUECHE = { reihen: 8, spalten: 5, plaetze: [
+    ["Reis", 0, 0, 3, "pink"], ["Woknudeln", 3, 0, 3, "dunkelblau"], ["Schublade", 6, 0, 2, "alt"],
+    ["Risottoreis", 0, 1, 2, "pink"], ["Tüten", 2, 1, 4, "ablage"], ["Croutons", 6, 1, 2, "dunkelblau"],
+    ["Grieß", 0, 2, 3, "dunkelblau"], ["Dr. Oetker", 3, 2, 2, "ablage"], ["Schokoguss", 5, 2, 3, "schwarz"],
+    ["Pudding", 0, 3, 3, "rot"], ["Backpulver/Vanillezucker", 3, 3, 1, "dunkelblau"], ["Schokostückchen", 4, 3, 2, "dunkelblau"], ["Kakaopulver", 6, 3, 2, "hellgruen"],
+    ["Puderzucker", 0, 4, 2, "dunkelblau"], ["Zucker", 2, 4, 2, "pink"], ["Mehl", 4, 4, 2, "pink"], ["Speisestärke", 6, 4, 2, "petrol"],
+  ] };
+  const kuechePlaetze = () => KUECHE.plaetze.map(([name, reihe, spalte, hoch, art]) => ({ name, reihe, spalte, hoch,
+    ...(art === "ablage" ? { offen: true } : art === "alt" ? { nurUmsetzen: true } : { farbe: art }) }));
+  const kuecheZahl = (ablage) => KUECHE.plaetze.filter((p) => p[4] !== "alt" && (p[4] === "ablage") === ablage).length;
+
+  // Vorlagen je Ort-Name (Codex R2: der Medizin-Knopf im Ort-Dialog hing frueher an JEDEM Ort). vorlageFuer(o) = Vorlage,
+  // solange der Ort sie noch nicht hat, sonst null - gilt fuer den Knopf unter der Zeichnung, den Ort-Dialog und den Tipp.
+  const VORLAGEN = [
+    { ortName: "Medizinschrank", noetig: (o) => o.stil !== "sortierkasten" || o.reihen !== MEDIZIN.reihen, plaetze: () => medizinPlaetze(),
+      ort: { reihen: MEDIZIN.reihen, spalten: MEDIZIN.spalten, stil: "sortierkasten", trenner: MEDIZIN.trenner }, wort: "Schubladen",
+      text: "2 Seiten nebeneinander, Schubladen in den Größen vom Foto.",
+      knopf: (o) => (o.stil ? "🩹 Schubladen-Größen wie auf dem Foto übernehmen" : "🩹 Wie auf dem Foto einrichten (34 Schubladen)"),
+      dialogKnopf: (o) => (o.stil ? "🩹 Größen wie auf dem Foto übernehmen" : "🩹 Als Medizinschrank einrichten (Vorlage)") },
+    { ortName: "Küchenschublade", noetig: (o) => o.stil !== "dosen", plaetze: kuechePlaetze,
+      ort: { reihen: KUECHE.reihen, spalten: KUECHE.spalten, stil: "dosen" }, wort: "Dosen",
+      text: "Draufsicht mit " + KUECHE.reihen + " Reihen × " + KUECHE.spalten + " Spalten, Dosen mit farbigen Deckeln wie auf dem Foto.",
+      knopf: () => "🫙 Wie auf dem Foto einrichten (" + kuecheZahl(false) + " Dosen, " + kuecheZahl(true) + " Ablagen)",
+      dialogKnopf: () => "🫙 Als Küchenschublade einrichten (Vorlage)" },
   ];
+  const vorlageFuer = (o) => (o && VORLAGEN.find((v) => v.ortName === o.name && v.noetig(o))) || null;
+
+  // Schritte: Raster + Aussehen setzen. Faecher mit Vorlagen-Namen, die es im Ort schon gibt (vorhanden), werden nur
+  // umgesetzt (Platz/Hoehe, fehlende Farbe; Inhalt bleibt); fehlende werden angelegt, wenn ihre Plaetze frei sind.
+  // frei(reihe, spalte, umzug) = dort steht kein Fach ausser denen in umzug (Kennungen, die wirklich umziehen).
+  // Codex R1 #3: nur ECHTE Umzuegler sind kein Hindernis. Wiederholen, bis nichts mehr wegfaellt: wessen Ziel belegt ist,
+  // bleibt stehen und blockiert ab dann selbst (vorher entstand auf seinem jetzigen Platz ein zweites Fach). Endet sicher,
+  // weil die Menge nur kleiner wird; die Vorlagenplaetze ueberlappen sich nicht (Test).
+  // Liefert { schritte, bleiben (vorhandene Faecher, die stehen bleiben), leer (neue Plaetze, die belegt sind) } - Namen.
+  function vorlageSchritte(ortId, vorlage, frei, vorhanden = []) {
+    const plaetze = vorlage.plaetze();
+    const flaecheFrei = (p, umzug) => Array.from({ length: p.hoch }, (_, i) => frei(p.reihe + i, p.spalte, umzug)).every(Boolean);
+    const daVon = (p) => vorhanden.find((f) => f.name === p.name);
+    const umzug = new Set(vorhanden.map((f) => f.id));
+    for (let weiter = true; weiter;) {
+      weiter = false;
+      for (const p of plaetze) { const da = daVon(p); if (da && umzug.has(da.id) && !flaecheFrei(p, umzug)) { umzug.delete(da.id); weiter = true; } }
+    }
+    const bleiben = [], leer = [];
+    const schritte = [
+      ...Object.entries(vorlage.ort).map(([feld, wert]) => ({ typ: "feld", art: "ort", ziel: ortId, feld, wert })),
+      ...plaetze.flatMap((p) => {
+        const da = daVon(p);
+        if (da && !umzug.has(da.id)) { bleiben.push(p.name); return []; } // Review v6.10: Zielplatz belegt -> bleibt, wo es ist
+        if (da) {
+          const lage = { ort: ortId, reihe: p.reihe, spalte: p.spalte }, alt = da.lage || {};
+          return [
+            ...(alt.ort !== ortId || alt.reihe !== p.reihe || alt.spalte !== p.spalte ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "lage", wert: lage }] : []),
+            ...((da.hoch || 1) !== p.hoch ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "hoch", wert: p.hoch > 1 ? p.hoch : null }] : []),
+            ...(p.farbe && da.farbe == null ? [{ typ: "feld", art: "fach", ziel: da.id, feld: "farbe", wert: p.farbe }] : []), // eigene Farbe bleibt
+          ];
+        }
+        if (p.nurUmsetzen) return [];
+        if (!flaecheFrei(p, umzug)) { leer.push(p.name); return []; }
+        const v = fachNeu(p.name, ortId, p.reihe, p.spalte);
+        if (p.offen) v.werte.offen = true;
+        if (p.hoch > 1) v.werte.hoch = p.hoch;
+        if (p.farbe) v.werte.farbe = p.farbe;
+        return [v];
+      }),
+    ];
+    return { schritte, bleiben, leer };
+  }
+  const medizinSchritte = (ortId, frei, vorhanden = []) => vorlageSchritte(ortId, VORLAGEN[0], frei, vorhanden).schritte;
 
   // ---- v5.2 Fach-Menue (Tobias 15.11.) ----
   // Aufteilen: Fach umbenennen, zweites Fach auf DEMSELBEN Platz (Zeichnung zeigt beide nebeneinander),
@@ -553,7 +632,7 @@
 
   // v6.16: Umbau-Knoepfe unter der Zeichnung - NUR im Bearbeiten-Modus. Liefert { id, gruppe, text, aria } in Anzeige-
   // Reihenfolge; dieselben Bedingungen wie bisher (Raster nur bei mehreren Spalten, "−" nur wenn moeglich,
-  // Spalte links/rechts bei Trennwand, Vorlage solange der Medizinschrank nicht das 12er-Raster hat).
+  // Spalte links/rechts bei Trennwand, Vorlage solange der Ort sie noch nicht hat, v6.24 vorlageFuer).
   function umbauKnoepfe(o, bearbeiten) {
     if (!bearbeiten || !o) return [];
     const k = [], dazu = (id, gruppe, text, aria) => k.push({ id, gruppe, text, aria: aria || text });
@@ -568,8 +647,8 @@
       dazu("spalte+", zwei ? "Rechte Seite" : "Spalten", zwei ? "+ Spalte rechts" : "+ Spalte", "Spalte rechts anfügen");
       if (o.spalten > (zwei ? o.trenner + 1 : 2)) dazu("spalte-", zwei ? "Rechte Seite" : "Spalten", zwei ? "− Spalte rechts" : "− Spalte", "Rechte Spalte entfernen");
     }
-    if (o.name === "Medizinschrank" && o.reihen !== MEDIZIN.reihen)
-      dazu("vorlage", "Vorlage", o.stil ? "🩹 Schubladen-Größen wie auf dem Foto übernehmen" : "🩹 Wie auf dem Foto einrichten (34 Schubladen)");
+    const v = vorlageFuer(o);
+    if (v) dazu("vorlage", "Vorlage", v.knopf(o));
     dazu("ort", "Ort", "✎ Name und Größe …", "Ort " + o.name + " bearbeiten: Name, Reihen, Spalten");
     return k;
   }
@@ -580,7 +659,7 @@
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, KUECHE, kuechePlaetze, VORLAGEN, vorlageFuer, vorlageSchritte, DECKEL, deckel, etikettZeilen, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe,
     ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;

@@ -1029,6 +1029,112 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   pruefe(await js(`!!document.querySelector(".ortpfeil.rechts") && !!document.querySelector(".ortpfeil.links")`), "v6.16: Pfeile ◀ ▶ auch im Bearbeiten-Modus");
   await bearb(false);
 
+  console.log("9k. v6.24: Küchenschublade Abschnitt 1 (Vorlage, Dosen-Zeichnung, Farbwähler, Ablage bei 1 Spalte, R2)");
+  {
+    const kO = `orteSichtbar().find((o) => o.name === "Küchenschublade")`;
+    const umbauTexte = () => js(`[...document.querySelectorAll(".umbau button")].map((b) => b.textContent).join("|")`);
+    const ortDialogKnoepfe = async (name) => {
+      await klick(".kopf button"); await warte(200);
+      await klick("main button.zeile", name); await warte(300);
+      const t = await js(`[...document.querySelectorAll(".fenster .knoepfe button")].map((b) => b.textContent).join("|")`);
+      await js(`history.back(), 1`); await warte(300); await js(`history.back(), 1`); await warte(300);
+      return t;
+    };
+    // K10: Haken „Ablage ohne Kiste“ auch in einem Ort mit 1 Spalte
+    const hId = await js(`tun([{ typ: "neu", art: "ort", werte: { name: "Hängeregal Test", reihen: 1, spalten: 1, reihenfolge: 990 } }]).then((v) => v[0].id)`); await warte(400);
+    await klick(".reiter button", "Hängeregal Test"); await warte(300);
+    await klick("svg .frei"); await warte(300);
+    pruefe(await js(`[...document.querySelectorAll(".fenster label.schalter")].some((l) => l.textContent.includes("Ablage ohne Kiste"))`), "K10: 1 × 1-Ort: Haken „Ablage ohne Kiste“ beim Anlegen");
+    pruefe(!(await js(`!!document.querySelector(".fenster .farbreihe")`)), "kein Farbwähler außerhalb der Küchenschublade");
+    await js(`(() => { document.querySelector(".fenster input").value = "Küchenrolle"; document.querySelector(".fenster label.schalter input").checked = true; return 1; })()`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(500);
+    const hf = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Küchenrolle").id`);
+    pruefe(await js(`fachVon(${JSON.stringify(hf)}).offen === true && !!document.querySelector('svg .platz[data-fach="${hf}"] .ablagerand')`), "K10: Ablage im 1 × 1-Ort gespeichert und als Ablage gezeichnet");
+    await js(`(fachMenue(fachVon(${JSON.stringify(hf)})), 1)`); await warte(300);
+    pruefe(await js(`[...document.querySelectorAll(".blatt button")].some((b) => b.textContent === "📦 In Schublade umwandeln")`), "K10: Fach-Menü bietet auch bei 1 Spalte das Umwandeln an");
+    await js(`history.back(), 1`); await warte(300);
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(hf)}, feld: "geloescht", wert: true }, { typ: "feld", art: "ort", ziel: ${JSON.stringify(hId)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
+
+    // R2: Vorlage-Knöpfe nur am passenden Ort
+    await klick(".reiter button", "Gefrierschrank"); await warte(300);
+    await bearb(true);
+    pruefe(!(await umbauTexte()).includes("Foto"), "Gefrierschrank im Bearbeiten-Modus: kein Vorlage-Knopf");
+    await bearb(false);
+    const gefDialog = await ortDialogKnoepfe("Gefrierschrank");
+    pruefe(!gefDialog.includes("Medizinschrank") && !gefDialog.includes("Vorlage") && !gefDialog.includes("Foto"), "R2: Ort-Dialog Gefrierschrank ohne Medizin-Knopf (" + gefDialog + ")");
+    const kDialog = await ortDialogKnoepfe("Küchenschublade");
+    pruefe(kDialog.includes("Als Küchenschublade einrichten") && !kDialog.includes("Medizinschrank"), "R2: Ort-Dialog Küchenschublade: eigener Vorlage-Knopf, kein Medizin-Knopf");
+    await klick(".reiter button", "Küchenschublade"); await warte(300);
+    pruefe(!(await umbauTexte()) && !(await js(`[...document.querySelectorAll("main button")].some((b) => b.textContent.includes("Wie auf dem Foto"))`)), "Vorlage-Knopf im Normalmodus unsichtbar");
+    await bearb(true);
+    pruefe((await umbauTexte()) === "🫙 Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)|✎ Name und Größe …", "Bearbeiten-Modus Küchenschublade: Knopf „Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)“");
+
+    // Vorlage anwenden: alte „Schublade“ (mit Inhalt) wandert nach vorne links
+    const schub = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Schublade" && f.lage.ort === ${kO}.id).id`);
+    const inhalt = await js(`imFach(${JSON.stringify(schub)}).map((e) => e.id).sort().join()`);
+    const dVorher = dialoge.length;
+    await klick(".umbau button", "Wie auf dem Foto einrichten"); await warte(800);
+    const frage = dialoge[dVorher] || "";
+    pruefe(frage.includes("16 Dosen/Ablagen werden neu angelegt") && frage.includes("1 vorhandene Fächer werden umgesetzt"), "Rückfrage nennt neue und umgesetzte Fächer");
+    pruefe(await js(`(() => { const o = ${kO}; return o.reihen === 8 && o.spalten === 5 && o.stil === "dosen"; })()`), "Raster 8 × 5, Stil dosen");
+    pruefe(await js(`stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ${kO}.id).length`) === 17, "16 neue Fächer + alte Schublade, nichts in „Ort klären“");
+    pruefe(await js(`(() => { const f = fachVon(${JSON.stringify(schub)}); return f.lage.reihe === 6 && f.lage.spalte === 0 && f.hoch === 2; })()`), "R10: „Schublade“ vorne links (Reihe 7, Spalte 1, 2 hoch)");
+    pruefe(await js(`imFach(${JSON.stringify(schub)}).map((e) => e.id).sort().join()`) === inhalt, "Inhalt der Schublade bleibt drin");
+    const farbenOk = await js(`H.kuechePlaetze().filter((p) => !p.nurUmsetzen).map((p) => { const f = stand.faecher.find((x) => !x.geloescht && x.name === p.name && x.lage.ort === ${kO}.id);
+      const g = f && document.querySelector('svg .platz[data-fach="' + f.id + '"]'); return !!g && (p.offen ? !g.dataset.farbe && !!g.querySelector(".etikett") : g.dataset.farbe === p.farbe); }).every(Boolean)`);
+    pruefe(farbenOk, "alle 16 gezeichnet, Deckelfarben stimmen (data-farbe), Ablagen ohne Farbe");
+    pruefe(await js(`document.querySelector('svg .platz[data-fach="${schub}"]').dataset.farbe`) === "keine", "„Schublade“ ohne Farbe: grau");
+    pruefe(await js(`ortWahl === ${kO}.id && !document.querySelector(".umbau button.gross")`), "danach Reiter Küchenschublade, Vorlage-Knopf weg");
+    await bearb(false);
+    const reis = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Reis").id`);
+    const reisG = `document.querySelector('svg .platz[data-fach="${reis}"]')`;
+    pruefe(await js(`${reisG}.querySelector(".deckel").getAttribute("fill")`) === "#c63a5c", "Reis: pinker Deckel (Farbwert aus der Tabelle)");
+    pruefe((await js(`${reisG}.getAttribute("aria-label")`)).startsWith("Reis, pinker Deckel, "), "aria-label nennt die Deckelfarbe");
+    pruefe(await js(`!document.querySelector(".ortscroll") && document.documentElement.scrollWidth <= innerWidth`), "K8: 412 px ohne waagrechtes Wischen");
+    const etiketten = await js(`[...document.querySelectorAll("svg .platz")].filter((g) => g.querySelector(".dname")).map((g) => { const t = g.querySelector(".treffer").getBoundingClientRect();
+      const drin = [...g.querySelectorAll(".dname, .etikett, .dzahl")].every((x) => { const b = x.getBoundingClientRect(); return b.left >= t.left - .5 && b.right <= t.right + .5 && b.top >= t.top - .5 && b.bottom <= t.bottom + .5; });
+      const lesbar = [...g.querySelectorAll(".dname")].every((x) => !x.textContent.includes("…") && x.getBoundingClientRect().width <= g.querySelector(".etikett").getBoundingClientRect().width + .5);
+      return drin && lesbar; })`);
+    pruefe(etiketten.length === 15 && etiketten.every(Boolean), "K8: 15 Etiketten (14 Dosen + Schublade) vollständig, innerhalb ihres Platzes und ihres Etiketts (" + etiketten.filter((x) => !x).length + " daneben)");
+    pruefe(await js(`[...document.querySelectorAll("svg .platz")].find((g) => g.getAttribute("aria-label").startsWith("Backpulver/Vanillezucker")).querySelectorAll(".dname").length`) === 2, "„Backpulver/Vanillezucker“ zweizeilig");
+    pruefe(await js(`!![...document.querySelectorAll("svg .platz")].find((g) => g.getAttribute("aria-label").startsWith("Tüten")).querySelector(".ablagerand")`), "Tüten als Ablage gezeichnet");
+    await bild("9k-kueche.png");
+
+    // Neue Dose über „+“ mit Farbe, dann Name und Farbe ändern (die Vorlage füllt alle 40 Plätze -> eine Reihe dazu)
+    await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 9 }]).then(() => 1)`); await warte(400);
+    pruefe((await js(`document.querySelector("svg .frei").getAttribute("aria-label")`)).endsWith("neue Dose anlegen"), "freier Platz: „neue Dose anlegen“");
+    await klick("svg .frei"); await warte(300);
+    pruefe(await js(`document.querySelector(".fenster h2").textContent`) === "Neue Dose", "Dialog „Neue Dose“");
+    pruefe(await js(`(() => { const r = document.querySelectorAll('.fenster .farbreihe[role="radiogroup"] button[role="radio"]'); return r.length === 9 && [...r].filter((b) => b.getAttribute("aria-checked") === "true").map((b) => b.getAttribute("aria-label")).join() === "keine"; })()`), "Farbwähler: 8 Farben + „keine“, „keine“ vorbelegt");
+    await js(`(document.querySelector(".fenster input").value = "Testdose", 1)`);
+    await klick(".fenster button.farbwahl", ""); // erster Kreis = pink, dann petrol
+    await js(`(document.querySelector('.fenster button.farbwahl[data-farbe="petrol"]').click(), 1)`);
+    pruefe(await js(`[...document.querySelectorAll(".fenster button.farbwahl")].filter((b) => b.getAttribute("aria-checked") === "true").map((b) => b.dataset.farbe).join()`) === "petrol", "Auswahl wechselt (genau einer gewählt)");
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(500);
+    const td = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Testdose")?.id`);
+    pruefe(!!td && await js(`fachVon(${JSON.stringify(td)}).farbe`) === "petrol" && await js(`document.querySelector('svg .platz[data-fach="${td}"]').dataset.farbe`) === "petrol", "Dose mit Farbe petrol angelegt und gezeichnet");
+    await js(`(fachMenue(fachVon(${JSON.stringify(td)})), 1)`); await warte(300);
+    pruefe(await js(`document.querySelector(".blatt h2").textContent`) === "Dose „Testdose“" && await js(`[...document.querySelectorAll(".blatt button")].some((b) => b.textContent === "✎ Name und Farbe")`), "Fach-Menü: „Dose …“, Knopf „✎ Name und Farbe“");
+    await klick(".blatt button", "Name und Farbe"); await warte(300);
+    pruefe(await js(`document.querySelector('.fenster button.farbwahl[aria-checked="true"]').dataset.farbe`) === "petrol", "Name und Farbe: gespeicherte Farbe vorgewählt");
+    const nV = await js(`liste.length`);
+    await js(`(document.querySelector('.fenster button.farbwahl[data-farbe="keine"]').click(), 1)`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(500);
+    pruefe(await js(`liste.length`) === nV + 1 && await js(`(() => { const v = liste[liste.length - 1]; return v.feld === "farbe" && v.wert === null; })()`), "nur die Farbe geschrieben (farbe: null), Name unverändert");
+    pruefe(await js(`document.querySelector('svg .platz[data-fach="${td}"]').dataset.farbe`) === "keine", "danach grau");
+    // R16: präparierter Wert besteht die lockere Prüfung, wird aber nie roh gezeichnet
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(td)}, feld: "farbe", wert: "constructor" }]).then(() => 1)`); await warte(400);
+    pruefe(await js(`(() => { const g = document.querySelector('svg .platz[data-fach="${td}"]'); return g.dataset.farbe === "keine" && g.querySelector(".deckel").getAttribute("fill") === "#9a9da0" && g.getAttribute("aria-label").includes("ohne Farbangabe") && !g.outerHTML.includes("constructor"); })()`),
+      "R16: „constructor“ → grau, ohne Farbangabe, nirgends im SVG");
+    // Warnpunkt an einer Dose
+    const wid = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Warntest", mhd: ${JSON.stringify(Hilfen_plus(new Date().toISOString().slice(0, 10), 2))}, fach: ${JSON.stringify(reis)} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
+    pruefe(await js(`!!${reisG}.querySelector(".punkt.rot") && ${reisG}.getAttribute("aria-label").includes("laufen bald ab")`), "Warnpunkt an der Dose");
+    await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(wid)}, feld: "geloescht", wert: true }, { typ: "feld", art: "fach", ziel: ${JSON.stringify(td)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
+    await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 8 }]).then(() => 1)`); await warte(400);
+    const kDialog2 = await ortDialogKnoepfe("Küchenschublade");
+    pruefe(!kDialog2.includes("einrichten") && !kDialog2.includes("Foto"), "Ort-Dialog nach dem Einrichten: keine Vorlage mehr (" + kDialog2 + ")");
+  }
+
   console.log("9j. v6.16: Daumenleiste, Menüs gruppiert, ⓘ statt Erklärzeilen");
   pruefe(await js(`[...document.querySelectorAll("#daumen button")].map((b) => b.textContent.replace(/\\d+/g, "")).join("|")`) === "📷Scannen|⏰Läuft bald ab|✎Bearbeiten|🏠Start", "Leiste unten: Scannen · Läuft bald ab · Bearbeiten · Start");
   pruefe(await js(`getComputedStyle(document.querySelector("#daumen")).position === "fixed" && document.querySelector("#daumen").getBoundingClientRect().bottom <= innerHeight + 1`), "Leiste fest am unteren Rand");

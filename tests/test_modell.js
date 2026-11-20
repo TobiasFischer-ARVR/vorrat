@@ -447,4 +447,51 @@ fall("v6.23 R1 nachgemessen: eine Version ohne Feld anbruch stoppt die ganze Dat
   assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
 });
 
+fall("v6.24 Kuechenschublade: stil dosen, farbe (Typ zuerst, Codex R1 #4), ebene", () => {
+  const F = M.FELDER;
+  for (const w of [null, "sortierkasten", "dosen"]) assert.ok(F.ort.stil(w), "stil " + w);
+  for (const w of ["Dosen", "glas", "", true, undefined]) assert.ok(!F.ort.stil(w), "stil " + w);
+  for (const w of [null, "pink", "petrol", "constructor", "a".repeat(20)]) assert.ok(F.fach.farbe(w), "farbe " + w);
+  for (const w of ["Pink", "", "a".repeat(21), 5, true, false, ["pink"], {}, "hell-gruen", "grün", undefined])
+    assert.ok(!F.fach.farbe(w), "farbe " + JSON.stringify(w));
+  for (const w of [null, 1, 9]) assert.ok(F.fach.ebene(w), "ebene " + w);
+  for (const w of [0, 10, 1.5, "1", true, undefined]) assert.ok(!F.fach.ebene(w), "ebene " + JSON.stringify(w));
+  const a = handy("aaaaaaaa1");
+  const o = a.tu({ typ: "neu", art: "ort", werte: { name: "Küchenschublade", reihen: 8, spalten: 5, stil: "dosen" } });
+  const f = a.tu({ typ: "neu", art: "fach", werte: { name: "Reis", lage: lage(o.id, 0, 0), hoch: 3, farbe: "pink" } });
+  const g = a.tu({ typ: "neu", art: "fach", werte: { name: "Reis fein", lage: lage(o.id, 0, 0), hoch: 3, farbe: "weiss", ebene: 1 } });
+  a.tu({ typ: "neu", art: "fach", werte: { name: "Woknudeln", lage: lage(o.id, 3, 0), hoch: 3 } });
+  assert.throws(() => a.tu({ typ: "feld", art: "fach", ziel: f.id, feld: "farbe", wert: ["pink"] }), /Wert ungueltig: farbe/);
+  assert.throws(() => a.tu({ typ: "feld", art: "fach", ziel: f.id, feld: "farbe", wert: true }), /Wert ungueltig: farbe/);
+  assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
+  const zeile = (s) => s.faecher.map((x) => [x.name, x.farbe ?? null, x.ebene ?? null, x.ortKlaeren]);
+  assert.deepStrictEqual(zeile(stand(a)), [["Reis", "pink", null, false], ["Reis fein", "weiss", 1, false], ["Woknudeln", null, null, false]],
+    "gleiche Lage, beide hoch 3: keins zu klaeren");
+  // Mitglied mit groesserem hoch ragt in das Fach darunter -> dieses kommt nach "Ort klaeren" (vorhandene Pruefung, M4)
+  a.tu({ typ: "feld", art: "fach", ziel: g.id, feld: "hoch", wert: 4 });
+  assert.deepStrictEqual(zeile(stand(a)).map((z) => z[3]), [false, false, true]);
+});
+
+fall("v6.24 R1 nachgemessen: eine Version ohne die neuen Felder (v6.23) stoppt die ganze Datei", () => {
+  const alt = { stil: M.FELDER.ort.stil, farbe: M.FELDER.fach.farbe, ebene: M.FELDER.fach.ebene };
+  const wieV623 = () => { M.FELDER.ort.stil = (w) => w === null || w === "sortierkasten"; delete M.FELDER.fach.farbe; delete M.FELDER.fach.ebene; };
+  const zurueck = () => Object.assign(M.FELDER.ort, { stil: alt.stil }) && Object.assign(M.FELDER.fach, { farbe: alt.farbe, ebene: alt.ebene });
+  const proben = [
+    [(o) => ({ typ: "feld", art: "ort", ziel: o, feld: "stil", wert: "dosen" }), /^Vorgang 3: Wert ungueltig: stil$/],
+    [(o, f) => ({ typ: "feld", art: "fach", ziel: f, feld: "farbe", wert: "pink" }), /^Vorgang 3: unbekanntes Feld: farbe$/],
+    [(o, f) => ({ typ: "feld", art: "fach", ziel: f, feld: "ebene", wert: 1 }), /^Vorgang 3: unbekanntes Feld: ebene$/],
+    [(o) => ({ typ: "neu", art: "fach", werte: { name: "Reis", lage: lage(o, 0, 0), farbe: "pink" } }), /^Vorgang 3: unbekanntes Feld: farbe$/],
+  ];
+  for (const [daten, fehler] of proben) {
+    const a = handy("aaaaaaaa1");
+    const o = a.tu({ typ: "neu", art: "ort", werte: { name: "Küchenschublade", reihen: 1, spalten: 1 } });
+    const f = a.tu({ typ: "neu", art: "fach", werte: { name: "Schublade", lage: lage(o.id, 0, 0) } });
+    a.tu(daten(o.id, f.id));
+    assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
+    wieV623();
+    try { assert.match(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).fehler, fehler); } finally { zurueck(); }
+    assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok, "Regeln wiederhergestellt");
+  }
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

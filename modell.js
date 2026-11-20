@@ -81,7 +81,8 @@
       spalten: (w) => ganzzahl(w, 1, 20),
       farben: (w) => w === null || (Array.isArray(w) && w.length <= 20 && w.every((f) => typeof f === "string" && f.length <= 20)), // je Reihe
       reihenfolge: (w) => ganzzahl(w, 0, 999),
-      stil: (w) => w === null || w === "sortierkasten", // v6.5: Zeichnung wie Medizinschrank (durchsichtige Schubladen); fehlt = Standard
+      // v6.5 "sortierkasten": wie Medizinschrank (durchsichtige Schubladen); v6.24 "dosen": Kuechenschublade (Draufsicht); fehlt = Standard
+      stil: (w) => w === null || w === "sortierkasten" || w === "dosen",
       trenner: (w) => w === null || ganzzahl(w, 1, 19), // v6.5: Trennwand vor dieser Spalte (zwei Schrankfaecher nebeneinander)
       geloescht: bool,
     },
@@ -90,6 +91,10 @@
       lage: lageGueltig,
       offen: bool, // v6.4: Ablage ohne Kiste (Produkte stehen direkt im Regal); fehlt = Kiste
       hoch: (w) => w === null || ganzzahl(w, 2, 6), // v6.7: Fach reicht ueber so viele Reihen nach unten; fehlt = 1
+      // v6.24 Kuechenschublade: Deckelfarbe als Schluessel ("pink"), bewusst locker (eine spaetere 9. Farbe ist keine neue
+      // Versionsgrenze). Typ zuerst (RegExp.test nimmt auch true/["pink"], Codex R1 #4). Anzeige NUR ueber Hilfen.deckel().
+      farbe: (w) => w === null || (typeof w === "string" && /^[a-z]{1,20}$/.test(w)),
+      ebene: (w) => w === null || ganzzahl(w, 1, 9), // v6.24: Lage im Stapel (fehlt = 0 = oben); erst ab Abschnitt 2 benutzt
       geloescht: bool,
     },
     eintrag: {

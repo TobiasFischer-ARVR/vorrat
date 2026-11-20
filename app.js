@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.23"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.24"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -707,7 +707,7 @@ const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablau
 const offenZusatz = (e) => { const t = H.anbruchText(e); return t ? " · " + t : ""; };
 const offenAria = (e) => { const t = H.anbruchText(e, true); return t ? ", " + t : ""; };
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
-const fachWort = (o) => (o && (o.spalten === 1 || o.stil === "sortierkasten") ? "Schublade" : "Kiste");
+const fachWort = (o) => (o && o.stil === "dosen" ? "Dose" : o && (o.spalten === 1 || o.stil === "sortierkasten") ? "Schublade" : "Kiste"); // v6.24 Dose
 const fachArt = (f, o) => (f.offen ? "Ablage" : fachWort(o)); // v6.4
 const klaeren = () => ({ kisten: stand.faecher.filter((f) => f.ortKlaeren), eintraege: stand.eintraege.filter((e) => e.ortKlaeren).sort(nachAblauf) });
 
@@ -957,12 +957,30 @@ function ablageTeile(x, y, w, h, f, n) {
   ];
 }
 
+// v6.24 Kuechenschublade (Foto 20.11.): Dose von oben = abgerundeter Deckel in Deckelfarbe mit Glanz und weissem Etikett,
+// Name zweizeilig (kein Wischen bei 412 px, K8), Stueckzahl darunter erst ab 2 Reihen Hoehe. Farbwert NUR aus H.deckel().
+function doseTeile(x, y, w, h, f, zahl) {
+  const d = H.deckel(f.farbe), mitte = x + w / 2, rx = Math.min(w, h) / 2.4;
+  const zeilen = H.etikettZeilen(f.name, 13).slice(0, 2).map((z) => kuerze(z, 13));
+  const lw = Math.min(w - 8, Math.max(...zeilen.map((z) => z.length)) * 4.3 + 8), lh = zeilen.length * 8 + 4;
+  const ly = y + Math.max(2, (h - lh) / 2 - (h >= 50 ? 5 : 0));
+  return [
+    sv("g", { filter: "url(#zSchatten)" },
+      sv("rect", { x: x + 1, y: y + 1, width: w - 2, height: h - 2, rx, fill: d.fill, "fill-opacity": d.deck || 1, stroke: d.rand || "#0006", "stroke-width": 1.5, class: "deckel" }),
+      sv("rect", { x: x + 4, y: y + 3, width: w - 8, height: h - 6, rx: Math.max(2, rx - 3), fill: "url(#zGlanz)" })),
+    sv("rect", { x: mitte - lw / 2, y: ly, width: lw, height: lh, rx: 1.5, class: "etikett" }),
+    ...zeilen.map((z, i) => sv("text", { x: mitte, y: ly + 9 + i * 8, "text-anchor": "middle", class: "dname" }, z)),
+    h >= 50 && sv("text", { x: mitte, y: ly + lh + 10, "text-anchor": "middle", class: "dzahl" + (d.hell ? " hell" : "") }, zahl),
+  ];
+}
+
 function zeichnung(ort) {
   // v6.5 Sortierkasten (Medizinschrank): breiter als der Bildschirm -> seitlich wischen; Trennwand zwischen den Schrankfaechern.
   const sk = ort.stil === "sortierkasten", tb = sk && ort.trenner && ort.trenner < ort.spalten ? 18 : 0;
-  const W = sk ? Math.max(360, 100 * ort.spalten + tb) : 360, schub = !sk && ort.spalten === 1;
+  const ds = ort.stil === "dosen"; // v6.24 Kuechenschublade: Draufsicht, 360 breit wie das Regal (kein Wischen), feines Raster
+  const W = sk ? Math.max(360, 100 * ort.spalten + tb) : 360, schub = !sk && !ds && ort.spalten === 1;
   const fein = sk && ort.reihen > 6; // v6.10: feines Raster (Medizinschrank 12 Reihen) - niedrigere Reihen
-  const rand = schub ? 14 : 12, luft = schub ? 9 : sk ? (fein ? 4 : 6) : 10, rh = schub ? 66 : sk ? (fein ? 30 : 58) : 96, spalt = 6;
+  const rand = schub ? 14 : ds ? 10 : 12, luft = schub ? 9 : ds ? 3 : sk ? (fein ? 4 : 6) : 10, rh = schub ? 66 : ds ? 28 : sk ? (fein ? 30 : 58) : 96, spalt = 6;
   const cw = (W - 2 * rand - (ort.spalten - 1) * luft - tb) / ort.spalten;
   const xVon = (c) => rand + c * (cw + luft) + (tb && c >= ort.trenner ? tb : 0);
   const hoehe = 2 * rand + ort.reihen * rh + (ort.reihen - 1) * luft;
@@ -974,7 +992,9 @@ function zeichnung(ort) {
     svg.style.width = W + "px"; svg.style.maxWidth = "none";
     svg.append(sv("rect", { width: W, height: hoehe, rx: 6, class: "skwand" }), sv("rect", { x: 0, y: hoehe - 5, width: W, height: 5, class: "skboden" }));
     if (tb) svg.append(sv("rect", { x: xVon(ort.trenner) - tb - luft + 4, y: 0, width: tb - 2, height: hoehe, class: "sktrenner" }));
-  } else if (schub) svg.append(sv("rect", { width: W, height: hoehe, rx: 16, class: "korpus" }),
+  } else if (ds) svg.append(sv("rect", { width: W, height: hoehe, rx: 8, class: "dswand" }),
+    sv("rect", { x: 5, y: 5, width: W - 10, height: hoehe - 12, rx: 5, class: "dsboden" }), sv("rect", { x: 0, y: hoehe - 5, width: W, height: 5, rx: 2, class: "dsfront" }));
+  else if (schub) svg.append(sv("rect", { width: W, height: hoehe, rx: 16, class: "korpus" }),
     sv("rect", { x: 7, y: 7, width: W - 14, height: hoehe - 14, rx: 11, fill: "url(#zInnen)", stroke: "#0002" }));
   else svg.append(sv("rect", { width: W, height: hoehe, rx: 10, fill: "url(#zWand)" }),
     sv("rect", { x: 2, y: 0, width: 7, height: hoehe, class: "pfosten" }), sv("rect", { x: W - 9, y: 0, width: 7, height: hoehe, class: "pfosten" }));
@@ -982,12 +1002,12 @@ function zeichnung(ort) {
   for (let r = 0; r < ort.reihen; r++) {
     const y = rand + r * (rh + luft);
     const braun = (ort.farben || [])[r] === "braun";
-    if (!schub && !sk) svg.append(sv("rect", { x: 0, y: y + rh + 1, width: W, height: 8, fill: "url(#zBoden)" }), sv("rect", { x: 0, y: y + rh + 9, width: W, height: 3, fill: "#0002" }));
+    if (!schub && !sk && !ds) svg.append(sv("rect", { x: 0, y: y + rh + 1, width: W, height: 8, fill: "url(#zBoden)" }), sv("rect", { x: 0, y: y + rh + 9, width: W, height: 3, fill: "#0002" }));
     for (let c = 0; c < ort.spalten; c++) {
       const x = xVon(c);
       const hier = faecherAn(ort.id, r, c);
       if (!faecherUeber(ort.id, r, c).length) {
-        const g = sv("g", { class: "frei" + (sk ? " leise" : ""), "data-platz": JSON.stringify({ ort: ort.id, reihe: r, spalte: c }), tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + 10, "text-anchor": "middle" }, "+"));
+        const g = sv("g", { class: "frei" + (sk || ds ? " leise" : "") + (ds ? " ds" : ""), "data-platz": JSON.stringify({ ort: ort.id, reihe: r, spalte: c }), tabindex: "0", role: "button", "aria-label": "Freier Platz " + platzName(ort, r, c) + ", neue " + fachWort(ort) + " anlegen" }, sv("rect", { x, y, width: cw, height: rh, rx: ds ? 6 : 8 }), sv("text", { x: x + cw / 2, y: y + rh / 2 + (ds ? 7 : 10), "text-anchor": "middle" }, "+"));
         g.addEventListener("click", () => fachDialog(null, { ort: ort.id, reihe: r, spalte: c }));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fachDialog(null, { ort: ort.id, reihe: r, spalte: c }); } });
         svg.append(g);
@@ -997,15 +1017,17 @@ function zeichnung(ort) {
       hier.forEach((f, i) => {
         const n = stueckImFach(f.id), hp = hoeheVon(f) * rh + (hoeheVon(f) - 1) * luft;
         const mk = marken.get(f.id); // { n, farbe } oder undefined
-        const xi = x + i * (w + spalt), py = schub ? y + 15 : sk ? y + 12 : y + 26;
+        const xi = x + i * (w + spalt), py = schub ? y + 15 : ds ? y + 9 : sk ? y + 12 : y + 26;
+        const dose = ds && !f.offen, d = dose && H.deckel(f.farbe), pr = ds ? 8 : 11, px = xi + w - (ds ? 9 : 15);
         const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
-          "aria-label": f.name + ", " + sachenText(n) +
+          ...(dose ? { "data-farbe": d.schluessel || "keine" } : {}), // v6.24: nur Schluessel aus der festen Tabelle (Browsertest)
+          "aria-label": f.name + (dose ? ", " + d.aria : "") + ", " + sachenText(n) +
             (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
           sv("rect", { x: xi, y, width: w, height: hp, rx: 8, class: "treffer" }),
           ...(f.offen ? ablageTeile(xi, y, w, hp, f, n) : schub ? schubladeTeile(xi, y, w, hp, braun, f.name, sachenText(n))
-            : sk ? klarTeile(xi, y, w, hp, f.name, sachenText(n)) : kisteTeile(xi, y, w, hp, f.name, sachenText(n))),
-          mk && sv("circle", { cx: xi + w - 15, cy: py, r: 11, class: "punkt " + mk.farbe }),
-          mk && sv("text", { x: xi + w - 15, y: py + 4.5, "text-anchor": "middle", class: "punktzahl " + mk.farbe }, mk.n > 99 ? "99+" : String(mk.n)));
+            : ds ? doseTeile(xi, y, w, hp, f, sachenText(n)) : sk ? klarTeile(xi, y, w, hp, f.name, sachenText(n)) : kisteTeile(xi, y, w, hp, f.name, sachenText(n))),
+          mk && sv("circle", { cx: px, cy: py, r: pr, class: "punkt " + mk.farbe }),
+          mk && sv("text", { x: px, y: py + (ds ? 3.5 : 4.5), "text-anchor": "middle", class: "punktzahl " + mk.farbe + (ds ? " ds" : "") }, mk.n > 99 ? "99+" : String(mk.n)));
         // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
         druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f), fachZug(f));
         g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
@@ -1069,7 +1091,7 @@ function umbauTeil(o, bearbeiten) {
       ...imOrt.filter((f) => f.lage.spalte >= t).map((f) => ({ typ: "feld", art: "fach", ziel: f.id, feld: "lage", wert: { ...f.lage, spalte: f.lage.spalte + delta } }))]);
   };
   const tat = { "reihe+": () => aendern("reihen", 1), "reihe-": () => aendern("reihen", -1), "links+": () => linksAendern(1), "links-": () => linksAendern(-1),
-    "spalte+": () => aendern("spalten", 1), "spalte-": () => aendern("spalten", -1), vorlage: () => medizinEinrichten(o.id),
+    "spalte+": () => aendern("spalten", 1), "spalte-": () => aendern("spalten", -1), vorlage: () => vorlageEinrichten(o.id),
     ort: () => { const j = ortVon(o.id); if (!j || j.geloescht) return hinweis("Diesen Ort gibt es nicht mehr."); ortDialog(j); } };
   // v6.16: je Gruppe eine Zeile (Beschriftung + Knoepfe). Raster-Knoepfe behalten die Klasse "raster" (Browsertest).
   const gruppen = [];
@@ -2334,7 +2356,20 @@ function fachDialog(f, lage, nur) {
   const wort = fachWort(ort);
   const name = el("input", { value: f ? f.name : "", maxLength: 60, placeholder: "z. B. Nudeln", autocomplete: "off" });
   let platzSel = null;
-  const ablage = !f && ort.spalten > 1 && el("input", { type: "checkbox" }); // v6.4
+  const ablage = !f && el("input", { type: "checkbox" }); // v6.4; v6.24 K10: auch bei 1 Spalte (Haengeregal 1 x 1)
+  // v6.24 Farbwaehler (nur Kuechenschublade, nicht beim Platz aendern): 8 feste Farben + "keine". Neu = "keine" vorbelegt.
+  // wahl haelt den gespeicherten Schluessel unveraendert (auch einen unbekannten), gezeigt wird nur, was die Tabelle kennt.
+  let wahl = f ? f.farbe ?? null : null;
+  const farbKnoepfe = ort && ort.stil === "dosen" && nur !== "platz" && [...Object.keys(H.DECKEL), null].map((k) => {
+    const d = H.deckel(k);
+    const b = el("button", { type: "button", className: "farbwahl" + (k ? "" : " keine"), role: "radio", "aria-label": d.wort, title: d.wort,
+      onclick: () => { wahl = k; zeigeWahl(); } });
+    b.dataset.farbe = k || "keine";
+    if (k) b.style.background = d.fill; // nur Werte aus der festen Tabelle
+    return b;
+  });
+  const zeigeWahl = () => farbKnoepfe && farbKnoepfe.forEach((b) => b.setAttribute("aria-checked", String((b.dataset.farbe === "keine" ? null : b.dataset.farbe) === wahl)));
+  zeigeWahl();
   if (f && nur === "platz") { // Platz: eigener + alle freien Plaetze aller Orte
     const opt = f.ortKlaeren ? [el("option", { value: "" }, "– kein gültiger Platz –")] : [];
     for (const o of orteSichtbar()) for (let r = 0; r < o.reihen; r++) for (let c = 0; c < o.spalten; c++) {
@@ -2347,9 +2382,11 @@ function fachDialog(f, lage, nur) {
     }
     platzSel = el("select", null, opt);
   }
-  dialog(!f ? "Neue " + wort : nur === "platz" ? "„" + kuerze(f.name, 30) + "“: Platz ändern" : wort + " umbenennen", [
+  dialog(!f ? "Neue " + wort : nur === "platz" ? "„" + kuerze(f.name, 30) + "“: Platz ändern" : wort + (farbKnoepfe ? ": Name und Farbe" : " umbenennen"), [
     !f && el("p", { className: "klein" }, ort.name + " · " + platzName(ort, lage.reihe, lage.spalte)),
     nur !== "platz" && feld("Name", name),
+    farbKnoepfe && el("div", { className: "feld" }, el("span", { id: "farbwahl-titel" }, "Deckelfarbe"),
+      el("div", { className: "farbreihe", role: "radiogroup", "aria-labelledby": "farbwahl-titel" }, farbKnoepfe)),
     ablage && el("label", { className: "schalter" }, ablage, "🧺 Ablage ohne Kiste – die Produkte stehen direkt im Regal"),
     platzSel && feld("Platz", platzSel),
     platzSel && el("p", { className: "klein" }, "Belegter Platz = daneben legen. Der Inhalt zieht mit um. Tauschen: in der Zeichnung auf das andere Fach ziehen."),
@@ -2358,6 +2395,7 @@ function fachDialog(f, lage, nur) {
       if (f && !fachVon(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
       const werte = nur === "platz" ? {} : { name: name.value.trim() };
       if (ablage && ablage.checked) werte.offen = true; // nur wenn gewaehlt: Kisten bleiben ohne neues Feld
+      if (farbKnoepfe && wahl !== (f ? f.farbe ?? null : null)) werte.farbe = wahl; // nur geaenderte, neu nur wenn gewaehlt
       if (!f) werte.lage = lage;
       else if (platzSel && platzSel.value) {
         const l = JSON.parse(platzSel.value);
@@ -2393,14 +2431,14 @@ function fachMenue(alt) {
       // v6.16: beim Bauen liegt das Menue noch nicht auf dem Stapel -> oberste Ebene pruefen (vorher stand „Öffnen“
       // auch in der eigenen Schublade und oeffnete sie ein zweites Mal)
       !(stapel[stapel.length - 1].art === "fach" && stapel[stapel.length - 1].id === f.id) && ["📂 Öffnen", weiter(() => oeffne({ art: "fach", id: f.id })), "an"],
-      ["✎ Umbenennen", weiter(() => fachDialog(f, null, "name"))],
+      [o && o.stil === "dosen" ? "✎ Name und Farbe" : "✎ Umbenennen", weiter(() => fachDialog(f, null, "name"))],
       ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
     ],
     liste: [
       !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
       nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
       ...hoehenKnoepfe(f),
-      o && o.spalten > 1 && [f.offen ? "📦 In Kiste umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
+      o && [f.offen ? "📦 In " + fachWort(o) + " umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
         const jetzt = fachVon(f.id);
         if (!jetzt || jetzt.geloescht) return melde("Dieses Fach gibt es nicht mehr.");
         if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "offen", wert: !jetzt.offen }])) schliessen();
@@ -2546,26 +2584,33 @@ function fachAufFach(id, zielId) {
   ]);
 }
 
-// v6.5/v6.6: Vorlage Medizinschrank anwenden (Ort-Dialog und Knopf unter der Zeichnung). Belegte Plaetze bleiben.
-async function medizinEinrichten(id) {
+// v6.5/v6.6: Vorlage anwenden (Ort-Dialog und Knopf unter der Zeichnung), v6.24 fuer Medizinschrank UND Kuechenschublade
+// (H.vorlageFuer nach Ort-Namen). Belegte Plaetze bleiben.
+async function vorlageEinrichten(id) {
   const o = ortVon(id);
   if (!o || o.geloescht) { hinweis("Diesen Ort gibt es nicht mehr."); return false; }
-  // Vorlagen-Schubladen, die es schon gibt, werden umgesetzt - sie zaehlen beim "frei" nicht als Hindernis.
-  const namen = new Set(H.medizinPlaetze().map((p) => p.name));
+  const vorlage = H.vorlageFuer(o); // gegen den AKTUELLEN Stand: inzwischen (anderes Handy) eingerichtet?
+  if (!vorlage) { hinweis("„" + o.name + "“ ist schon wie auf dem Foto eingerichtet."); return false; }
+  const namen = new Set(vorlage.plaetze().map((p) => p.name));
   // v6.11 (Tobias 16.11.: zwei "Kochsalzlsg 2" nach Umbenennen -> Vorlage legte "Kochsalzlsg 1" neu an, die doppelte landete
   // verdeckt in "Ort klaeren"): doppelte Vorlagen-Namen erst aufloesen lassen, dann umsetzen.
   const doppelt = [...namen].filter((n) => stand.faecher.filter((f) => !f.geloescht && f.lage.ort === id && f.name === n).length > 1);
-  if (doppelt.length) { alert("Diese Namen gibt es im " + o.name + " mehrfach:\n\n• " + doppelt.join("\n• ") +
-    "\n\nBitte erst umbenennen oder löschen (lange drücken), dann nochmal – sonst landen Schubladen am falschen Platz."); return false; }
-  // je Name nur die erste - alle anderen Faecher im Ort gelten als Hindernis
+  if (doppelt.length) { alert("Diese Namen gibt es in „" + o.name + "“ mehrfach:\n\n• " + doppelt.join("\n• ") +
+    "\n\nBitte erst umbenennen oder löschen (lange drücken), dann nochmal – sonst landen Fächer am falschen Platz."); return false; }
+  // Vorlagen-Faecher, die es schon gibt, werden umgesetzt; je Name nur das erste - alle anderen Faecher im Ort sind Hindernis.
+  // Welche wirklich umziehen (also kein Hindernis sind), bestimmt H.vorlageSchritte (Codex R1 #3).
   const vorhanden = [];
   for (const f of stand.faecher) if (!f.geloescht && f.lage.ort === id && namen.has(f.name) && !vorhanden.some((v) => v.name === f.name)) vorhanden.push(f);
-  const umzug = new Set(vorhanden.map((f) => f.id));
-  const frei = (r, c) => !faecherUeber(id, r, c).some((f) => !umzug.has(f.id));
-  const schritte = H.medizinSchritte(id, frei, vorhanden), neu = schritte.filter((v) => v.typ === "neu").length;
-  if (!confirm("„" + o.name + "“ wie auf dem Foto einrichten?\n\n2 Seiten nebeneinander, Schubladen in den Größen vom Foto." +
-    (vorhanden.length ? "\n" + vorhanden.length + " vorhandene Schubladen werden umgesetzt, der Inhalt bleibt drin." : "") +
-    (neu ? "\n" + neu + " Schubladen/Ablagen werden neu angelegt." : "") + "\nEigene Fächer mit anderen Namen bleiben, wo sie sind.")) return false;
+  const frei = (r, c, umzug) => !faecherUeber(id, r, c).some((f) => !umzug.has(f.id));
+  const { schritte, bleiben, leer } = H.vorlageSchritte(id, vorlage, frei, vorhanden);
+  const neu = schritte.filter((v) => v.typ === "neu").length, um = vorhanden.length - bleiben.length;
+  const namenText = (l) => l.slice(0, 8).join(", ") + (l.length > 8 ? " …" : "");
+  if (!confirm("„" + o.name + "“ wie auf dem Foto einrichten?\n\n" + vorlage.text +
+    (um ? "\n" + um + " vorhandene Fächer werden umgesetzt, der Inhalt bleibt drin." : "") +
+    (neu ? "\n" + neu + " " + vorlage.wort + "/Ablagen werden neu angelegt." : "") +
+    (bleiben.length ? "\nBleiben stehen (Zielplatz belegt): " + namenText(bleiben) + "." : "") +
+    (leer.length ? "\nNicht angelegt (Platz belegt): " + namenText(leer) + "." : "") +
+    "\nEigene Fächer mit anderen Namen bleiben, wo sie sind.")) return false;
   if (!(await tun(schritte))) return false;
   ortWahl = id;
   return true;
@@ -2599,7 +2644,8 @@ function ortDialog(o) {
       if (!daten.length || (await tun(daten))) schliessen();
     }],
     // v6.5: Raster, Aussehen und alle Schubladen wie auf den Fotos; belegte Plaetze bleiben, wie sie sind.
-    o && (!o.stil || o.reihen !== H.MEDIZIN.reihen) && [o.stil ? "🩹 Größen wie auf dem Foto übernehmen" : "🩹 Als Medizinschrank einrichten (Vorlage)", async (melde, schliessen) => { if (await medizinEinrichten(o.id)) schliessen(2); }],
+    // v6.24 (R2): nur bei Medizinschrank/Kuechenschublade, solange noch nicht eingerichtet (vorher an JEDEM Ort)
+    H.vorlageFuer(o) && [H.vorlageFuer(o).dialogKnopf(o), async (melde, schliessen) => { if (await vorlageEinrichten(o.id)) schliessen(2); }],
     o && ["Löschen", async (melde, schliessen) => {
       const kisten = stand.faecher.filter((f) => !f.geloescht && f.lage.ort === o.id);
       const n = kisten.reduce((s, f) => s + imFach(f.id).length, 0);
