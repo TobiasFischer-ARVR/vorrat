@@ -343,4 +343,17 @@ fall("v6.16 Menue-Gliederung: nichts geht verloren, Bedingungen fallen weg, Loes
   assert.deepStrictEqual(H.menueTeile({}), { oben: [], liste: [], gefahr: [] });
 });
 
+fall("v6.21 woSchon: Code vor Name, je Fach summiert, Unsichtbares zaehlt nicht", () => {
+  const e = (name, code, fach, menge, sichtbar = true) => ({ name, code, fach, menge, sichtbar });
+  const es = [e("Müsli", "gtin:1", "f1", 2), e("Müsli", "gtin:1", "f1", 1), e("Müsli", "gtin:1", "f2", 1),
+    e("Müsli", "gtin:9", "f3", 5),                 // gleicher Name, anderer Code -> nicht dasselbe
+    e("müsli ", undefined, null, 1),               // ohne Code: ueber den Namen, ohne Fach
+    e("Müsli", "gtin:1", "f4", 3, false)];         // geloescht/0
+  assert.deepStrictEqual(H.woSchon(es, "gtin:1", "Müsli"), [{ fach: "f1", menge: 3 }, { fach: "f2", menge: 1 }, { fach: null, menge: 1 }]);
+  assert.deepStrictEqual(H.woSchon(es, "gtin:7", ""), [], "ohne Name nur ueber Code");
+  assert.deepStrictEqual(H.woSchon(es, "hand:x", "MÜSLI"), [{ fach: null, menge: 1 }], "von Hand: nur codelose Eintraege");
+  const alt = [e("Reis", "gtin:2", "weg1", 1), e("Reis", "gtin:2", "weg2", 2), e("Reis", "gtin:2", "f1", 0)]; // zwei geloeschte Faecher, Menge 0
+  assert.deepStrictEqual(H.woSchon(alt, "gtin:2", "Reis", (f) => f === "f1"), [{ fach: null, menge: 3 }], "ungueltige Faecher = eine Zeile, Menge 0 weg");
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

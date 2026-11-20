@@ -438,6 +438,18 @@
   };
   // Multiscan: gescannte Packungen -> Zeilen. Gleicher Code + gleiches MHD + gleiches Ziel = eine Zeile mit Menge
   // (Regel "ein Eintrag pro MHD"). p.fach undefined = Ziel der ganzen Liste.
+  // v6.21 (Tobias 20.11.): wo liegt dasselbe Produkt schon? Eintraege mit Code nur ueber den Code, ohne Code
+  // (alt oder von Hand) ueber den Namen. Je Fach (null = ohne gueltiges Fach) die Stueckzahl. Nur Hinweis, nichts zusammenlegen.
+  // gilt(fach) optional: ungueltige Faecher zaehlen als null (eine Zeile "Ort klaeren"). Menge 0 zeigt nichts.
+  function woSchon(eintraege, schluessel, name, gilt = () => true) {
+    const n = String(name || "").trim().toLowerCase(), m = new Map();
+    for (const e of eintraege) {
+      if (!e.sichtbar || !(e.menge > 0) || !(e.code ? e.code === schluessel : n && e.name.trim().toLowerCase() === n)) continue;
+      const f = e.fach && gilt(e.fach) ? e.fach : null;
+      m.set(f, (m.get(f) || 0) + e.menge);
+    }
+    return [...m].map(([fach, menge]) => ({ fach, menge }));
+  }
   function paketeZeilen(pakete) {
     const m = new Map();
     for (const p of pakete) {
@@ -517,7 +529,7 @@
   }
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
-    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
+    gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;

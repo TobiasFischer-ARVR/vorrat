@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.20"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.21"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -1852,12 +1852,43 @@ function mhdWahl(start, geaendert, mitDatum) {
 // dem Fach, aus dem gescannt wird. Eine Zeile antippen = eigenes MHD/Ziel. Gespeichert wird alles in EINEM tun().
 // ponytail: neue Eintraege auch wenn im Fach schon dasselbe mit gleichem MHD liegt (wie beim Einzel-Scan);
 // Zusammenlegen erst, wenn es stoert.
-// alt = Zustand einer verworfenen Liste (Zurueckholen).
+// alt = gemerkte Liste (v6.21: Entwurf auf dem Geraet).
+// v6.21 (Tobias 20.11.: Zurueck-Wischen verlor die Liste): die angefangene Liste liegt auf DIESEM Geraet
+// (localStorage), bis "Alle speichern" oder "Liste verwerfen". Nie in OneDrive, nie im Bestand.
+const ENTWURF_KEY = "vorrat-scanliste";
+const textMap = (o) => Object.fromEntries(Object.entries(o && typeof o === "object" ? o : {}).filter(([, v]) => typeof v === "string"));
+function entwurfLesen() {
+  try {
+    const e = JSON.parse(localStorage.getItem(ENTWURF_KEY) || "null");
+    if (!e || !Array.isArray(e.pakete)) return null;
+    const pakete = e.pakete.filter((p) => p && typeof p.schluessel === "string")
+      .map((p) => ({ schluessel: p.schluessel, mhd: typeof p.mhd === "string" ? p.mhd : null, codeMhd: !!p.codeMhd && typeof p.mhd === "string",
+        code: typeof p.code === "string" ? p.code : undefined, fach: typeof p.fach === "string" ? p.fach : undefined }));
+    return pakete.length ? { pakete, namen: textMap(e.namen), notiz: textMap(e.notiz), ziel: typeof e.ziel === "string" ? e.ziel : null } : null;
+  } catch (_) { return null; }
+}
+const entwurfWeg = () => { try { localStorage.removeItem(ENTWURF_KEY); } catch (_) { /* gesperrt */ } };
+const istHand = (s) => s.startsWith("hand:"); // v6.21: Zeile ohne Code (von Hand)
+const packText = (n) => n + (n === 1 ? " Packung" : " Packungen");
+
 function multiScan(fachId, alt) {
-  const pakete = alt ? alt.pakete : [];  // { schluessel, mhd, fach? } je gescannter Packung
+  if (!alt) { // v6.21: angefangene Liste? erst fragen
+    const e = entwurfLesen();
+    if (e) return dialog("Angefangene Liste", [el("p", null, packText(e.pakete.length) + " gescannt, noch nicht gespeichert.")], [
+      ["Weitermachen", weiter(() => multiScan(fachId, e))],
+      ["Verwerfen, neu scannen", weiter(() => { entwurfWeg(); multiScan(fachId); }), "gefahr"],
+    ]);
+  }
+  const pakete = alt ? alt.pakete : [];  // { schluessel, mhd, fach?, code? } je Packung; ohne Code: schluessel "hand:…"
   const namen = alt ? alt.namen : {}, notiz = alt ? alt.notiz : {}; // je Code: Name, Hinweis (sucht/unbekannt/offline)
-  let gespeichert = false;
-  const ziel = zielWahl(fachId || null, " (hier)");
+  for (const s in notiz) if (notiz[s] === "suche Namen …") delete notiz[s]; // Suche lief beim Merken noch: neu erlauben
+  let gespeichert = false, zu = false; // zu: Liste geschlossen -> spaete Namenssuche schreibt den Entwurf nicht mehr (Review v6.21 #1)
+  const ziel = zielWahl((alt && alt.ziel) || fachId || null, " (hier)");
+  const merken = () => {
+    if (gespeichert || zu) return;
+    if (!pakete.length) return entwurfWeg();
+    try { localStorage.setItem(ENTWURF_KEY, JSON.stringify({ pakete, namen, notiz, ziel: ziel.wert() || null })); } catch (_) { /* voll: nur nicht gemerkt */ }
+  };
   const tabelle = el("div", { className: "mliste" });
   const kopfAnz = el("p", { className: "klein" });
   const zeilen = () => H.paketeZeilen(pakete);
@@ -1866,10 +1897,12 @@ function multiScan(fachId, alt) {
     const zs = zeilen();
     kopfAnz.textContent = pakete.length ? pakete.length + (pakete.length === 1 ? " Packung" : " Packungen") + " in " + zs.length + (zs.length === 1 ? " Zeile" : " Zeilen") : "";
     tabelle.replaceChildren(...(zs.length ? zs.map(zeile) : [el("p", { className: "klein" }, "Noch nichts gescannt.")]));
+    merken();
   }
   // Ohne Neuzeichnen, damit ein Feld, in dem gerade getippt wird, den Fokus behaelt.
   const nameSetzen = (s, n) => {
     namen[s] = n;
+    merken();
     for (const i of tabelle.querySelectorAll("input[data-schl]")) if (i.dataset.schl === s) {
       if (i.value !== n) i.value = n;
       i.closest(".mzeile").classList.toggle("ohnename", !n.trim());
@@ -1884,7 +1917,7 @@ function multiScan(fachId, alt) {
     const minus = () => { const g = gruppe(); pakete.splice(pakete.lastIndexOf(g[g.length - 1]), 1); render(); };
     const plus = () => { if (z.menge < 999) { pakete.push(Object.assign({}, gruppe()[0])); render(); } };
     return el("div", { className: "mzeile" + ((namen[s] || "").trim() ? "" : " ohnename") },
-      el("span", { className: "bild", "aria-hidden": "true" }, bildOder(s, namen[s], H.bildchen(namen[s] || ""))), name,
+      el("span", { className: "bild", "aria-hidden": "true" }, bildOder(istHand(s) ? null : s, namen[s], H.bildchen(namen[s] || ""))), name,
       el("button", { type: "button", className: "mdetail", onclick: () => zeileDialog(z, gruppe) },
         (z.mhd ? "MHD " + H.deDatum(z.mhd) : "kein MHD") + (z.fach ? " · " + fachText(z.fach) : "") + " ✎"),
       el("div", { className: "plusminus" }, el("button", { type: "button", "aria-label": "eins weniger", onclick: minus }, "−"),
@@ -1926,28 +1959,36 @@ function multiScan(fachId, alt) {
   // Kamera-Dialog: unter dem Bild die zuletzt gescannte Packung mit MHD-Wahl.
   const unten = el("div", { className: "zuletzt" });
   const nameAnz = el("p");
-  const wiederAnz = el("p", { className: "hinweis-rot", hidden: true }, "Schon in der Liste. Noch eine gleiche Packung? → „+1 gleiche Packung“");
+  const wiederAnz = el("p", { className: "hinweis-rot", hidden: true }, "Schon in der Liste. Noch eine Packung? → „+1 gleiche Packung“ oder „+1 anderes MHD“");
+  const woAnz = el("p", { className: "klein woschon", hidden: true }); // v6.21 (Tobias 20.11.): wo liegt dasselbe schon? Nur Hinweis
   let letzte = null;
   // Gleiche Packung nochmal (Tobias 15.11.): nie von selbst, nur per Knopf. Neue Packung = Kopie samt MHD, eigene MHD-Wahl.
-  const plusKnopf = el("button", { type: "button", className: "an", onclick: () => {
+  // v6.21: "+1 anderes MHD" = Kopie ohne MHD, die MHD-Wahl darunter gilt dann fuer sie (eigene Zeile).
+  const plusEins = (ohneMhd) => {
     if (!letzte || !pakete.includes(letzte)) return;
     if (pakete.filter((p) => p.code === letzte.code).length >= 999) return; // Review #4: wie das + in der Liste
     letzte = Object.assign({}, letzte);
+    if (ohneMhd) letzte.mhd = null;
     pakete.push(letzte);
     wiederAnz.hidden = true;
     render(); zuletztZeigen();
-  } }, "+1 gleiche Packung");
+  };
+  const plusKnopf = el("button", { type: "button", className: "an", onclick: () => plusEins(false) }, "+1 gleiche Packung");
+  const plusAnders = el("button", { type: "button", className: "zweit", onclick: () => plusEins(true) }, "+1 anderes MHD");
   const zuletztName = () => {
     if (!letzte) return;
     const n = pakete.filter((x) => x.schluessel === letzte.schluessel).length;
     nameAnz.replaceChildren("✓ ", el("b", null, namen[letzte.schluessel] || notiz[letzte.schluessel] || "…"), n > 1 ? " (" + n + "×)" : "", " · insgesamt " + pakete.length);
+    const wo = H.woSchon(stand ? stand.eintraege : [], letzte.schluessel, namen[letzte.schluessel], fachGueltig);
+    woAnz.textContent = wo.length ? "Schon im Vorrat: " + wo.map((x) => (x.fach ? fachText(x.fach) : "Ort klären") + " (" + x.menge + ")").join(" · ") : "";
+    woAnz.hidden = !wo.length;
   };
   function zuletztZeigen() {
     if (letzte && !pakete.includes(letzte)) letzte = null; // in der Liste entfernt
     if (!letzte) return unten.replaceChildren(el("p", { className: "klein" }, "Noch nichts gescannt."));
     const p = letzte;
     zuletztName();
-    unten.replaceChildren(nameAnz, wiederAnz, plusKnopf,
+    unten.replaceChildren(nameAnz, woAnz, wiederAnz, el("div", { className: "zeilen" }, plusKnopf, !p.codeMhd && plusAnders),
       p.codeMhd ? el("p", { className: "klein" }, "MHD aus dem Code: " + H.deDatum(p.mhd)) : mhdWahl(p.mhd, (m) => { p.mhd = m; render(); }));
   }
   // Kamera: ein Code, der schon in der Liste steht, zaehlt nicht nochmal (lange draufgehalten, kurz verloren, zwei
@@ -1983,30 +2024,51 @@ function multiScan(fachId, alt) {
       if (!fachGueltig(fach)) return melde("Das Fach für „" + name + "“ gibt es nicht mehr – bitte neu wählen.");
       if (z.menge > 999) return melde(name + ": höchstens 999 Stück");
       const werte = { name, symbol: H.bildchen(name), mhd: z.mhd, eingefroren: null, frist: null, fach, code: z.schluessel }; // v6: Schluessel, nie paket.code (Codex #9)
+      if (istHand(z.schluessel)) delete werte.code; // v6.21 ohne Code: kein Feld (wie eintragDialog, Review v6 A #6)
       const fe = H.pruefe("eintrag", werte); // UGC #86: vor dem Vorgang pruefen
       if (fe) return melde(name + ": " + fe);
       daten.push({ typ: "neu", art: "eintrag", werte, menge: z.menge });
     }
-    if (!(await tun(daten))) return;
+    if (!(await tun(daten))) return; // Fehler: Entwurf bleibt liegen
     gespeichert = true;
-    for (const z of zs) codeMerken(z.schluessel, namen[z.schluessel].trim()); // Abschnitt 4: Code -> Name, nur dieses Geraet
-    untenZeigen(pakete.length + (pakete.length === 1 ? " Packung" : " Packungen") + " gespeichert");
+    entwurfWeg();
+    for (const z of zs) if (!istHand(z.schluessel)) codeMerken(z.schluessel, namen[z.schluessel].trim()); // Abschnitt 4: Code -> Name, nur dieses Geraet
+    untenZeigen(packText(pakete.length) + " gespeichert");
     schliessen();
   }
 
+  // v6.21 (Tobias 20.11.): Produkt ohne Strichcode in derselben Liste, Name in der Zeile eintippen.
+  const handDazu = () => {
+    pakete.push({ schluessel: "hand:" + Modell.neueInstallationsId(), mhd: null });
+    render();
+    const i = [...tabelle.querySelectorAll("input[data-schl]")].at(-1);
+    if (i) i.focus();
+  };
+  const verwerfen = (melde, schliessen) => {
+    if (pakete.length && !confirm(packText(pakete.length) + " verwerfen?")) return;
+    pakete.length = 0;
+    entwurfWeg();
+    schliessen();
+  };
   dialog("Gescannt", [kopfAnz, tabelle,
-    el("button", { type: "button", className: "an weiterscannen", onclick: scannen }, "📷 Weiter scannen"),
-    el("h3", null, "Speichern in"), ziel.teil], [["Alle speichern", speichern]], () => {
+    el("div", { className: "zeilen" }, el("button", { type: "button", className: "an weiterscannen", onclick: scannen }, "📷 Weiter scannen"),
+      el("button", { type: "button", className: "zweit weiterscannen", onclick: handDazu }, "✎ Ohne Code dazu")),
+    el("h3", null, "Speichern in"), ziel.teil], [["Alle speichern", speichern], ["Liste verwerfen", verwerfen, "gefahr"]], () => {
     document.removeEventListener("vorrat-bild", bildNeu);
+    merken(); // Ziel kann sich seit dem letzten Merken geaendert haben
+    zu = true;
     if (gespeichert || !pakete.length) return;
-    const n = pakete.length;
-    untenZeigen(n + (n === 1 ? " gescannte Packung" : " gescannte Packungen") + " verworfen", "Zurückholen", () => multiScan(fachId, { pakete, namen, notiz }));
-  });
+    untenZeigen(packText(pakete.length) + " gemerkt – beim nächsten 📷 weiter", "Weitermachen", () => { const e = entwurfLesen(); if (e && !dialogOffen()) multiScan(fachId, e); });
+  }, "Später weiter");
+  tabelle.closest(".fenster").addEventListener("change", merken); // Review #3: Ort/Fach-Wahl sofort merken (App kann im Hintergrund sterben)
   // Bild kam an: Tabelle neu, ausser es wird gerade ein Name getippt (Fokus bliebe sonst nicht stehen)
   const bildNeu = () => { if (!tabelle.contains(document.activeElement)) render(); };
   document.addEventListener("vorrat-bild", bildNeu);
   render();
-  if (alt) zuletztZeigen(); else scannen();
+  if (alt) { // Review #2: Suche lief beim Schliessen noch -> fuer Zeilen ohne Namen neu anstossen
+    for (const s of new Set(pakete.map((p) => p.schluessel))) if (!istHand(s) && !namen[s]) nameSuchen({ schluessel: s, ean: s.startsWith("gtin:") ? s.slice(5) : null, anzeige: H.codeText(s) });
+    zuletztZeigen();
+  } else scannen();
 }
 
 // Eintrag anlegen (e = null, in Fach fachId) oder bearbeiten. Vorbelegen, nie ungefragt speichern (UGC #85).
