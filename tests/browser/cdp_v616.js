@@ -1107,15 +1107,16 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // Neue Dose über „+“ mit Farbe, dann Name und Farbe ändern (die Vorlage füllt alle 40 Plätze -> eine Reihe dazu)
     await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 5 }]).then(() => 1)`); await warte(400);
-    // v6.25 Codex R2 #7 + #8: Ablage 1 Platz hoch (mit Inhalt) ohne kaputte Bildfläche; aufgeteilte Dose mit langem Namen
+    // v6.25 Codex R2 #7 + #8: Ablage 1 Platz hoch (mit Inhalt) ohne kaputte Bildfläche; Dose mit langem Namen neben einer Ablage
     const r2 = await js(`tun([{ typ: "neu", art: "fach", werte: { name: "Flachablage", offen: true, lage: { ort: ${kO}.id, reihe: 4, spalte: 3 } } },
       { typ: "neu", art: "fach", werte: { name: "Backpulver/Vanillezucker", lage: { ort: ${kO}.id, reihe: 4, spalte: 4 } } },
-      { typ: "neu", art: "fach", werte: { name: "Schokostückchen", lage: { ort: ${kO}.id, reihe: 4, spalte: 4 } } }]).then((v) => v.map((x) => x.id))`); await warte(400);
+      { typ: "neu", art: "fach", werte: { name: "Schokostückchen", offen: true, lage: { ort: ${kO}.id, reihe: 4, spalte: 4 } } }]).then((v) => v.map((x) => x.id))`); await warte(400);
     const r2e = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Flachtest", fach: ${JSON.stringify(r2[0])} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
     pruefe(await js(`(() => { const g = document.querySelector('svg .platz[data-fach="${r2[0]}"]'); const fo = g.querySelector("foreignObject"); return !!fo && Number(fo.getAttribute("height")) >= 16 && g.querySelector(".kname").textContent.startsWith("Flach"); })()`), "R2 #7 / v6.26: Ablage 1 Platz (4er-Raster) zeigt Bilder mit gültiger Höhe + Etikett");
     pruefe(await js(`[...document.querySelectorAll("svg foreignObject")].every((f) => Number(f.getAttribute("height")) > 0)`), "R2 #7: keine Bildfläche mit Höhe ≤ 0");
     pruefe(await js(`[${JSON.stringify(r2[1])}, ${JSON.stringify(r2[2])}].every((id) => { const g = document.querySelector('svg .platz[data-fach="' + id + '"]'), t = g.querySelector(".treffer").getBoundingClientRect();
-      return [...g.querySelectorAll(".dname")].every((x) => { const b = x.getBoundingClientRect(); return b.left >= t.left - .5 && b.right <= t.right + .5; }); })`), "R2 #8: aufgeteilte Dosen: Etikett-Text bleibt in der eigenen Dose");
+      return [...g.querySelectorAll(".dname")].every((x) => { const b = x.getBoundingClientRect(); return b.left >= t.left - .5 && b.right <= t.right + .5; }); })`), "R2 #8: Dose neben Ablage (v6.27: einziger Platz mit Fächern nebeneinander): Etikett-Text bleibt in der eigenen Dose");
+    pruefe(await js(`!document.querySelector('svg .platz[data-fach="${r2[1]}"]').dataset.stapel`), "v6.27: Dose + Ablage auf einem Platz ist kein Stapel");
     await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(r2e)}, feld: "geloescht", wert: true }, ...${JSON.stringify(r2)}.map((id) => ({ typ: "feld", art: "fach", ziel: id, feld: "geloescht", wert: true }))]).then(() => 1)`); await warte(400);
     pruefe((await js(`document.querySelector("svg .frei").getAttribute("aria-label")`)).endsWith("neue Dose anlegen"), "freier Platz: „neue Dose anlegen“");
     await klick("svg .frei"); await warte(300);
@@ -1185,6 +1186,157 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await bild("9k-kueche-4x5.png");
     await bearb(false);
     await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(wid2)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
+    console.log("9l. v6.27: Küchenschublade Abschnitt 2 – Stapel");
+    const kG = (id) => `document.querySelector('svg .platz[data-fach="${id}"]')`;
+    const menueKnoepfe = () => js(`[...document.querySelectorAll(".blatt button")].map((b) => b.textContent).join("|")`);
+    const lageVon = (id) => js(`(() => { const f = fachVon(${JSON.stringify(id)}); return f.lage.reihe + "/" + f.lage.spalte + "/" + (f.ebene ?? "-"); })()`);
+    const risotto = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Risottoreis").id`);
+    const zucker = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Zucker").id`);
+    const tueten = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Tüten").id`);
+    // Fach-Menü einer einzelnen Dose: Darunter stapeln ja, Aufteilen nein; Ablage ohne Stapeln
+    await js(`(fachMenue(fachVon(${JSON.stringify(reis)})), 1)`); await warte(300);
+    let mk = await menueKnoepfe();
+    pruefe(mk.includes("📚 Dose darunter stapeln") && !mk.includes("Aufteilen") && !mk.includes("Nach oben holen") && !mk.includes("Aus dem Stapel"), "Fach-Menü Dose: „Dose darunter stapeln“, kein Aufteilen (" + mk + ")");
+    await js(`history.back(), 1`); await warte(300);
+    await js(`(fachMenue(fachVon(${JSON.stringify(tueten)})), 1)`); await warte(300);
+    mk = await menueKnoepfe();
+    pruefe(!mk.includes("stapeln") && !mk.includes("Aufteilen"), "Fassung 3: Ablage bietet kein Stapeln an");
+    await js(`history.back(), 1`); await warte(300);
+    // Dose darunter stapeln (Dialog wie „Neue Dose“, Farbe „keine“ vorbelegt)
+    await js(`(fachMenue(fachVon(${JSON.stringify(reis)})), 1)`); await warte(300);
+    await klick(".blatt button", "Dose darunter stapeln"); await warte(400);
+    pruefe(await js(`document.querySelector(".fenster h2").textContent`) === "Dose darunter stapeln" && await js(`document.querySelector('.fenster button.farbwahl[aria-checked="true"]').dataset.farbe`) === "keine" &&
+      !(await js(`!!document.querySelector(".fenster label.schalter")`)), "Dialog „Dose darunter stapeln“: Name + Farbe, „keine“ vorbelegt, kein Ablage-Haken");
+    await js(`(document.querySelector(".fenster input").value = "Reis Basmati", document.querySelector('.fenster button.farbwahl[data-farbe="weiss"]').click(), 1)`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(500);
+    const bas = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Reis Basmati")?.id`);
+    pruefe(!!bas && await lageVon(bas) === "0/0/1" && await js(`fachVon(${JSON.stringify(bas)}).farbe`) === "weiss", "neue Dose: gleiche Lage, ebene 1 (darunter), Farbe weiß");
+    pruefe(await js(`${kG(reis)}.dataset.stapel === "2" && ${kG(reis)}.querySelector(".stapelzahl text").textContent === "+1" && ${kG(reis)}.querySelectorAll(".stapelrand").length === 1 && !${kG(bas)}`),
+      "Zeichnung: oberste (Reis) mit „+1“, 1 Umriss, data-stapel 2, untere nicht gezeichnet");
+    pruefe((await js(`${kG(reis)}.getAttribute("aria-label")`)).startsWith("Reis, pinker Deckel, Stapel mit 2 Dosen, "), "aria-label „Reis, pinker Deckel, Stapel mit 2 Dosen, …“");
+    // Antippen = Auswahl, oberste zuerst
+    await klick(`svg .platz[data-fach='${reis}']`); await warte(400);
+    const zeilen = await js(`[...document.querySelectorAll(".blatt .menueliste button")].map((b) => b.textContent)`);
+    pruefe(await js(`document.querySelector(".blatt h2").textContent`) === "Stapel mit 2 Dosen" && zeilen[0].startsWith("● Reis · ") && zeilen[0].endsWith(" · oben") &&
+      zeilen[1] === "● Reis Basmati · leer · 2." && zeilen[2] === "📚 Dose darunter stapeln" && !(await js(`document.querySelector(".blatt").textContent.includes("unklar")`)), "Antippen: Auswahl, oberste zuerst, Lage „oben“/„2.“, unten „Dose darunter stapeln“ (" + zeilen.join(" | ") + ")");
+    await klick(".blatt .menueliste button", "Reis Basmati"); await warte(400);
+    pruefe(await js(`stapel[stapel.length - 1].art === "fach" && stapel[stapel.length - 1].id === ${JSON.stringify(bas)} && document.querySelector(".unterzeile").textContent.endsWith("· im Stapel 2 von 2 (unter „Reis“)")`), "Tipp öffnet die untere Dose, Unterzeile „im Stapel 2 von 2 (unter „Reis“)“");
+    await js(`history.back(), 1`); await warte(300);
+    // Warnpunkt einer unteren Dose am Stapel, Fundort „(unter …)“
+    const wu = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Warntest unten", mhd: ${JSON.stringify(Hilfen_plus(new Date().toISOString().slice(0, 10), 2))}, fach: ${JSON.stringify(bas)} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
+    pruefe(await js(`!!${kG(reis)}.querySelector(".punkt.rot") && ${kG(reis)}.getAttribute("aria-label").includes("1 laufen bald ab")`), "R13: Warnpunkt der unteren Dose sitzt am Stapel");
+    pruefe(await js(`H.fundort(eintragJetzt(${JSON.stringify(wu)}), stand.orte, stand.faecher)`) === "Küchenschublade – Reis Basmati (unter „Reis“)", "Fundort (Suche/Läuft bald ab): „Reis Basmati (unter „Reis“)“");
+    // Fach-Menü der unteren Dose: Kopfzeile, Nach oben holen, Aus dem Stapel nehmen
+    await js(`(fachMenue(fachVon(${JSON.stringify(bas)})), 1)`); await warte(300);
+    mk = await menueKnoepfe();
+    pruefe(await js(`document.querySelector(".blatt .klein").textContent.includes("· im Stapel 2 von 2")`) && mk.includes("⤒ Nach oben holen") && mk.includes("⤓ Aus dem Stapel nehmen") && !mk.includes("Aufteilen"),
+      "Fach-Menü untere Dose: „im Stapel 2 von 2“, Nach oben holen, Aus dem Stapel nehmen");
+    const nO = await js(`liste.length`);
+    await klick(".blatt button", "Nach oben holen"); await warte(500);
+    pruefe(await js(`${kG(bas)}?.dataset.stapel`) === "2" && !(await js(`!!${kG(reis)}`)) && await lageVon(bas) === "0/0/-" && await lageVon(reis) === "0/0/1" && await js(`liste.length`) === nO + 2,
+      "Nach oben holen: Reis Basmati oben, Reis ebene 1, genau 2 Vorgänge");
+    await js(`(fachMenue(fachVon(${JSON.stringify(bas)})), 1)`); await warte(300);
+    pruefe(!(await menueKnoepfe()).includes("Nach oben holen"), "oberste ohne „Nach oben holen“");
+    await js(`history.back(), 1`); await warte(300);
+    // Ganzen Stapel auf den freien Platz ziehen, Rückgängig
+    await ziehe(kG(bas), `document.querySelector("svg .frei")`);
+    pruefe(await lageVon(bas) === "2/0/-" && await lageVon(reis) === "2/0/1" && await js(`${kG(bas)}.dataset.stapel`) === "2", "Stapel auf freien Platz gezogen: beide umgezogen, Reihenfolge bleibt");
+    await klick("#unten button", "Rückgängig"); await warte(600);
+    pruefe(await lageVon(bas) === "0/0/-" && await lageVon(reis) === "0/0/1", "Rückgängig: Stapel wieder hinten links");
+    // Tauschen bei gleicher Höhe + Rückgängig (ganzer Stapel)
+    await ziehe(kG(bas), kG(risotto));
+    mk = await menueKnoepfe();
+    pruefe(mk.includes("⇄ Plätze tauschen") && mk.includes("📚 Darunter stapeln") && !mk.includes("Daneben"), "auf andere Dose: Frage Tauschen / Darunter stapeln, kein Daneben (" + mk + ")");
+    await klick(".blatt button", "Plätze tauschen"); await warte(600);
+    pruefe(await lageVon(bas) === "0/1/-" && await lageVon(reis) === "0/1/1" && await lageVon(risotto) === "0/0/-", "Tauschen: Stapel und Risottoreis haben die Plätze getauscht");
+    await klick("#unten button", "Rückgängig"); await warte(600);
+    pruefe(await lageVon(bas) === "0/0/-" && await lageVon(reis) === "0/0/1" && await lageVon(risotto) === "0/1/-", "Rückgängig: Tausch zurück (Codex R1 #2)");
+    // Darunter stapeln per Ziehen
+    await ziehe(kG(risotto), kG(bas));
+    await klick(".blatt button", "Darunter stapeln"); await warte(600);
+    pruefe(await lageVon(risotto) === "0/0/2" && await js(`${kG(bas)}.dataset.stapel === "3" && ${kG(bas)}.querySelector(".stapelzahl text").textContent === "+2" && ${kG(bas)}.querySelectorAll(".stapelrand").length === 2`),
+      "Darunter stapeln per Ziehen: Risottoreis ebene 2, „+2“, 2 Umrisse");
+    pruefe(await js(`!document.querySelector(".ortscroll") && document.documentElement.scrollWidth <= innerWidth && (() => { const g = ${kG(bas)}, t = g.querySelector(".treffer").getBoundingClientRect();
+      return [...g.querySelectorAll(".dname, .etikett, .stapelrand, .stapelzahl")].every((x) => { const b = x.getBoundingClientRect(); return b.left >= t.left - .5 && b.right <= t.right + .5 && b.top >= t.top - .5 && b.bottom <= t.bottom + .5; }); })()`),
+      "412 px ohne Wischen, Etikett/Umrisse/Abzeichen innerhalb des Platzes");
+    await bild("9l-stapel.png");
+    await klick("#unten button", "Rückgängig"); await warte(600);
+    pruefe((await lageVon(risotto)).startsWith("0/1/"), "Rückgängig: Risottoreis wieder allein");
+    // Aus dem Stapel nehmen (nur freie Plätze), Rückgängig -> gleiche ebene (M1): Hinweis, Nach oben holen räumt auf
+    await js(`(fachMenue(fachVon(${JSON.stringify(reis)})), 1)`); await warte(300);
+    await klick(".blatt button", "Aus dem Stapel nehmen"); await warte(400);
+    const opts = await js(`[...document.querySelectorAll(".fenster select option")].map((o) => o.textContent)`);
+    pruefe(opts.length > 0 && opts.every((t) => t.endsWith("(frei)")) && opts.includes("Küchenschublade · Reihe 3, Platz 1 (frei)"), "Aus dem Stapel nehmen: nur freie Plätze (" + opts.length + ")");
+    await js(`(() => { const s = document.querySelector(".fenster select"); s.value = [...s.options].find((o) => o.textContent === "Küchenschublade · Reihe 3, Platz 1 (frei)").value; return 1; })()`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(600);
+    pruefe(await lageVon(reis) === "2/0/-" && !(await js(`${kG(bas)}.dataset.stapel`)) && !(await js(`${kG(reis)}.dataset.stapel`)), "Reis allein auf Reihe 3, ebene null, kein Stapel mehr");
+    await klick("#unten button", "Rückgängig"); await warte(600);
+    pruefe(await lageVon(reis) === "0/0/-" && await lageVon(bas) === "0/0/-", "Rückgängig: Reis zurück in den Stapel (beide ohne ebene)");
+    await klick(`svg .platz[data-stapel='2']`); await warte(400);
+    pruefe(await js(`document.querySelector(".blatt").textContent.includes("Reihenfolge unklar – „Nach oben holen“ ordnet")`) &&
+      (await js(`[...document.querySelectorAll(".blatt .menueliste button")].map((b) => b.textContent.split(" · ")[0]).slice(0, 2).join()`)) === "● Reis,● Reis Basmati", "M1: gleiche ebene → Name zuerst (Reis), Hinweis „Reihenfolge unklar“");
+    await js(`history.back(), 1`); await warte(300);
+    // Kunstdaten: zwei Dosen mit derselben ebene 3 -> Name, dann Kennung; Nach oben holen räumt auf
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(reis)}, feld: "ebene", wert: 3 }, { typ: "feld", art: "fach", ziel: ${JSON.stringify(bas)}, feld: "ebene", wert: 3 }]).then(() => 1)`); await warte(400);
+    pruefe(await js(`${kG(reis)}?.dataset.stapel`) === "2", "gleiche ebene 3: Reis (Name) oben");
+    await js(`(fachMenue(fachVon(${JSON.stringify(reis)})), 1)`); await warte(300);
+    pruefe((await menueKnoepfe()).includes("⤒ Nach oben holen"), "oberste bei unklarer Reihenfolge: „Nach oben holen“ angeboten");
+    await klick(".blatt button", "Nach oben holen"); await warte(500);
+    pruefe(await lageVon(reis) === "0/0/-" && await lageVon(bas) === "0/0/1", "Nach oben holen räumt auf (null, 1)");
+    // Platz ändern einer einzelnen Dose: belegter Dosen-Platz = „(Stapel mit …)“, stapelt darunter; zurück auf frei -> ebene null
+    await js(`(fachDialog(fachVon(${JSON.stringify(zucker)}), null, "platz"), 1)`); await warte(400);
+    const popts = await js(`[...document.querySelectorAll(".fenster select option")].map((o) => o.textContent)`);
+    pruefe(popts.includes("Küchenschublade · Reihe 1, Platz 1 (Stapel mit „Reis“, „Reis Basmati“)") && !popts.some((t) => t.startsWith("Küchenschublade") && t.includes("(neben")),
+      "Platz ändern: „(Stapel mit „Reis“, „Reis Basmati“)“, in der Küchenschublade nichts „neben“");
+    await js(`(() => { const s = document.querySelector(".fenster select"); s.value = [...s.options].find((o) => o.textContent.includes("(Stapel mit „Reis“")).value; return 1; })()`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(600);
+    pruefe(await lageVon(zucker) === "0/0/2" && await js(`${kG(reis)}.dataset.stapel`) === "3", "Platz ändern auf Stapel: Zucker darunter (ebene 2)");
+    await js(`(fachDialog(fachVon(${JSON.stringify(zucker)}), null, "platz"), 1)`); await warte(400);
+    await js(`(() => { const s = document.querySelector(".fenster select"); s.value = [...s.options].find((o) => o.textContent === "Küchenschublade · Reihe 2, Platz 5 (frei)").value; return 1; })()`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(600);
+    pruefe(await lageVon(zucker) === "1/4/-", "Platz ändern auf freien Platz: Zucker zurück, ebene null (Stapel verlassen)");
+    // Codex R2 #5: ebene 9 -> neu nummerieren; Stapel > 10 abgelehnt
+    const hochIds = await js(`tun([{ typ: "neu", art: "fach", werte: { name: "N-A", lage: { ort: ${kO}.id, reihe: 2, spalte: 0 } } },
+      { typ: "neu", art: "fach", werte: { name: "N-B", ebene: 5, lage: { ort: ${kO}.id, reihe: 2, spalte: 0 } } },
+      { typ: "neu", art: "fach", werte: { name: "N-C", ebene: 9, lage: { ort: ${kO}.id, reihe: 2, spalte: 0 } } }]).then((v) => v.map((x) => x.id))`); await warte(400);
+    await klick(`svg .platz[data-stapel='3']`); await warte(400);
+    await klick(".blatt .menueliste button", "Dose darunter stapeln"); await warte(400);
+    await js(`(document.querySelector(".fenster input").value = "N-D", 1)`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(500);
+    const nd = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "N-D")?.id`);
+    pruefe(!!nd && (await Promise.all([...hochIds, nd].map(lageVon))).join() === "2/0/-,2/0/1,2/0/2,2/0/3", "R2 #5: ebene 9 + darunter → lückenlos neu nummeriert (null, 1, 2), neue Dose 3");
+    const mehr = await js(`tun(Array.from({ length: 6 }, (_, i) => ({ typ: "neu", art: "fach", werte: { name: "N-" + (i + 5), ebene: 4 + i, lage: { ort: ${kO}.id, reihe: 2, spalte: 0 } } }))).then((v) => v.map((x) => x.id))`); await warte(400);
+    pruefe(await js(`document.querySelector('svg .platz[data-stapel]') && [...document.querySelectorAll("svg .platz[data-stapel]")].some((g) => g.dataset.stapel === "10")`), "Stapel mit 10 Dosen gezeichnet");
+    await js(`(fachDialog(null, { ort: ${kO}.id, reihe: 2, spalte: 0 }, "stapel"), 1)`); await warte(400);
+    await js(`(document.querySelector(".fenster input").value = "Elfte", 1)`);
+    await klick(".fenster .knoepfe button", "Speichern"); await warte(400);
+    pruefe(await js(`document.querySelector(".fenster .meldung").textContent`) === "Ein Stapel hat höchstens 10 Dosen." && !(await js(`stand.faecher.some((f) => !f.geloescht && f.name === "Elfte")`)), "11. Dose abgelehnt: „Ein Stapel hat höchstens 10 Dosen.“");
+    await js(`history.back(), 1`); await warte(300);
+    await js(`tun(${JSON.stringify([...hochIds, nd])}.concat(${JSON.stringify(mehr)}).map((id) => ({ typ: "feld", art: "fach", ziel: id, feld: "geloescht", wert: true }))).then(() => 1)`); await warte(400);
+    // Oberste löschen: Rückfrage nennt die Dose darunter, untere wird sichtbar, Inhalt -> Ort klären
+    await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(wu)}, feld: "fach", wert: ${JSON.stringify(reis)} }]).then(() => 1)`); await warte(400);
+    const dL = dialoge.length;
+    await js(`(fachMenue(fachVon(${JSON.stringify(reis)})), 1)`); await warte(300);
+    await klick(".blatt button", "Löschen"); await warte(600);
+    pruefe((dialoge[dL] || "").includes("Die Dose darunter wird oben sichtbar."), "Löschen der obersten: Rückfrage „Die Dose darunter wird oben sichtbar.“");
+    pruefe(await js(`fachVon(${JSON.stringify(reis)}).geloescht && !!${kG(bas)} && !${kG(bas)}.dataset.stapel && eintragJetzt(${JSON.stringify(wu)}).ortKlaeren === true`), "untere Dose sichtbar (allein), Inhalt der gelöschten in „Ort klären“");
+    // aufräumen: Reis zurückholen, Testdose weg
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(reis)}, feld: "geloescht", wert: false }, { typ: "feld", art: "fach", ziel: ${JSON.stringify(bas)}, feld: "geloescht", wert: true },
+      { typ: "feld", art: "eintrag", ziel: ${JSON.stringify(wu)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
+    pruefe(await js(`!document.querySelector("svg .platz[data-stapel]") && !!${kG(reis)}`), "aufgeräumt: kein Stapel mehr");
+
+    // Gegenprobe: Medizinschrank unverändert (zwei Fächer auf einem Platz nebeneinander, Aufteilen bleibt)
+    const medO = `orteSichtbar().find((o) => o.name === "Medizinschrank")`;
+    const ohren = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Ohren" && !f.ortKlaeren && f.lage.ort === ${medO}.id).id`);
+    const mt = await js(`(() => { const f = fachVon(${JSON.stringify(ohren)}); return tun([{ typ: "neu", art: "fach", werte: { name: "Ohren Test", ebene: 1, lage: { ...f.lage }, ...(f.hoch ? { hoch: f.hoch } : {}) } }]).then((v) => v[0].id); })()`); await warte(400);
+    await klick(".reiter button", "Medizinschrank"); await warte(400);
+    pruefe(await js(`!!${kG(ohren)} && !!${kG(mt)} && !document.querySelector("svg .platz[data-stapel]") && !document.querySelector(".stapelzahl")`), "Medizinschrank: zwei Fächer auf einem Platz nebeneinander, kein Stapel (ebene ignoriert)");
+    await js(`(fachMenue(fachVon(${JSON.stringify(ohren)})), 1)`); await warte(300);
+    mk = await menueKnoepfe();
+    pruefe(mk.includes("✂ Aufteilen") && !mk.includes("stapeln") && !mk.includes("Nach oben holen") && !(await js(`document.querySelector(".blatt .klein").textContent.includes("Stapel")`)), "Medizinschrank-Menü: Aufteilen da, nichts vom Stapel");
+    await js(`history.back(), 1`); await warte(300);
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(mt)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
+    await klick(".reiter button", "Küchenschublade"); await warte(300);
   }
 
   console.log("9j. v6.16: Daumenleiste, Menüs gruppiert, ⓘ statt Erklärzeilen");

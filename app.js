@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.26"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.27"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -687,6 +687,13 @@ const faecherAn = (ort, reihe, spalte, ausser) => stand.faecher.filter((f) => !f
   f.lage.ort === ort && f.lage.reihe === reihe && f.lage.spalte === spalte).sort(nachName);
 // v6.7 Hoehe: ein Fach mit hoch = n belegt die Plaetze reihe .. reihe+n-1 seiner Spalte.
 const hoeheVon = (f) => f.hoch || 1;
+// v6.27 Stapel (Kuechenschublade): Dosen auf einem Platz, oberste zuerst, immer aus dem AKTUELLEN Stand (H.stapelVon).
+const stapelbar = H.stapelbar;
+const stapelVon = (f) => H.stapelVon(f, stand.orte, stand.faecher);
+const stapelAn = (l) => stapelVon(faecherAn(l.ort, l.reihe, l.spalte).find((f) => !f.ortKlaeren));
+// " · im Stapel 2 von 3 (unter „Reis“)" fuer Fach-Menue und Fach-Ansicht, sonst "".
+const stapelText = (f) => { const st = stapelVon(f), i = st ? st.findIndex((x) => x.id === f.id) : -1;
+  return st && st.length > 1 ? " · im Stapel " + (i + 1) + " von " + st.length + (i ? " (unter „" + st[0].name + "“)" : "") : ""; };
 // Faecher, die den Platz (r, c) belegen: dort verankert ODER von weiter oben hineinragend.
 const faecherUeber = (ort, r, c, ausser) => stand.faecher.filter((f) => !f.geloescht && f.id !== ausser && f.lage.ort === ort &&
   f.lage.spalte === c && f.lage.reihe !== null && f.lage.reihe <= r && r < f.lage.reihe + hoeheVon(f));
@@ -958,20 +965,20 @@ function ablageTeile(x, y, w, h, f, n) {
 }
 
 // v6.24 Kuechenschublade (Foto 20.11.): Dose von oben = abgerundeter Deckel in Deckelfarbe mit Glanz und weissem Etikett,
-// Name zweizeilig (kein Wischen bei 412 px, K8), Stueckzahl darunter erst ab 2 Reihen Hoehe. Farbwert NUR aus H.deckel().
+// Name zweizeilig (kein Wischen bei 412 px, K8), Stueckzahl darunter erst ab 44 Hoehe (v6.27: auch die etwas kleinere Stapel-Dose). Farbwert NUR aus H.deckel().
 function doseTeile(x, y, w, h, f, zahl) {
   const d = H.deckel(f.farbe), mitte = x + w / 2, rx = Math.min(w, h) / 2.4;
   const zk = Math.max(3, Math.floor((w - 8) / 4.3)); // Codex R2 #8: Zeichen je Zeile nach Fachbreite (5 Spalten = 13)
   const zeilen = H.etikettZeilen(f.name, zk).slice(0, 2).map((z) => kuerze(z, zk));
   const lw = Math.min(w - 8, Math.max(...zeilen.map((z) => z.length)) * 4.3 + 8), lh = zeilen.length * 8 + 4;
-  const ly = y + Math.max(2, (h - lh) / 2 - (h >= 50 ? 5 : 0));
+  const ly = y + Math.max(2, (h - lh) / 2 - (h >= 44 ? 5 : 0));
   return [
     sv("g", { filter: "url(#zSchatten)" },
       sv("rect", { x: x + 1, y: y + 1, width: w - 2, height: h - 2, rx, fill: d.fill, "fill-opacity": d.deck || 1, stroke: d.rand || "#0006", "stroke-width": 1.5, class: "deckel" }),
       sv("rect", { x: x + 4, y: y + 3, width: w - 8, height: h - 6, rx: Math.max(2, rx - 3), fill: "url(#zGlanz)" })),
     sv("rect", { x: mitte - lw / 2, y: ly, width: lw, height: lh, rx: 1.5, class: "etikett" }),
     ...zeilen.map((z, i) => sv("text", { x: mitte, y: ly + 9 + i * 8, "text-anchor": "middle", class: "dname" }, z)),
-    h >= 50 && sv("text", { x: mitte, y: ly + lh + 10, "text-anchor": "middle", class: "dzahl" + (d.hell ? " hell" : "") }, zahl),
+    h >= 44 && sv("text", { x: mitte, y: ly + lh + 10, "text-anchor": "middle", class: "dzahl" + (d.hell ? " hell" : "") }, zahl),
   ];
 }
 
@@ -1014,24 +1021,34 @@ function zeichnung(ort) {
         svg.append(g);
       }
       // Mehrere Faecher auf einem Platz (Aufteilen) stehen nebeneinander, mit kleinem Spalt.
-      const w = (cw - (hier.length - 1) * spalt) / Math.max(1, hier.length);
-      hier.forEach((f, i) => {
+      // v6.27 Stil dosen: mehrere Dosen auf einem Platz = Stapel, nur die oberste wird gezeichnet (sonst nebeneinander wie bisher).
+      const st = ds && hier.length > 1 ? stapelVon(hier[0]) : null, sn = st && st.length > 1 ? st.length : 0;
+      const zeig = sn ? [st[0]] : hier;
+      const w = (cw - (zeig.length - 1) * spalt) / Math.max(1, zeig.length);
+      zeig.forEach((f, i) => {
         const n = stueckImFach(f.id), hp = hoeheVon(f) * rh + (hoeheVon(f) - 1) * luft;
-        const mk = marken.get(f.id); // { n, farbe } oder undefined
+        // { n, farbe } oder undefined; Stapel: ueber alle Dosen (R13, sonst bliebe Ablaufendes unten unsichtbar), rot vor gelb
+        const mk = sn ? st.map((x) => marken.get(x.id)).filter(Boolean).reduce((a, b) => (a ? { n: a.n + b.n, farbe: a.farbe === "rot" || b.farbe === "rot" ? "rot" : "gelb" } : b), undefined) : marken.get(f.id);
         const xi = x + i * (w + spalt), py = schub ? y + 15 : ds ? y + 9 : sk ? y + 12 : y + 26;
         const dose = ds && !f.offen, d = dose && H.deckel(f.farbe), pr = ds ? 8 : 11, px = xi + w - (ds ? 9 : 15);
+        const um = sn ? Math.min(2, sn - 1) : 0, dw = w - 2 * um, dh = hp - 2 * um; // Stapel: Platz fuer 1-2 versetzte Umrisse
         const g = sv("g", { class: "platz" + (mk ? " " + mk.farbe : ""), tabindex: "0", role: "button", "data-fach": f.id,
           ...(dose ? { "data-farbe": d.schluessel || "keine" } : {}), // v6.24: nur Schluessel aus der festen Tabelle (Browsertest)
-          "aria-label": f.name + (dose ? ", " + d.aria : "") + ", " + sachenText(n) +
+          ...(sn ? { "data-stapel": String(sn) } : {}),
+          "aria-label": f.name + (dose ? ", " + d.aria : "") + (sn ? ", Stapel mit " + sn + " Dosen" : "") + ", " + sachenText(n) +
             (mk ? ", " + mk.n + " " + (mk.farbe === "rot" ? "laufen bald ab oder sind abgelaufen" : "laufen in 30 Tagen ab") : "") },
           sv("rect", { x: xi, y, width: w, height: hp, rx: 8, class: "treffer" }),
+          ...Array.from({ length: um }, (_, k) => sv("rect", { x: xi + 1 + 2 * (um - k), y: y + 1 + 2 * (um - k), width: dw - 2, height: dh - 2, rx: Math.min(dw, dh) / 2.4, class: "stapelrand" })),
           ...(f.offen ? ablageTeile(xi, y, w, hp, f, n) : schub ? schubladeTeile(xi, y, w, hp, braun, f.name, sachenText(n))
-            : ds ? doseTeile(xi, y, w, hp, f, sachenText(n)) : sk ? klarTeile(xi, y, w, hp, f.name, sachenText(n)) : kisteTeile(xi, y, w, hp, f.name, sachenText(n))),
+            : ds ? doseTeile(xi, y, dw, dh, f, sachenText(n)) : sk ? klarTeile(xi, y, w, hp, f.name, sachenText(n)) : kisteTeile(xi, y, w, hp, f.name, sachenText(n))),
+          sn > 0 && sv("g", { class: "stapelzahl" }, sv("rect", { x: xi + 1, y: y + 1, width: 17, height: 12, rx: 6 }),
+            sv("text", { x: xi + 9.5, y: y + 10.2, "text-anchor": "middle" }, "+" + (sn - 1))),
           mk && sv("circle", { cx: px, cy: py, r: pr, class: "punkt " + mk.farbe }),
           mk && sv("text", { x: px, y: py + (ds ? 3.5 : 4.5), "text-anchor": "middle", class: "punktzahl " + mk.farbe + (ds ? " ds" : "") }, mk.n > 99 ? "99+" : String(mk.n)));
-        // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern
-        druck(g, () => oeffne({ art: "fach", id: f.id }), () => fachMenue(f), fachZug(f));
-        g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); oeffne({ art: "fach", id: f.id }); } });
+        // v5.2: lange druecken = Fach-Menue; v5.3: gedrueckt halten und ziehen = Platz aendern. v6.27 Stapel: Antippen = Auswahl.
+        const tipp = sn ? () => stapelAuswahl({ ort: ort.id, reihe: r, spalte: c }) : () => oeffne({ art: "fach", id: f.id });
+        druck(g, tipp, () => fachMenue(f), fachZug(f));
+        g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); tipp(); } });
         if (hoeheVon(f) > 1) faecherG.push(g); else svg.append(g); // Tab-Reihenfolge bleibt Reihe fuer Reihe
       });
     }
@@ -1515,7 +1532,7 @@ function fachAnsicht(ebene) {
   return [
     kopf(f.name, h.knopf, !m && el("button", { className: "neben", onclick: () => fachMenue(f) }, "⋯ " + fachArt(f, o))),
     h.text,
-    el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)),
+    el("p", { className: "unterzeile" }, f.ortKlaeren ? "ohne gültigen Platz (Ort klären)" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte) + stapelText(f)),
     m && el("div", { className: "knoepfe markleiste", role: "status" },
       el("b", null, m.size + " markiert"),
       el("button", { onclick: () => verschiebenDialog([...m], id, sachenText(m.size) + " verschieben nach …", undefined, 2) }, "↦ Verschieben"), // 2 = Dialog + Markier-Ebene
@@ -2352,16 +2369,20 @@ function eintragDialog(e, fachId) {
 }
 
 // Kiste/Schublade anlegen (f = null, auf freiem Platz lage) oder aendern: nur = "name" | "platz" (Fach-Menue).
+// nur: "name" (Name/Farbe), "platz" (Platz aendern), v6.27 "raus" (aus dem Stapel nehmen: nur freie Plaetze),
+// "stapel" (neue Dose unter den Stapel auf lage). Ohne f und ohne nur = neues Fach auf dem freien Platz lage.
 function fachDialog(f, lage, nur) {
   const ort = ortVon(f ? f.lage.ort : lage.ort);
-  const wort = fachWort(ort);
+  const wort = fachWort(ort), platzModus = nur === "platz" || nur === "raus";
+  const st0 = nur === "stapel" ? stapelAn(lage) : null;
+  if (nur === "stapel" && !st0) return hinweis("Diesen Stapel gibt es so nicht mehr.");
   const name = el("input", { value: f ? f.name : "", maxLength: 60, placeholder: "z. B. Nudeln", autocomplete: "off" });
   let platzSel = null;
-  const ablage = !f && el("input", { type: "checkbox" }); // v6.4; v6.24 K10: auch bei 1 Spalte (Haengeregal 1 x 1)
+  const ablage = !f && !st0 && el("input", { type: "checkbox" }); // v6.4; v6.24 K10: auch bei 1 Spalte (Haengeregal 1 x 1)
   // v6.24 Farbwaehler (nur Kuechenschublade, nicht beim Platz aendern): 8 feste Farben + "keine". Neu = "keine" vorbelegt.
   // wahl haelt den gespeicherten Schluessel unveraendert (auch einen unbekannten), gezeigt wird nur, was die Tabelle kennt.
   let wahl = f ? f.farbe ?? null : null;
-  const farbKnoepfe = ort && ort.stil === "dosen" && nur !== "platz" && [...Object.keys(H.DECKEL), null].map((k) => {
+  const farbKnoepfe = ort && ort.stil === "dosen" && !platzModus && [...Object.keys(H.DECKEL), null].map((k) => {
     const d = H.deckel(k);
     const b = el("button", { type: "button", className: "farbwahl" + (k ? "" : " keine"), role: "radio", "aria-label": d.wort, title: d.wort,
       onclick: () => { wahl = k; zeigeWahl(); } });
@@ -2371,50 +2392,85 @@ function fachDialog(f, lage, nur) {
   });
   const zeigeWahl = () => farbKnoepfe && farbKnoepfe.forEach((b) => b.setAttribute("aria-checked", String((b.dataset.farbe === "keine" ? null : b.dataset.farbe) === wahl)));
   zeigeWahl();
-  if (f && nur === "platz") { // Platz: eigener + alle freien Plaetze aller Orte
+  if (f && platzModus) { // Platz: eigener + alle freien Plaetze aller Orte (v6.27 "raus": nur freie)
     const opt = f.ortKlaeren ? [el("option", { value: "" }, "– kein gültiger Platz –")] : [];
+    const dose = stapelbar(f);
     for (const o of orteSichtbar()) for (let r = 0; r < o.reihen; r++) for (let c = 0; c < o.spalten; c++) {
       const meins = !f.ortKlaeren && f.lage.ort === o.id && f.lage.reihe === r && f.lage.spalte === c;
       // v6.7: hohes Fach nur auf genug freien Platz; einfache nicht in/neben hohe Faecher
-      if (!meins && (hoeheVon(f) > 1 ? !platzFrei(o.id, r, c, f.id, hoeheVon(f)) : faecherUeber(o.id, r, c, f.id).some((x) => hoeheVon(x) > 1))) continue;
+      if (nur === "raus" ? !platzFrei(o.id, r, c, f.id) : !meins && (hoeheVon(f) > 1 ? !platzFrei(o.id, r, c, f.id, hoeheVon(f)) : faecherUeber(o.id, r, c, f.id).some((x) => hoeheVon(x) > 1))) continue;
       const da = faecherAn(o.id, r, c, f.id); // v5.3: belegte Plaetze auch (daneben legen, wie nach dem Aufteilen)
+      // v6.27: in der Kuechenschublade wird nur gestapelt (Dose auf Dose), nichts daneben gelegt
+      const stapel = !meins && da.length > 0 && o.stil === "dosen";
+      if (stapel && !(dose && da.every(stapelbar))) continue;
       opt.push(el("option", { value: JSON.stringify({ ort: o.id, reihe: r, spalte: c }), selected: meins },
-        o.name + " · " + platzName(o, r, c) + (meins ? " (jetzt)" : da.length ? " (neben „" + da.map((x) => x.name).join("“, „") + "“)" : " (frei)")));
+        o.name + " · " + platzName(o, r, c) + (meins ? " (jetzt)" : stapel ? " (Stapel mit „" + da.sort(H.stapelOrdnung).map((x) => x.name).join("“, „") + "“)"
+          : da.length ? " (neben „" + da.map((x) => x.name).join("“, „") + "“)" : " (frei)")));
     }
     platzSel = el("select", null, opt);
   }
-  dialog(!f ? "Neue " + wort : nur === "platz" ? "„" + kuerze(f.name, 30) + "“: Platz ändern" : wort + (farbKnoepfe ? ": Name und Farbe" : " umbenennen"), [
-    !f && el("p", { className: "klein" }, ort.name + " · " + platzName(ort, lage.reihe, lage.spalte)),
-    nur !== "platz" && feld("Name", name),
+  const titel = st0 ? "Dose darunter stapeln" : !f ? "Neue " + wort : nur === "raus" ? "„" + kuerze(f.name, 30) + "“ aus dem Stapel nehmen"
+    : nur === "platz" ? "„" + kuerze(f.name, 30) + "“: Platz ändern" : wort + (farbKnoepfe ? ": Name und Farbe" : " umbenennen");
+  dialog(titel, [
+    !f && el("p", { className: "klein" }, ort.name + " · " + platzName(ort, lage.reihe, lage.spalte) + (st0 ? " · kommt unter „" + st0[st0.length - 1].name + "“" : "")),
+    !platzModus && feld("Name", name),
     farbKnoepfe && el("div", { className: "feld" }, el("span", { id: "farbwahl-titel" }, "Deckelfarbe"),
       el("div", { className: "farbreihe", role: "radiogroup", "aria-labelledby": "farbwahl-titel" }, farbKnoepfe)),
     ablage && el("label", { className: "schalter" }, ablage, "🧺 Ablage ohne Kiste – die Produkte stehen direkt im Regal"),
-    platzSel && feld("Platz", platzSel),
-    platzSel && el("p", { className: "klein" }, "Belegter Platz = daneben legen. Der Inhalt zieht mit um. Tauschen: in der Zeichnung auf das andere Fach ziehen."),
+    platzSel && feld(nur === "raus" ? "Freier Platz" : "Platz", platzSel),
+    platzSel && el("p", { className: "klein" }, nur === "raus" ? "Die Dose steht danach allein, der Inhalt zieht mit um."
+      : (ort && ort.stil === "dosen" ? "Stapel = darunter stapeln, sonst daneben legen." : "Belegter Platz = daneben legen.") + " Der Inhalt zieht mit um. Tauschen: in der Zeichnung auf das andere Fach ziehen."),
   ], [
     ["Speichern", async (melde, schliessen) => {
       if (f && !fachVon(f.id)) return melde("Dieses Fach gibt es nicht mehr.");
-      const werte = nur === "platz" ? {} : { name: name.value.trim() };
+      if (platzSel) return platzSpeichern(fachVon(f.id), platzSel.value, nur, melde, schliessen);
+      const werte = { name: name.value.trim() };
       if (ablage && ablage.checked) werte.offen = true; // nur wenn gewaehlt: Kisten bleiben ohne neues Feld
       if (farbKnoepfe && wahl !== (f ? f.farbe ?? null : null)) werte.farbe = wahl; // nur geaenderte, neu nur wenn gewaehlt
       if (!f) werte.lage = lage;
-      else if (platzSel && platzSel.value) {
-        const l = JSON.parse(platzSel.value);
-        if (l.ort !== f.lage.ort || l.reihe !== f.lage.reihe || l.spalte !== f.lage.spalte) {
-          if (nameDort(f.name, l, f.id)) return melde("Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen.");
-          if (hoeheVon(f) > 1 && !platzFrei(l.ort, l.reihe, l.spalte, f.id, hoeheVon(f))) return melde("Dort ist nicht genug Platz für dieses hohe Fach.");
-          werte.lage = l;
-        }
-      }
       const fe = H.pruefe("fach", werte);
       if (fe) return melde(fe);
+      if (st0) { // v6.27 K7: neue Dose kommt unter den Stapel - gegen den Stand beim Speichern
+        const st = stapelAn(lage);
+        if (!st) return melde("Diesen Stapel gibt es so nicht mehr – bitte neu öffnen.");
+        if (nameDort(werte.name, lage)) return melde("Im Stapel gibt es schon eine Dose mit diesem Namen – bitte anderen Namen wählen.");
+        const s = H.stapelDazuSchritte(st, [{ werte }], lage);
+        if (typeof s === "string") return melde(s);
+        if (await tun(s)) schliessen();
+        return;
+      }
       if (!f) { if (await tun([{ typ: "neu", art: "fach", werte }])) schliessen(); return; }
       const daten = Object.entries(werte).filter(([k, w]) => k !== "name" || w !== f.name)
         .map(([k, w]) => ({ typ: "feld", art: "fach", ziel: f.id, feld: k, wert: w }));
       if (!daten.length || (await tun(daten))) schliessen();
     }],
   ]);
-  if (nur !== "platz") name.focus();
+  if (!platzModus) name.focus();
+}
+// Platz aendern / aus dem Stapel nehmen (nur diese Dose), immer gegen den AKTUELLEN Stand (f = fachVon).
+// v6.27: auf einen Stapel = darunter stapeln; wer einen Stapel verlaesst, verliert seine ebene (H.verlassenSchritte).
+async function platzSpeichern(f, wert, nur, melde, schliessen) {
+  if (!wert) return nur === "raus" ? melde("Kein freier Platz – bitte erst einen frei machen.") : schliessen();
+  const l = JSON.parse(wert);
+  if (gleicheLage(l, f.lage)) return schliessen();
+  if (!lageGueltig(l)) return melde("Diesen Platz gibt es nicht mehr.");
+  if (nameDort(f.name, l, f.id)) return melde("Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen.");
+  if (hoeheVon(f) > 1 && !platzFrei(l.ort, l.reihe, l.spalte, f.id, hoeheVon(f))) return melde("Dort ist nicht genug Platz für dieses hohe Fach.");
+  const o = ortVon(l.ort), da = faecherAn(l.ort, l.reihe, l.spalte, f.id);
+  if (nur === "raus") {
+    if (!platzFrei(l.ort, l.reihe, l.spalte, f.id)) return melde("Der Platz ist inzwischen belegt – bitte einen anderen wählen.");
+    schliessen();
+    return lagenSetzen([[f.id, l]], "„" + f.name + "“ aus dem Stapel → " + o.name + " · " + platzName(o, l.reihe, l.spalte), H.verlassenSchritte(f));
+  }
+  const lageV = { typ: "feld", art: "fach", ziel: f.id, feld: "lage", wert: l };
+  let s = H.verlassenSchritte(f);
+  if (o.stil === "dosen" && da.length) {
+    const st = stapelbar(f) && stapelAn(l);
+    if (!st) return melde("Dort steht inzwischen etwas anderes – bitte einen anderen Platz wählen.");
+    s = H.stapelDazuSchritte(st, [f], l);
+    if (typeof s === "string") return melde(s);
+  }
+  if (await tun([lageV, ...s])) schliessen();
 }
 
 // ==== v5.2: Fach-Menue (Tobias 15.11.): lange auf ein Fach druecken ====
@@ -2426,8 +2482,9 @@ function fachMenue(alt) {
   const f = fachVon(alt.id); // gezeichnetes Objekt kann veraltet sein (Abgleich waehrend des Drueckens)
   if (!f || f.geloescht) return hinweis("Dieses Fach gibt es nicht mehr.");
   const o = ortVon(f.lage.ort), wort = fachArt(f, o), n = stueckImFach(f.id), nb = nachbarn(f);
+  const ds = !!o && o.stil === "dosen", st = stapelVon(f), imStapel = !!st && st.length > 1; // v6.27
   menue(wort + " „" + kuerze(f.name, 30) + "“", [el("p", { className: "klein" },
-    (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], {
+    (f.ortKlaeren || !o ? "ohne gültigen Platz" : o.name + " · " + platzName(o, f.lage.reihe, f.lage.spalte) + stapelText(f)) + " · " + (n ? n + (n === 1 ? " Sache" : " Sachen") : "leer"))], {
     oben: [
       // v6.16: beim Bauen liegt das Menue noch nicht auf dem Stapel -> oberste Ebene pruefen (vorher stand „Öffnen“
       // auch in der eigenen Schublade und oeffnete sie ein zweites Mal)
@@ -2436,7 +2493,17 @@ function fachMenue(alt) {
       ["⇄ Platz ändern", weiter(() => fachDialog(f, null, "platz"))],
     ],
     liste: [
-      !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
+      // v6.27: im Stil dosen waere ein zweites Fach auf dem Platz ein Stapel -> statt Aufteilen "Darunter stapeln"
+      !f.ortKlaeren && !ds && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
+      st && ["📚 Dose darunter stapeln", weiter(() => fachDialog(null, lageKopie(f), "stapel"))],
+      // auch fuer die oberste, wenn die Reihenfolge unklar ist (gleiche ebene, M1): ein Tipp ordnet den ganzen Stapel
+      imStapel && (st[0].id !== f.id || H.stapelUnklar(st)) && ["⤒ Nach oben holen", async (melde, schliessen) => {
+        const s = stapelVon(fachVon(f.id));
+        if (!s || s.length < 2) return melde("Die Dose ist inzwischen nicht mehr im Stapel.");
+        const schritte = H.nachObenSchritte(s, f.id);
+        if (!schritte.length || (await tun(schritte))) schliessen();
+      }],
+      imStapel && ["⤓ Aus dem Stapel nehmen", weiter(() => fachDialog(f, null, "raus"))],
       nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
       // v6.26: Dosen sind alle gleich gross, nur Ablagen wachsen. Verkleinern bleibt (Codex R3 #2: hohe Dose aus altem
       // Handy/Abgleich oder aus einer umgewandelten Ablage muss wieder klein werden koennen).
@@ -2448,9 +2515,24 @@ function fachMenue(alt) {
       }],
     ],
     gefahr: [["🗑 Löschen", async (melde, schliessen) => {
-      if (!confirm(wort + " „" + f.name + "“ löschen?" + (n ? "\n\n" + n + " Einträge darin kommen in „Ort klären“, nichts geht verloren." : ""))) return;
+      const oben = stapelVon(fachVon(f.id)); // aktueller Stand
+      if (!confirm(wort + " „" + f.name + "“ löschen?" + (n ? "\n\n" + n + " Einträge darin kommen in „Ort klären“, nichts geht verloren." : "") +
+        (oben && oben.length > 1 && oben[0].id === f.id ? "\n\nDie Dose darunter wird oben sichtbar." : ""))) return;
       if (await tun([{ typ: "feld", art: "fach", ziel: f.id, feld: "geloescht", wert: true }])) fachWegSchliessen(f, schliessen);
     }]],
+  });
+}
+// v6.27: Antippen eines Stapels = Auswahl, oberste zuerst. Der Stapel wird beim Tipp aus dem aktuellen Stand bestimmt.
+function stapelAuswahl(l) {
+  const st = stapelAn(l), o = ortVon(l.ort);
+  if (!st) return hinweis("Diesen Stapel gibt es nicht mehr.");
+  if (st.length === 1) return oeffne({ art: "fach", id: st[0].id });
+  menue("Stapel mit " + st.length + " Dosen", [el("p", { className: "klein" }, o.name + " · " + platzName(o, l.reihe, l.spalte)),
+    H.stapelUnklar(st) && el("p", { className: "klein" }, "Reihenfolge unklar – „Nach oben holen“ ordnet")], {
+    liste: [
+      ...st.map((f, i) => ["● " + f.name + " · " + sachenText(stueckImFach(f.id)) + " · " + (i ? i + 1 + "." : "oben"), weiter(() => oeffne({ art: "fach", id: f.id }))]),
+      ["📚 Dose darunter stapeln", weiter(() => fachDialog(null, l, "stapel"))],
+    ],
   });
 }
 
@@ -2546,9 +2628,11 @@ const fachZug = (f) => zug(() => [el("span", { className: "bild" }, "🗄️"), 
 }, (z) => (z.dataset.platz ? fachAufPlatz(f.id, JSON.parse(z.dataset.platz)) : fachAufFach(f.id, z.dataset.fach)));
 
 // Lagen mehrerer Faecher in EINEM Schritt setzen. Rueckgaengig nur, wenn noch alles so liegt und die alten Plaetze gelten.
-async function lagenSetzen(neu, text) {
+// v6.27: extra = weitere Vorgaenge im selben Schritt (ebene beim Stapeln/Verlassen); Rueckgaengig stellt nur die Lagen zurueck
+// (ebene ist reine Anzeige-Reihenfolge, Bauplan Ablaeufe).
+async function lagenSetzen(neu, text, extra = []) {
   const alt = neu.map(([id]) => [id, lageKopie(fachVon(id))]);
-  if (!(await tun(neu.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage }))))) return;
+  if (!(await tun([...neu.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })), ...extra]))) return;
   untenZeigen(text, "Rückgängig", async () => {
     if (!neu.every(([id, lage]) => fachGueltig(id) && gleicheLage(fachVon(id).lage, lage)))
       return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
@@ -2557,33 +2641,46 @@ async function lagenSetzen(neu, text) {
     if (await tun(alt.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })))) untenZeigen("Zurück verschoben");
   });
 }
+// v6.27 K6/R9: im Stil dosen zieht der ganze Stapel - Kennungen beim Loslassen aus dem aktuellen Stand, nie aus der Zeichnung.
+const zugGruppe = (f) => stapelVon(f) || [f];
+const gruppeName = (g) => (g.length > 1 ? "Stapel „" + g[0].name + "“ (" + g.length + " Dosen)" : "„" + g[0].name + "“");
 function fachAufPlatz(id, lage) {
   if (!fachGueltig(id)) return hinweis("Dieses Fach gibt es nicht mehr.");
   if (!lageGueltig(lage)) return hinweis("Diesen Platz gibt es nicht mehr.");
-  const h = hoeheVon(fachVon(id));
+  const h = hoeheVon(fachVon(id)), g = zugGruppe(fachVon(id));
   if (!platzFrei(lage.ort, lage.reihe, lage.spalte, id, h))
     return hinweis(h > 1 ? "Dort ist nicht genug Platz für ein Fach über " + h + " Reihen." : "Der Platz ist inzwischen belegt – bitte nochmal ziehen.");
   const o = ortVon(lage.ort);
-  lagenSetzen([[id, lage]], "„" + fachVon(id).name + "“ → " + o.name + " · " + platzName(o, lage.reihe, lage.spalte));
+  lagenSetzen(g.map((x) => [x.id, lage]), gruppeName(g) + " → " + o.name + " · " + platzName(o, lage.reihe, lage.spalte));
 }
 function fachAufFach(id, zielId) {
   if (!fachGueltig(id) || !fachGueltig(zielId)) return hinweis("Dieses Fach gibt es nicht mehr.");
   if (hoeheVon(fachVon(id)) > 1 || hoeheVon(fachVon(zielId)) > 1) return hinweis("Hohe Fächer bitte auf einen freien Platz ziehen – Tauschen/Daneben geht nur mit einfachen.");
-  // Beide Knoepfe pruefen erst den aktuellen Stand; paare(x, y) -> [[id, lage], ...] oder Fehlertext.
+  // Beide Knoepfe pruefen erst den aktuellen Stand; paare(x, y) -> [[id, lage], ...] oder { paare, extra } oder Fehlertext.
   const knopf = (text, paare, meldung) => [text, (melde, schliessen) => {
     if (!fachGueltig(id) || !fachGueltig(zielId)) return melde("Ein Fach gibt es nicht mehr.");
     if (hoeheVon(fachVon(id)) > 1 || hoeheVon(fachVon(zielId)) > 1) return melde("Inzwischen ist eins der Fächer hoch – bitte auf einen freien Platz ziehen.");
     const x = fachVon(id), y = fachVon(zielId), r = paare(x, y);
     if (typeof r === "string") return melde(r);
     schliessen();
-    lagenSetzen(r, meldung(x, y));
+    lagenSetzen(r.paare || r, meldung(x, y), r.extra);
   }];
-  dialog("„" + kuerze(fachVon(id).name, 25) + "“ auf „" + kuerze(fachVon(zielId).name, 25) + "“", [
-    el("p", { className: "klein" }, "Der Inhalt zieht jeweils mit um."),
+  // v6.27: in der Kuechenschublade statt "Daneben legen" -> "Darunter stapeln" (nur Dose auf Dose)
+  const dosen = ortVon(fachVon(zielId).lage.ort)?.stil === "dosen", q0 = zugGruppe(fachVon(id));
+  dialog(gruppeName(q0) + " auf „" + kuerze(fachVon(zielId).name, 25) + "“", [
+    el("p", { className: "klein" }, (q0.length > 1 ? "Der ganze Stapel zieht mit. " : "") + "Der Inhalt zieht jeweils mit um."),
   ], [
-    knopf("⇄ Plätze tauschen", (x, y) => [[id, lageKopie(y)], [zielId, lageKopie(x)]], (x, y) => "„" + x.name + "“ ⇄ „" + y.name + "“ getauscht"),
-    knopf("⊕ Daneben legen", (x, y) => (nameDort(x.name, y.lage, id) ? "Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen." : [[id, lageKopie(y)]]),
+    knopf("⇄ Plätze tauschen", (x, y) => [...zugGruppe(x).map((f) => [f.id, lageKopie(y)]), ...zugGruppe(y).map((f) => [f.id, lageKopie(x)])],
+      (x, y) => gruppeName(zugGruppe(x)) + " ⇄ „" + y.name + "“ getauscht"),
+    !dosen && knopf("⊕ Daneben legen", (x, y) => (nameDort(x.name, y.lage, id) ? "Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen." : [[id, lageKopie(y)]]),
       (x, y) => "„" + x.name + "“ liegt jetzt neben „" + y.name + "“"),
+    dosen && stapelbar(fachVon(id)) && stapelVon(fachVon(zielId)) && knopf("📚 Darunter stapeln", (x, y) => {
+      const q = zugGruppe(x), z = stapelVon(y);
+      if (!z || !q.every(stapelbar)) return "Stapeln geht nur Dose auf Dose – bitte nochmal ziehen.";
+      if (q.some((f) => nameDort(f.name, y.lage))) return "Im Stapel gibt es schon eine Dose mit diesem Namen – bitte erst umbenennen.";
+      const extra = H.stapelDazuSchritte(z, q, y.lage);
+      return typeof extra === "string" ? extra : { paare: q.map((f) => [f.id, lageKopie(y)]), extra };
+    }, (x, y) => gruppeName(zugGruppe(x)) + " liegt jetzt unter „" + y.name + "“"),
   ]);
 }
 

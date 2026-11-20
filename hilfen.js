@@ -96,13 +96,58 @@
     }
     return m;
   }
-  // "Gefrierschrank – Schublade 3"; ohne gueltigen Platz "Ort klären".
+  // "Gefrierschrank – Schublade 3"; ohne gueltigen Platz "Ort klären". v6.27: untere Dose im Stapel "(unter „Reis“)" (R13).
   function fundort(e, orte, faecher) {
     const f = e.fach ? faecher.find((x) => x.id === e.fach) : null;
     const o = f ? orte.find((x) => x.id === f.lage.ort) : null;
     if (e.ortKlaeren || !f || !o) return "Ort klären";
-    return o.name + " – " + f.name;
+    const st = stapelVon(f, orte, faecher);
+    return o.name + " – " + f.name + (st && st[0].id !== f.id ? " (unter „" + st[0].name + "“)" : "");
   }
+
+  // ---- v6.27 Stapel in der Kuechenschublade (Bauplan Kuechenschublade, Abschnitt 2 + Fassung 3) ----
+  // Stapel = alle Dosen auf einem Platz eines Orts im Stil "dosen". Stapeln nur mit Dosen (keine Ablage) auf 1 Platz.
+  // Reihenfolge: ebene aufsteigend (null = 0 = oben), Gleichstand nach Name, dann Kennung (wie nachName in app.js, M1).
+  const STAPEL_MAX = 10; // Codex R2 #5: ebene 1-9, also hoechstens 10 Dosen
+  const stapelbar = (f) => !f.offen && (f.hoch || 1) === 1;
+  const stapelOrdnung = (a, b) => (a.ebene || 0) - (b.ebene || 0) || a.name.localeCompare(b.name, "de", { numeric: true }) || (a.id < b.id ? -1 : 1);
+  // Dosen auf dem Platz von f, oberste zuerst (auch [f] allein). null: kein Stil dosen, f ohne Platz, oder auf dem Platz
+  // steht etwas, das nicht stapelbar ist (dann zeichnet die App wie heute nebeneinander).
+  function stapelVon(f, orte, faecher) {
+    if (!f || f.geloescht || f.ortKlaeren || !stapelbar(f)) return null;
+    const o = orte.find((x) => x.id === f.lage.ort);
+    if (!o || o.stil !== "dosen") return null;
+    const s = faecher.filter((g) => !g.geloescht && !g.ortKlaeren && g.lage.ort === f.lage.ort && g.lage.reihe === f.lage.reihe && g.lage.spalte === f.lage.spalte);
+    return s.every(stapelbar) ? s.sort(stapelOrdnung) : null;
+  }
+  // Zwei Dosen mit gleicher ebene (zwei Handys gleichzeitig, M1): nur Anzeige, nichts wird automatisch geschrieben.
+  const stapelUnklar = (st) => st.some((f, i) => i > 0 && (f.ebene || 0) === (st[i - 1].ebene || 0));
+  const ebeneSchritt = (f, wert) => ({ typ: "feld", art: "fach", ziel: f.id, feld: "ebene", wert });
+  // Lueckenlos neu nummerieren in dieser Reihenfolge (oberste null, dann 1, 2 ...), nur Werte, die sich aendern.
+  const neuNummerieren = (geordnet) => geordnet.flatMap((f, i) => ((f.ebene ?? null) === (i || null) ? [] : [ebeneSchritt(f, i || null)]));
+  // "Nach oben holen": diese Dose oben, der Rest in der angezeigten Reihenfolge (raeumt doppelte Ebenen mit auf).
+  function nachObenSchritte(st, id) {
+    const s = [...st].sort(stapelOrdnung), f = s.find((x) => x.id === id);
+    return f ? neuNummerieren([f, ...s.filter((x) => x !== f)]) : [];
+  }
+  // Dosen unten an den Stapel st (jetziger Stand) legen (K7). dazu = vorhandene Faecher (bekommen hier nur ebene, lage setzt
+  // der Aufrufer) oder { werte } fuer eine neue Dose (bekommt lage + ebene). ebene = hoechste + 1; waere das > 9, wird der
+  // Stapel im selben Schritt neu nummeriert (Codex R2 #5). Liefert Vorgaenge oder einen Fehlertext (> 10 Dosen).
+  function stapelDazuSchritte(st, dazu, lage) {
+    if (st.length + dazu.length > STAPEL_MAX) return "Ein Stapel hat höchstens " + STAPEL_MAX + " Dosen.";
+    const s = [...st].sort(stapelOrdnung);
+    let max = s.reduce((m, f) => Math.max(m, f.ebene || 0), 0);
+    const aus = [];
+    if (max + dazu.length > 9) { aus.push(...neuNummerieren(s)); max = s.length - 1; }
+    dazu.forEach((d, i) => {
+      const ebene = max + 1 + i;
+      if (!d.id) aus.push({ typ: "neu", art: "fach", werte: { ...d.werte, lage, ebene } });
+      else if (d.ebene !== ebene) aus.push(ebeneSchritt(d, ebene));
+    });
+    return aus;
+  }
+  // Dose verlaesst ihren Stapel (freier Platz, anderer Ort): ebene weg, aber nur wenn gesetzt.
+  const verlassenSchritte = (f) => (f.ebene != null ? [ebeneSchritt(f, null)] : []);
   // Text fuer die Liste: "abgelaufen seit 3 Tagen", "heute", "morgen", "in 5 Tagen".
   function baldText(tage) {
     if (tage < -1) return "abgelaufen seit " + -tage + " Tagen";
@@ -663,7 +708,8 @@
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, KUECHE, kuechePlaetze, VORLAGEN, vorlageFuer, vorlageSchritte, DECKEL, deckel, etikettZeilen, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe,
-    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte };
+    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte,
+    STAPEL_MAX, stapelbar, stapelOrdnung, stapelVon, stapelUnklar, nachObenSchritte, stapelDazuSchritte, verlassenSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -176,4 +176,69 @@ fall("Etikett zweizeilig: Umbruch an /, Leerzeichen, -, sonst in der Mitte", () 
   assert.deepStrictEqual(H.etikettZeilen("Vollkorn-Spaghetti", 13), ["Vollkorn-", "Spaghetti"]);
 });
 
+// ---- v6.27 Stapel (Abschnitt 2) ----
+const ORTE = [{ id: ORT, name: "Küchenschublade", reihen: 4, spalten: 5, stil: "dosen" }, { id: "regalaaaa1-1", name: "Regal", reihen: 2, spalten: 2 }];
+const dose = (id, name, ebene, mehr) => fach(id, name, 1, 1, { ...(ebene ? { ebene } : {}), ...mehr });
+const reihenfolge = (st) => st.map((f) => f.name).join(",");
+
+fall("stapelVon/stapelOrdnung: ebene aufsteigend (fehlt = oben), Gleichstand Name -> Kennung, nur Stil dosen, nur Dosen", () => {
+  const ff = [dose("d3", "Grieß", 2), dose("d1", "Reis"), dose("d2", "Mehl", 1), fach("x1", "Woanders", 0, 0)];
+  assert.strictEqual(reihenfolge(H.stapelVon(ff[0], ORTE, ff)), "Reis,Mehl,Grieß");
+  assert.strictEqual(reihenfolge(H.stapelVon(ff[3], ORTE, ff)), "Woanders", "allein = Stapel aus 1");
+  const gleich = [dose("b", "Zucker", 1), dose("a", "Zucker", 1), dose("c", "Mehl", 1)];
+  assert.deepStrictEqual(H.stapelVon(gleich[0], ORTE, gleich).map((f) => f.id), ["c", "a", "b"], "M1: Name, dann Kennung");
+  assert.ok(H.stapelUnklar(H.stapelVon(gleich[0], ORTE, gleich)) && !H.stapelUnklar(H.stapelVon(ff[0], ORTE, ff)));
+  const mitAblage = [dose("d1", "Reis"), dose("d2", "Tüten", 0, { offen: true })];
+  assert.strictEqual(H.stapelVon(mitAblage[0], ORTE, mitAblage), null, "Ablage auf dem Platz -> kein Stapel (nebeneinander)");
+  assert.strictEqual(H.stapelVon(mitAblage[1], ORTE, mitAblage), null, "Ablage stapelt nicht");
+  assert.strictEqual(H.stapelVon(dose("h", "Hoch", 0, { hoch: 2 }), ORTE, []), null, "hohes Fach stapelt nicht");
+  const regal = [{ id: "k1", name: "A", lage: { ort: "regalaaaa1-1", reihe: 0, spalte: 0 } }, { id: "k2", name: "B", lage: { ort: "regalaaaa1-1", reihe: 0, spalte: 0 } }];
+  assert.strictEqual(H.stapelVon(regal[0], ORTE, regal), null, "Regal/Medizinschrank: kein Stapel");
+  const weg = [dose("d1", "Reis"), dose("d2", "Mehl", 1, { geloescht: true }), dose("d3", "Zucker", 2, { ortKlaeren: true })];
+  assert.strictEqual(reihenfolge(H.stapelVon(weg[0], ORTE, weg)), "Reis", "geloeschte und Ort-klaeren zaehlen nicht");
+});
+
+fall("nachObenSchritte: oberste null, Rest 1, 2 ... in angezeigter Reihenfolge, nur geaenderte", () => {
+  const st = H.stapelVon(dose("d1", "Reis"), ORTE, [dose("d1", "Reis"), dose("d2", "Mehl", 1), dose("d3", "Grieß", 2)]);
+  assert.deepStrictEqual(H.nachObenSchritte(st, "d3"), [
+    { typ: "feld", art: "fach", ziel: "d3", feld: "ebene", wert: null },
+    { typ: "feld", art: "fach", ziel: "d1", feld: "ebene", wert: 1 },
+    { typ: "feld", art: "fach", ziel: "d2", feld: "ebene", wert: 2 }]);
+  assert.deepStrictEqual(H.nachObenSchritte(st, "d2").map((v) => [v.ziel, v.wert]), [["d2", null], ["d1", 1]], "Grieß bleibt 2 -> nicht geschrieben");
+  assert.deepStrictEqual(H.nachObenSchritte(st, "d1"), [], "schon oben, lueckenlos -> nichts");
+  const gleich = [dose("a", "Zucker", 3), dose("b", "Mehl", 3)];
+  assert.deepStrictEqual(H.nachObenSchritte(gleich, "a").map((v) => [v.ziel, v.wert]), [["a", null], ["b", 1]], "M1: raeumt doppelte Ebenen auf");
+  assert.deepStrictEqual(H.nachObenSchritte(gleich, "fehlt"), []);
+  assert.ok(H.nachObenSchritte(st, "d3").every((v) => M.FELDER.fach.ebene(v.wert)), "nur gueltige Ebenen (null, 1-9)");
+});
+
+fall("stapelDazuSchritte: neue Dose max+1 mit lage, vorhandene nur ebene, > 9 neu nummerieren, > 10 abgelehnt", () => {
+  const lage = { ort: ORT, reihe: 1, spalte: 1 };
+  const st = [dose("d1", "Reis"), dose("d2", "Mehl", 3)];
+  assert.deepStrictEqual(H.stapelDazuSchritte(st, [{ werte: { name: "Grieß fein", farbe: "weiss" } }], lage),
+    [{ typ: "neu", art: "fach", werte: { name: "Grieß fein", farbe: "weiss", lage, ebene: 4 } }]);
+  const zwei = [dose("z1", "Zucker"), dose("z2", "Salz", 1)];
+  assert.deepStrictEqual(H.stapelDazuSchritte(st, zwei, lage).map((v) => [v.ziel, v.wert]), [["z1", 4], ["z2", 5]], "gezogener Stapel behaelt seine Reihenfolge");
+  assert.deepStrictEqual(H.stapelDazuSchritte(st, [dose("z", "Zucker", 4)], lage), [], "ebene stimmt schon -> nichts");
+  // Codex R2 #5: max 9 -> erst lueckenlos neu nummerieren, dann darunter
+  const hoch = [dose("a", "A"), dose("b", "B", 5), dose("c", "C", 9)];
+  const s = H.stapelDazuSchritte(hoch, [{ werte: { name: "Neu" } }], lage);
+  assert.deepStrictEqual(s.map((v) => v.typ === "neu" ? ["neu", v.werte.ebene] : [v.ziel, v.wert]), [["b", 1], ["c", 2], ["neu", 3]]);
+  assert.ok(s.every((v) => M.FELDER.fach.ebene(v.typ === "neu" ? v.werte.ebene : v.wert)), "alle Ebenen gueltig");
+  const neun = Array.from({ length: 9 }, (_, i) => dose("n" + i, "N" + i, i || undefined));
+  const s9 = H.stapelDazuSchritte(neun, [{ werte: { name: "Zehnte" } }], lage);
+  assert.deepStrictEqual(s9, [{ typ: "neu", art: "fach", werte: { name: "Zehnte", lage, ebene: 9 } }], "10. Dose bekommt ebene 9");
+  assert.match(H.stapelDazuSchritte([...neun, dose("n9", "N9", 9)], [{ werte: { name: "Elfte" } }], lage), /höchstens 10 Dosen/);
+  assert.match(H.stapelDazuSchritte(neun, zwei, lage), /höchstens 10/, "9 + 2 > 10");
+});
+
+fall("verlassenSchritte: ebene null nur wenn gesetzt; fundort nennt die Dose darueber", () => {
+  assert.deepStrictEqual(H.verlassenSchritte(dose("d", "Reis", 2)), [{ typ: "feld", art: "fach", ziel: "d", feld: "ebene", wert: null }]);
+  assert.deepStrictEqual(H.verlassenSchritte(dose("d", "Reis")), []);
+  const ff = [dose("d1", "Grieß"), dose("d2", "Grieß fein", 1)];
+  assert.strictEqual(H.fundort({ fach: "d2" }, ORTE, ff), "Küchenschublade – Grieß fein (unter „Grieß“)");
+  assert.strictEqual(H.fundort({ fach: "d1" }, ORTE, ff), "Küchenschublade – Grieß", "oberste ohne Zusatz");
+  assert.strictEqual(H.fundort({ fach: "d1" }, ORTE, [ff[0]]), "Küchenschublade – Grieß", "allein ohne Zusatz");
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

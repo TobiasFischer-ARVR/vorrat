@@ -282,6 +282,10 @@ main button.ikon { background: transparent; color: #1d6b49; font-size: 1.35rem; 
 .frei.ds text { font-size: 20px; fill: #d6d8da; }
 .frei.ds rect { stroke: #c9cccf; fill: #ffffff14; }
 .punktzahl.ds { font-size: 9.5px; }
+/* v6.27 Stapel: versetzte Umrisse der Dosen darunter + Abzeichen "+n" oben links */
+.stapelrand { fill: #3a3d41; stroke: #d0d3d6; stroke-width: 1.2; }
+.stapelzahl rect { fill: #1d2b24; stroke: #fff; stroke-width: 1.2; }
+.stapelzahl text { font-size: 9px; font-weight: 800; fill: #fff; pointer-events: none; }
 .farbreihe { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
 .fenster button.farbwahl { width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 2px solid #0004; background: #fff; color: #44524b; font-size: .7rem; }
 .fenster button.farbwahl.keine::after { content: "keine"; }
