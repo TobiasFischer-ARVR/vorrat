@@ -71,6 +71,8 @@
   const lageGueltig = (w) => objekt(w) && Object.keys(w).length === 3 && kennung(w.ort) &&
     ((w.reihe === null && w.spalte === null) || (ganzzahl(w.reihe, 0, 19) && ganzzahl(w.spalte, 0, 19)));
 
+  const ANBRUCH_REST = [100, 75, 50, 25, 10]; // v6.23: Fuellstand in Prozent (voll, 3/4, 1/2, 1/4, fast leer)
+
   // Erlaubte Felder je Art mit Pruefregel. Unbekanntes Feld = Fehler.
   const FELDER = {
     ort: {
@@ -98,6 +100,10 @@
       frist: (w) => w === null || ganzzahl(w, 1, 60), // Monate "essen bis" ab Einfrierdatum
       fach: kennungOderNull,
       code: (w) => w === null || codeGueltig(w), // v6: Strichcode (Produktbild), fehlt bei alten Eintraegen
+      // v6.23 Teilmengen: offene Packung, EIN Feld (seit + Fuellstand gleichen sich zusammen ab). Genau diese zwei eigenen
+      // Schluessel, sonst Fehler; fehlt/null = zu. Nur geschrieben, wenn eine Packung geoeffnet wird.
+      anbruch: (w) => w === null || (objekt(w) && Object.keys(w).length === 2 && Object.hasOwn(w, "seit") && Object.hasOwn(w, "rest") &&
+        datumGueltig(w.seit) && ANBRUCH_REST.includes(w.rest)),
       geloescht: bool,
     },
     // Kein "geloescht": Entfernen und Ersetzen sind dasselbe Feld, der juengere Stempel gewinnt (R2 #1).
@@ -372,7 +378,7 @@
   }
 
   const Modell = {
-    SCHEMA, FELDER, gtinOk, pznOk, codeGueltig, namensSchluessel,
+    SCHEMA, FELDER, ANBRUCH_REST, gtinOk, pznOk, codeGueltig, namensSchluessel,
     pruefeVorgang, pruefeDatei, vereinige, berechne, kanonisch,
     ablaufdatum, plusMonate, tageBis, heuteIso, stufe, lokalIso,
     erzeuge, uhrNachziehen, korrektur, neueInstallationsId,

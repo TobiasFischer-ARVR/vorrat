@@ -78,6 +78,10 @@ main .kacheln button.kachel.markiert::after { content: "✓"; position: absolute
 .kachel .zahl { position: absolute; top: 4px; right: 7px; font-size: .95rem; font-weight: 800; }
 .kachel .datum { font-size: .75rem; opacity: .9; }
 .kachel .marke { position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 0; background: #0006; color: #fff; font-size: .65rem; }
+/* v6.23 Teilmengen: offene Packung = "offen" oben links + Fuellstands-Leiste unten (Breite = Rest), Farbe wie die Schrift */
+.kachel .offen { position: absolute; top: 4px; left: 7px; font-size: .7rem; font-weight: 800; }
+.kachel .fuellstand { position: absolute; left: 8px; right: 8px; bottom: 5px; height: 6px; border-radius: 3px; background: #0003; overflow: hidden; }
+.kachel .fuellstand i { display: block; height: 100%; background: currentColor; }
 
 /* Dialoge */
 .blatt { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; background: #0006; }
@@ -259,6 +263,8 @@ main button.ikon { background: transparent; color: #1d6b49; font-size: 1.35rem; 
 .menueoben { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin: 4px 0 10px; }
 .fenster .menueoben button { padding: 14px 6px; font-weight: 600; line-height: 1.2; }
 .fenster .menueoben button.an { background: #1d6b49; color: #fff; }
+.menuereihe { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 0 0 10px; } /* v6.23 Fuellstand-Stufen */
+.fenster .menuereihe button { padding: 12px 2px; font-weight: 600; line-height: 1.1; }
 .menueliste { display: flex; flex-direction: column; gap: 0; margin-bottom: 4px; }
 .fenster .menueliste button.zeile { margin: 0; padding: 12px 10px; border-radius: 0; background: transparent; color: #1d2b24; border-bottom: 1px solid #e3ece7; }
 .menuegefahr { margin-top: 14px; padding-top: 10px; border-top: 2px solid #f0c9c5; }

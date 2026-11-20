@@ -389,4 +389,62 @@ fall("v6 B: Art bild - Schluessel/Datei geprueft, juengster datei-Stempel ueber 
   assert.match(M.pruefeDatei(datei("aaaaaaaa1", zukunft)).fehler, /^Vorgang 1: unbekannte Art: zukunft$/);
 });
 
+fall("v6.23 Feld anbruch: gueltig/ungueltig, strikte Schluessel, __proto__ rutscht nicht durch, berechne laesst es durch", () => {
+  const ok = M.FELDER.eintrag.anbruch;
+  assert.ok(ok(null));
+  for (const rest of [100, 75, 50, 25, 10]) assert.ok(ok({ seit: "2026-11-20", rest }), "rest " + rest);
+  assert.ok(ok({ rest: 50, seit: "2026-11-20" }), "Schluesselreihenfolge egal");
+  const nein = [undefined, false, "offen", 50, [], {}, { seit: "2026-11-20" }, { rest: 50 },
+    { seit: "2026-11-20", rest: 33 }, { seit: "2026-11-20", rest: "50" }, { seit: "2026-11-20", rest: 0 },
+    { seit: "2026-02-30", rest: 50 }, { seit: "2026-11", rest: 50 }, { seit: "20.11.2026", rest: 50 }, { seit: null, rest: 50 },
+    { seit: "2026-11-20", rest: 50, extra: 1 }];
+  for (const w of nein) assert.ok(!ok(w), JSON.stringify(w));
+  // __proto__ als eigener Schluessel (aus JSON) und als Prototyp: beides abgelehnt
+  assert.ok(!ok(JSON.parse('{"seit":"2026-11-20","rest":50,"__proto__":{"x":1}}')), "eigener __proto__ = dritter Schluessel");
+  assert.ok(!ok(JSON.parse('{"seit":"2026-11-20","__proto__":{"rest":50}}')), "rest nur ueber __proto__");
+  assert.ok(!ok(Object.create({ rest: 50 }, { seit: { value: "2026-11-20", enumerable: true } })), "rest geerbt");
+  const a = handy("aaaaaaaa1");
+  const g = grund(a);
+  const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.fach }, menge: 1 });
+  assert.throws(() => a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 33 } }), /Wert ungueltig: anbruch/);
+  assert.throws(() => a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: JSON.parse('{"seit":"2026-11-20","rest":50,"__proto__":{}}') }), /Wert ungueltig: anbruch/);
+  a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 50 } });
+  a.tu({ typ: "neu", art: "eintrag", werte: { name: "Zucker", fach: g.fach, anbruch: { seit: "2026-11-19", rest: 10 } }, menge: 1 });
+  assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
+  const s = stand(a);
+  assert.deepStrictEqual(eintrag(s, e.id).anbruch, { seit: "2026-11-20", rest: 50 });
+  assert.deepStrictEqual(s.eintraege.find((x) => x.name === "Zucker").anbruch, { seit: "2026-11-19", rest: 10 });
+  // Kopie nach aussen: Aendern der Anzeige veraendert die Historie nicht (Codex 1a #9)
+  eintrag(s, e.id).anbruch.rest = 10;
+  assert.strictEqual(eintrag(stand(a), e.id).anbruch.rest, 50);
+});
+
+fall("v6.23 Abgleich zweier anbruch-Werte: juengerer Stempel gewinnt als Ganzes (seit + rest passen zusammen)", () => {
+  const a = handy("aaaaaaaa1"), b = handy("bbbbbbbb2");
+  const g = grund(a);
+  const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.fach }, menge: 2 });
+  b.sieht(a);
+  a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-18", rest: 75 } });
+  b.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 25 } });
+  // gleiche Uhr -> hoehere Installation gewinnt; Reihenfolge der Listen egal
+  assert.deepStrictEqual(eintrag(stand(a, b), e.id).anbruch, { seit: "2026-11-20", rest: 25 });
+  assert.deepStrictEqual(eintrag(M.berechne([...b.liste, ...a.liste]), e.id).anbruch, { seit: "2026-11-20", rest: 25 });
+  a.sieht(b);
+  a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: null }); // spaeter: "Doch nicht offen"
+  assert.strictEqual(eintrag(stand(a, b), e.id).anbruch, null);
+});
+
+fall("v6.23 R1 nachgemessen: eine Version ohne Feld anbruch stoppt die ganze Datei (nichts wird still verworfen)", () => {
+  const a = handy("aaaaaaaa1");
+  const g = grund(a);
+  const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.fach }, menge: 1 });
+  a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 50 } });
+  const regel = M.FELDER.eintrag.anbruch;
+  delete M.FELDER.eintrag.anbruch; // so prueft v6.22
+  try {
+    assert.match(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).fehler, /^Vorgang 4: unbekanntes Feld: anbruch$/);
+  } finally { M.FELDER.eintrag.anbruch = regel; }
+  assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

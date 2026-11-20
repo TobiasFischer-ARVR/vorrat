@@ -123,6 +123,93 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   pruefe(await zahl("Salamipizza") === "×3", "Rückgängig: wieder ×3");
   pruefe(!(await js(`document.querySelector("#unten").textContent`)).includes("undefined"), "Leiste ohne „undefined“");
 
+  console.log("5a. v6.23 Teilmengen: anbrechen/abspalten, Füllstand, Leer weg, Rückgängig, Suche, Läuft bald ab");
+  const nT = await js(`liste.length`);
+  const tm = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Testmehl", mhd: ${JSON.stringify(Hilfen_plus(heute, 10))}, fach: stapel[stapel.length - 1].id }, menge: 3 }]).then(v => v[0].id)`);
+  await warte(300);
+  // Kacheln "Testmehl" in Anzeige-Reihenfolge: Menge + (offen: Text und Leistenbreite)
+  const tmK = () => js(`[...document.querySelectorAll("main .kachel")].filter(k => k.querySelector(".name")?.textContent === "Testmehl")
+    .map(k => (k.querySelector(".zahl")?.textContent || "×1") + (k.querySelector(".offen") ? " " + k.querySelector(".offen").textContent + " " + k.querySelector(".fuellstand i").style.width : "")).join("|")`);
+  const obenText = () => js(`[...document.querySelectorAll(".menueoben button")].map((b) => b.textContent).join("|")`);
+  pruefe(await tmK() === "×3", "Testmehl ×3, zu");
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  pruefe(await obenText() === "−1 · eins raus|🥣 Anbrechen|↦ Verschieben|✎ Bearbeiten", "Menü (zu): −1 · Anbrechen · Verschieben · Bearbeiten");
+  await klick(".menueoben button", "Anbrechen"); await warte(400);
+  pruefe(await js(`document.querySelector(".blatt").textContent.includes("1 von 3 Packungen wird geöffnet") && [...document.querySelectorAll(".menuereihe button")].map(b => b.textContent).join("|") === "voll|¾|½|¼|fast leer"`), "Stufen-Menü: „1 von 3 Packungen wird geöffnet“, voll · ¾ · ½ · ¼ · fast leer");
+  await bild("5a-anbrechen-stufen.png");
+  await klick(".menuereihe button", "½"); await warte(800);
+  pruefe(await js(`!dialogOffen()`), "ein Tipp auf ½ = fertig, Menü zu");
+  pruefe(await tmK() === "×1 offen 50%|×2", "abgespalten: ×1 offen (Leiste 50 %) vor ×2 (offen zuerst)");
+  pruefe(await js(`liste.length`) === nT + 3, "ein Schritt: −1 am alten + neuer Eintrag (2 Vorgänge)");
+  pruefe(await js(`(() => { const v = liste.at(-1); return v.typ === "neu" && v.menge === 1 && v.werte.anbruch.rest === 50 && v.werte.anbruch.seit === Modell.heuteIso() && !("code" in v.werte) && !("geloescht" in v.werte); })()`), "neuer Eintrag: Menge 1, anbruch {seit heute, rest 50}, kein code/geloescht");
+  pruefe(await js(`document.querySelector(".kachel .fuellstand").getBoundingClientRect().width > 20`), "Füllstands-Leiste sichtbar");
+  pruefe((await js(`document.querySelector("#unten").textContent`)).includes("1 von 3 geöffnet"), "Leiste „Testmehl: 1 von 3 geöffnet · ½ · Rückgängig“");
+  await bild("5a-kachel-offen.png");
+  await klick("#unten button", "Rückgängig"); await warte(800);
+  pruefe(await tmK() === "×3", "Rückgängig: wieder ×3, zu");
+  pruefe(await js(`(() => { const n = liste.slice(-2); return n.every(v => v.typ === "menge") && n.map(v => v.delta).join() === "1,-1" && !liste.slice(${nT}).some(v => v.feld === "geloescht"); })()`), "Rückgängig nur über Mengen (+1 alt, −1 neu), kein geloescht");
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  await klick(".menueoben button", "Anbrechen"); await warte(400);
+  await klick(".menuereihe button", "½"); await warte(800);
+  pruefe(await tmK() === "×1 offen 50%|×2", "nochmal angebrochen: ×1 offen + ×2");
+  // Suche und Läuft bald ab (Startseite)
+  const fT = await js(`stapel[stapel.length - 1].id`);
+  await js(`history.back(), 1`); await warte(400);
+  await js(`(() => { const i = document.querySelector(".suche input"); i.value = "Testmehl"; i.dispatchEvent(new Event("input")); return 1; })()`); await warte(200);
+  const sT = await js(`[...document.querySelectorAll(".suche li button")].map(b => b.querySelector(".was b").textContent + "#" + b.getAttribute("aria-label")).join("|")`);
+  console.log("  Suche: " + sT);
+  pruefe(sT.startsWith("Testmehl · offen ½#Testmehl, angebrochen, halb voll, ") && sT.includes("|Testmehl ×2#Testmehl, 2 Stück, "), "Suche: „Testmehl · offen ½“ zuerst, aria „angebrochen, halb voll“");
+  await js(`(() => { const i = document.querySelector(".suche input"); i.value = ""; i.dispatchEvent(new Event("input")); return 1; })()`);
+  const baldVorher = await js(`baldAlle`);
+  await js(`(baldAlle = true, zeichnen(), 1)`); await warte(200);
+  pruefe(await js(`[...document.querySelectorAll("main .bald button.baldzeile")].some(b => b.querySelector(".was b").textContent === "Testmehl · offen ½" && b.getAttribute("aria-label").includes("angebrochen, halb voll"))`), "Läuft bald ab: „Testmehl · offen ½“, aria „angebrochen, halb voll“");
+  await js(`(baldAlle = ${JSON.stringify(baldVorher)}, zeichnen(), 1)`);
+  await js(`(oeffne({ art: "fach", id: ${JSON.stringify(fT)} }), 1)`); await warte(300);
+  // Offen: Menü mit "offen seit", Stufe markiert, Leer weg, Doch nicht offen
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  pruefe(await obenText() === "Leer, weg|↦ Verschieben|✎ Bearbeiten", "Menü (offen): Leer, weg · Verschieben · Bearbeiten");
+  pruefe(await js(`document.querySelector(".blatt .offenseit").textContent === "offen seit " + Modell.heuteIso().slice(8, 10) + "." + Modell.heuteIso().slice(5, 7) + ". · ½" && document.querySelector(".menuereihe button.an").textContent === "½"`), "„offen seit TT.MM. · ½“, ½ markiert");
+  pruefe(await js(`[...document.querySelectorAll(".menueliste button")][0].textContent === "↩ Doch nicht offen"`), "Liste: „Doch nicht offen“");
+  await bild("5a-menue-offen.png");
+  const nF = await js(`liste.length`);
+  await klick(".menuereihe button", "¼"); await warte(800);
+  pruefe(await tmK() === "×1 offen 25%|×2" && await js(`liste.length`) === nF + 1, "Füllstand ¼: ein Vorgang, Leiste 25 %");
+  pruefe(await js(`!document.querySelector("#unten button")`), "Füllstand ändern: kein Rückgängig (Codex #10)");
+  // Leer weg bei ×1
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  await klick(".menueoben button", "Leer, weg"); await warte(800);
+  pruefe(await tmK() === "×2", "Leer, weg (×1): offene Packung verschwindet, ×2 bleibt");
+  await klick("#unten button", "Rückgängig"); await warte(800);
+  pruefe(await tmK() === "×1 offen 25%|×2", "Rückgängig: offene Packung wieder da (Menge-0-Eintrag gefunden)");
+  // Leer weg bei ×2 (R3: offener Eintrag per + groesser geworden)
+  const offenId = await js(`stand.eintraege.find(e => e.sichtbar && e.name === "Testmehl" && e.anbruch).id`);
+  await js(`tun([{ typ: "menge", art: "eintrag", ziel: ${JSON.stringify(offenId)}, delta: 1, grund: "zugang" }]).then(() => 1)`); await warte(300);
+  pruefe(await tmK() === "×2 1 offen 25%|×2", "R3: ×2 · „1 offen“");
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  await klick(".menueoben button", "Leer, weg"); await warte(800);
+  pruefe(await tmK() === "×1|×2" || await tmK() === "×2|×1", "Leer, weg (×2): Rest ist zu, nichts mehr offen");
+  pruefe(await js(`eintragJetzt(${JSON.stringify(offenId)}).anbruch === null && eintragJetzt(${JSON.stringify(offenId)}).menge === 1`), "… anbruch = null, Menge 1");
+  await klick("#unten button", "Rückgängig"); await warte(800);
+  pruefe(await tmK() === "×2 1 offen 25%|×2", "Rückgängig: wieder ×2 · 1 offen ¼");
+  // Doch nicht offen
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  const nD = await js(`liste.length`);
+  await klick(".menueliste button", "Doch nicht offen"); await warte(800);
+  pruefe(await js(`!document.querySelector("main .kachel .offen") && liste.length === ${nD} + 1 && liste.at(-1).feld === "anbruch" && liste.at(-1).wert === null`), "Doch nicht offen: nur anbruch = null (kein −1)");
+  // Bestand pruefen: kein Anbrechen
+  await js(`tun([{ typ: "menge", art: "eintrag", ziel: ${JSON.stringify(tm)}, delta: -5, grund: "entnahme" }]).then(() => 1)`); await warte(300);
+  await klick("main button.kachel.pruefen", "Testmehl"); await warte(400);
+  const oP = await obenText();
+  pruefe(oP.includes("Erst nachzählen") && !oP.includes("Anbrechen"), "Bestand prüfen: „Erst nachzählen“ statt Anbrechen");
+  await klick(".fensterkopf button.schliessen"); await warte(300);
+  const nB = await js(`liste.length`);
+  await js(`anbrechen(eintragJetzt(${JSON.stringify(tm)}), 50).then(() => 1)`); await warte(200);
+  pruefe(await js(`liste.length`) === nB, "anbrechen() bei Bestand prüfen schreibt nichts");
+  // aufraeumen: alle Testmehl-Eintraege (auch unsichtbare) loeschen
+  await js(`tun(stand.eintraege.filter(e => e.name === "Testmehl" && !e.geloescht).map(e => ({ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert: true }))).then(() => 1)`); await warte(400);
+  pruefe(await tmK() === "" && await js(`stand.eintraege.filter(e => e.name === "Testmehl" && !e.geloescht).length`) === 0, "Testmehl wieder weg");
+  await js(`(document.querySelector("#unten").hidden = true, 1)`);
+
   console.log("5b. v5 Multiscan (Code eintippen statt Kamera, Open Food Facts nachgestellt)");
   await js(`(window.__f = window.fetch, window.fetch = (u, o) => String(u).includes("openfoodfacts") ? Promise.resolve(String(u).includes("4000000000013")
     ? new Response(JSON.stringify({ status: 1, product: { product_name_de: "Testerbsen" } }), { status: 200 }) : new Response("{}", { status: 404 })) : __f(u, o), 1)`);
@@ -952,7 +1039,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   await klick(".ansichtkopf button.ikon"); await warte(200);
   pruefe(await js(`!document.querySelector("#hilfe-fach").hidden`), "Fach: ⓘ zeigt die Erklärung");
   await klick("main button.kachel", "Leistentest"); await warte(400);
-  pruefe(await js(`[...document.querySelectorAll(".menueoben button")].map((b) => b.textContent).join("|")`) === "−1 · eins raus|↦ Verschieben|✎ Bearbeiten", "Produkt-Menü oben groß: −1 · Verschieben · Bearbeiten");
+  pruefe(await js(`[...document.querySelectorAll(".menueoben button")].map((b) => b.textContent).join("|")`) === "−1 · eins raus|🥣 Anbrechen|↦ Verschieben|✎ Bearbeiten", "Produkt-Menü oben groß: −1 · Anbrechen (v6.23) · Verschieben · Bearbeiten");
   pruefe(await js(`[...document.querySelectorAll(".menueliste button")].map((b) => b.textContent).join("|")`) === "📷 Foto aufnehmen oder wählen", "Produkt-Menü Liste: Foto");
   pruefe(await js(`(() => { const g = document.querySelector(".fenster > :last-child"); return g.classList.contains("menuegefahr") && g.textContent === "🗑 Löschen" && g.querySelector("button").classList.contains("gefahr"); })()`), "🗑 Löschen rot, abgesetzt, ganz unten");
   await bild("9j-menue-produkt.png");

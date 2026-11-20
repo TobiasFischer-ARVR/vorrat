@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.22"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.23"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -696,7 +696,11 @@ const ausserhalb = (ortId, reihen, spalten) => stand.faecher.filter((f) => !f.ge
 const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id);
 // v6.18 (Tobias 18.11.): Anzeige zaehlt Stueck, nicht Eintraege (Muesli x2 = "2 Sachen"). Sichtbar mit Menge 0 (Bestand pruefen) zaehlt 1.
 const stueckImFach = (id) => imFach(id).reduce((s, e) => s + Math.max(1, e.menge), 0);
-const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de");
+// v6.23: bei gleichem Datum und Namen die offene Packung zuerst (erst die offene aufbrauchen)
+const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de") || !!b.anbruch - !!a.anbruch;
+// v6.23 Teilmengen: Zusatz hinter dem Namen ("· offen ½") und fuers aria-label (Suche, Laeuft bald ab)
+const offenZusatz = (e) => { const t = H.anbruchText(e); return t ? " · " + t : ""; };
+const offenAria = (e) => { const t = H.anbruchText(e, true); return t ? ", " + t : ""; };
 const platzName = (o, r, c) => "Reihe " + (r + 1) + (o.spalten > 1 ? ", Platz " + (c + 1) : "");
 const fachWort = (o) => (o && (o.spalten === 1 || o.stil === "sortierkasten") ? "Schublade" : "Kiste");
 const fachArt = (f, o) => (f.offen ? "Ablage" : fachWort(o)); // v6.4
@@ -815,9 +819,9 @@ function suchTeil() {
     const treffer = q ? stand.eintraege.filter((e) => e.sichtbar && ohneAkzent(e.name).includes(q)).sort(nachAblauf) : [];
     liste.replaceChildren(...treffer.slice(0, 50).map((e) => el("li", null, el("button", {
       className: "baldzeile", onclick: () => zumFach(e),
-      "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
+      "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + offenAria(e) + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
       el("span", { className: "bild", "aria-hidden": "true" }, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name))),
-      el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
+      el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "") + offenZusatz(e)), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
       el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)))))),
       ...(q && !treffer.length ? [el("li", { className: "klein" }, "Nichts gefunden.")] : []));
   };
@@ -847,10 +851,10 @@ function baldAbTeil() {
 function baldZeile(x) {
   const e = x.e;
   const wort = { abgelaufen: "abgelaufen", rot: "bald", gelb: "demnächst" }[x.stufe];
-  const z = el("button", { className: "baldzeile " + x.stufe, "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + ", " +
+  const z = el("button", { className: "baldzeile " + x.stufe, "aria-label": e.name + (e.menge >= 2 ? ", " + e.menge + " Stück" : "") + offenAria(e) + ", " +
       H.baldText(x.tage) + ", " + H.fundort(e, stand.orte, stand.faecher) + ". Antippen öffnet das Fach." },
     el("span", { className: "bild", "aria-hidden": "true" }, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name))),
-    el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "")), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
+    el("span", { className: "was" }, el("b", null, e.name + (e.menge >= 2 ? " ×" + e.menge : "") + offenZusatz(e)), el("span", { className: "klein" }, H.fundort(e, stand.orte, stand.faecher))),
     el("span", { className: "wann" }, el("b", null, H.kurzDatum(e)), el("span", null, x.stufe === "abgelaufen" ? "abgelaufen" : H.baldText(x.tage))));
   z.dataset.stufe = wort;
   druck(z, () => zumFach(e), () => eintragMenue(e), zugStart(e)); // Abschnitt 5: lange druecken / ziehen wie bei Kacheln
@@ -1291,15 +1295,24 @@ function eintragMenue(e) {
     const x = await offDetailsHolen(ean);
     if (meins === tipp) flaeche.replaceChildren(...(x.offline ? [el("p", { className: "klein" }, "Open Food Facts nicht erreichbar – bitte später nochmal.")] : infoTeil(x.d)));
   } }, "🧾 Inhaltsstoffe");
-  menue(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach)))], {
+  const verschiebenAuf = () => verschiebenDialog([e.id], e.fach, "„" + kuerze(e.name, 30) + "“ verschieben nach …", (t) => [
+    el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), t,
+    el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch.")]);
+  // v6.23 Teilmengen: offen -> "Leer, weg" statt −1, Stufen direkt im Menue; zu -> "Anbrechen" nur bei sauberem Bestand (Codex #7)
+  const a = e.anbruch;
+  const anbrechKnopf = e.bestandPruefen ? ["Erst nachzählen", weiter(() => eintragDialog(e))]
+    : e.ortKlaeren ? ["Erst Ort klären", weiter(verschiebenAuf)] : ["🥣 Anbrechen", weiter(() => stufenMenue(e))];
+  menue(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach))),
+    a && el("p", { className: "klein offenseit" }, (e.menge >= 2 ? "1 Packung " : "") + "offen seit " + a.seit.slice(8, 10) + "." + a.seit.slice(5, 7) + ". · " + stufeKurz(a.rest))], {
     oben: [
-      ["−1" + (e.menge === 1 ? " (das letzte)" : " · eins raus"), weiter(() => entnehmen(e)), "an"],
-      ["↦ Verschieben", weiter(() => verschiebenDialog([e.id], e.fach, "„" + kuerze(e.name, 30) + "“ verschieben nach …", (t) => [
-        el("p", { className: "klein" }, "Liegt jetzt in: " + (e.ortKlaeren ? "– unklar (Ort klären) –" : fachText(e.fach))), t,
-        el("p", { className: "klein" }, "Tipp: Kachel gedrückt halten und auf ein Fach ziehen geht auch.")]))],
+      a ? ["Leer, weg", weiter(() => leerWeg(e)), "an"] : ["−1" + (e.menge === 1 ? " (das letzte)" : " · eins raus"), weiter(() => entnehmen(e)), "an"],
+      !a && anbrechKnopf,
+      ["↦ Verschieben", weiter(verschiebenAuf)],
       ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
     ],
+    reihe: a && stufenKnoepfe(e, a.rest),
     liste: [
+      a && ["↩ Doch nicht offen", weiter(() => dochZu(e))],
       // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
       ["📷 Foto" + (eig ? " ersetzen" : " aufnehmen oder wählen"), (melde, schliessen) => { fotoWaehlen(e, eig); schliessen(); }],
       eig && ["✖ Foto entfernen", weiter(() => fotoEntfernen(e, eig))],
@@ -1307,6 +1320,64 @@ function eintragMenue(e) {
     // v6.16: Loeschen auch direkt im Menue (wie bisher ueber Bearbeiten oder Markieren), mit Rueckfrage und Rueckgaengig
     gefahr: [["🗑 Löschen", weiter(() => mehrLoeschen([e.id], false))]],
   }, () => document.removeEventListener("vorrat-bild", bildDazu));
+}
+
+// ---- v6.23 Teilmengen (Bauplan Teilmengen Fassung 3) ----
+const stufeKurz = (rest) => (H.ANBRUCH_STUFEN.find((s) => s[0] === rest) || [0, ""])[1];
+// Ein Tipp auf eine Stufe = fertig (schliesst das Menue, dann anbrechen). aktuell = Stufe markieren.
+const stufenKnoepfe = (e, aktuell) => H.ANBRUCH_STUFEN.map(([rest, kurz]) => [kurz, weiter(() => anbrechen(e, rest)), rest === aktuell ? "an" : ""]);
+function stufenMenue(e) {
+  menue("„" + kuerze(e.name, 30) + "“ anbrechen", [el("p", null, (e.menge >= 2 ? "1 von " + e.menge + " Packungen wird geöffnet. " : "") + "Wie voll ist sie noch?")],
+    { reihe: stufenKnoepfe(e, null) });
+}
+// Frischer Stand vor jedem Schreiben und Rueckgaengig (Codex #2, R2 #1): unter offenem Menue tauscht laden() nicht,
+// ein Abgleich kann aber schon im Speicher liegen. Eigener Lesezugriff nach Muster offenFrisch: Speicher + OneDrive-Stand,
+// berechne. Map Kennung -> Eintrag, auch unsichtbar (Menge 0) und geloescht. null = nicht lesbar (Hinweis steht).
+async function eintraegeFrisch() {
+  try {
+    const vs = await sp.alleVorgaenge(), a = mitOrdner(await sp.abgleich());
+    const r = Cloud.zusammenfuehren(vs, a ? a.dateien : {});
+    if (!r.ok) throw new Error(r.fehler);
+    return new Map(Modell.berechne(r.vorgaenge).eintraege.map((x) => [x.id, x]));
+  } catch (x) { hinweis("Daten nicht lesbar – nichts geändert."); return null; }
+}
+const frischHolen = async (id) => {
+  const jetzt = await eintraegeFrisch(), x = jetzt && jetzt.get(id);
+  if (jetzt && (!x || x.geloescht)) hinweis("Diesen Eintrag gibt es nicht mehr.");
+  return x && !x.geloescht ? x : null;
+};
+// Leiste mit Rueckgaengig; was rueckgaengig geht, entscheidet H.rueckSchritte mit dem frischen Stand.
+function rueckAnbieten(text, fertig, vorher, zurueckText) {
+  untenZeigen(text, "Rückgängig", async () => {
+    const jetzt = await eintraegeFrisch();
+    if (!jetzt) return;
+    const r = H.rueckSchritte(fertig, vorher, jetzt);
+    if (typeof r === "string") return hinweis(r);
+    if (await tun(r)) untenZeigen(zurueckText);
+  });
+}
+async function anbrechen(e, rest) {
+  const x = await frischHolen(e.id);
+  if (!x) return;
+  if (x.anbruch) { // schon offen (auch vom anderen Handy): nur der Fuellstand, kein Rueckgaengig (Codex #10)
+    if (x.anbruch.rest !== rest && (await tun([{ typ: "feld", art: "eintrag", ziel: x.id, feld: "anbruch", wert: { seit: x.anbruch.seit, rest } }])))
+      untenZeigen(x.name + ": " + stufeKurz(rest));
+    return;
+  }
+  if (x.menge < 1 || x.bestandPruefen || x.ortKlaeren) return hinweis(x.ortKlaeren ? "Erst Ort klären, dann anbrechen." : "Erst nachzählen, dann anbrechen.");
+  const fertig = await tun(H.anbrechenSchritte(x, rest, Modell.heuteIso()));
+  if (fertig) rueckAnbieten(x.name + (x.menge >= 2 ? ": 1 von " + x.menge + " geöffnet · " : " geöffnet · ") + stufeKurz(rest), fertig, x, x.name + " wieder zu");
+}
+async function leerWeg(e) {
+  const x = await frischHolen(e.id);
+  if (!x) return;
+  const fertig = await tun(H.leerSchritte(x));
+  if (fertig) rueckAnbieten(x.name + " leer, weg", fertig, x, x.name + " zurück");
+}
+// "Doch nicht offen" (R2): nur das Feld, nie −1 (Codex #6)
+async function dochZu(e) {
+  const x = await frischHolen(e.id);
+  if (x && x.anbruch && (await tun([{ typ: "feld", art: "eintrag", ziel: x.id, feld: "anbruch", wert: null }]))) untenZeigen(x.name + " wieder zu");
 }
 
 // Inhaltsstoffe je EAN, einmal je App-Start geholt; offline wird nicht gemerkt (naechster Tipp versucht es neu).
@@ -1381,6 +1452,9 @@ function kachel(e, kurz, lang, ziehbar) {
     el("span", { className: "name" }, e.name),
     e.menge >= 2 && el("span", { className: "zahl" }, "×" + e.menge),
     el("span", { className: "datum" }, H.kurzDatum(e)),
+    // v6.23 Teilmengen: offene Packung = "offen" + Fuellstands-Leiste (Breite = Rest)
+    e.anbruch && el("span", { className: "offen" }, e.menge >= 2 ? "1 offen" : "offen"),
+    e.anbruch && el("span", { className: "fuellstand", "aria-hidden": "true" }, el("i", { style: "width:" + e.anbruch.rest + "%" })),
     (e.bestandPruefen || e.ortKlaeren) && el("span", { className: "marke" }, e.bestandPruefen ? "Bestand prüfen" : "Ort klären"));
   druck(k, kurz, lang, ziehbar ? zugStart(e) : null);
   return k;
@@ -1581,6 +1655,7 @@ function menue(titel, inhalt, teile, weg) {
   const t = H.menueTeile(teile);
   return blatt(titel, inhalt, (k, schliessKnopf) => [
     t.oben.length > 0 && el("div", { className: "menueoben" }, t.oben.map((x) => k(x, "gross"))),
+    t.reihe.length > 0 && el("div", { className: "menuereihe" }, t.reihe.map((x) => k(x))), // v6.23: Fuellstand-Stufen
     t.liste.length > 0 && el("div", { className: "menueliste" }, t.liste.map((x) => k(x, "zeile"))),
     t.gefahr.length > 0 && el("div", { className: "menuegefahr" }, t.gefahr.map((x) => k(x, "gefahr zeile"))),
   ], weg, (schliessKnopf) => schliessKnopf("✕", "schliessen", "Schließen"));

@@ -495,9 +495,52 @@
 
   // v6.16 (Tobias 18.11.): Menue-Gliederung. Falsche Eintraege (Bedingung nicht erfuellt) fallen weg, die Reihenfolge
   // bleibt; Gefahr (Loeschen) steht immer zuletzt. Kein DOM, damit testbar.
+  // v6.23: reihe = kleine Knoepfe nebeneinander unter "oben" (Fuellstand-Stufen).
   function menueTeile(teile) {
     const t = (l) => (l || []).filter(Boolean);
-    return { oben: t(teile.oben), liste: t(teile.liste), gefahr: t(teile.gefahr) };
+    return { oben: t(teile.oben), reihe: t(teile.reihe), liste: t(teile.liste), gefahr: t(teile.gefahr) };
+  }
+
+  // ---- v6.23 Teilmengen (Bauplan Teilmengen Fassung 3) ----
+  // Stufen in Anzeige-Reihenfolge: [rest, kurz, lang]. Werte = Modell.ANBRUCH_REST.
+  const ANBRUCH_STUFEN = [[100, "voll", "noch voll"], [75, "¾", "dreiviertel voll"], [50, "½", "halb voll"], [25, "¼", "ein Viertel voll"], [10, "fast leer", "fast leer"]];
+  // Gemeinsamer Text fuer Kachel, Suche, Laeuft bald ab. "" = zu. Ein offener Eintrag ist genau EINE offene Packung
+  // (Codex #4): bei Menge >= 2 "1 offen". lang = fuers aria-label.
+  function anbruchText(e, lang) {
+    const s = e && e.anbruch && ANBRUCH_STUFEN.find((x) => x[0] === e.anbruch.rest);
+    if (!s) return "";
+    const eine = e.menge >= 2 ? "1 " : "";
+    return lang ? eine + "angebrochen, " + s[2] : eine + "offen " + s[1];
+  }
+  const anbruchGleich = (a, b) => Modell.kanonisch(a ?? null) === Modell.kanonisch(b ?? null);
+  // Packung oeffnen, EIN Schritt (e = frischer Eintrag aus berechne, zu, Menge >= 1). Menge 1: nur das Feld.
+  // Menge >= 2: abspalten (T3) = -1 am alten + neuer Eintrag Menge 1 mit denselben Werten (ohne geloescht, nur belegte
+  // Felder, also code nur falls vorhanden) und anbruch.
+  function anbrechenSchritte(e, rest, heute) {
+    const anbruch = { seit: heute, rest };
+    if (e.menge < 2) return [{ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: anbruch }];
+    const werte = {};
+    for (const f of Object.keys(Modell.FELDER.eintrag)) if (f !== "geloescht" && f !== "anbruch" && e[f] != null) werte[f] = e[f];
+    werte.anbruch = anbruch;
+    return [{ typ: "menge", art: "eintrag", ziel: e.id, delta: -1, grund: "entnahme" }, { typ: "neu", art: "eintrag", werte, menge: 1 }];
+  }
+  // "Leer, weg": -1; bei Menge >= 2 ist die offene leer und der Rest zu (Codex #4).
+  const leerSchritte = (e) => [{ typ: "menge", art: "eintrag", ziel: e.id, delta: -1, grund: "entnahme" },
+    ...(e.anbruch && e.menge >= 2 ? [{ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: null }] : [])];
+  // Rueckgaengig fuer Anbrechen und "Leer, weg". fertig = die gespeicherten Vorgaenge, vorher = Eintrag vor dem Schreiben,
+  // jetzt = Map Kennung -> frischer Eintrag (auch unsichtbar). Mengen kehren sich immer um, nie ueber geloescht (Codex #1);
+  // anbruch nur, wenn dort noch der eben geschriebene Wert steht (R2 #5). Liefert Vorgangsdaten oder einen Hinweistext.
+  function rueckSchritte(fertig, vorher, jetzt) {
+    const ids = [...new Set(fertig.map((v) => v.ziel))];
+    if (ids.some((id) => !jetzt.get(id) || jetzt.get(id).geloescht)) return "Inzwischen gelöscht – Rückgängig nicht mehr möglich.";
+    if (fertig.some((v) => v.typ === "neu") && jetzt.get(vorher.id).fach !== vorher.fach) return "Inzwischen verschoben – Rückgängig nicht mehr möglich.";
+    const aus = [];
+    for (const v of fertig) {
+      if (v.typ === "neu") aus.push({ typ: "menge", art: "eintrag", ziel: v.ziel, delta: -v.menge, grund: "entnahme" });
+      else if (v.typ === "menge") aus.push({ typ: "menge", art: "eintrag", ziel: v.ziel, delta: -v.delta, grund: v.delta < 0 ? "zugang" : "entnahme" });
+      else if (v.feld === "anbruch" && anbruchGleich(jetzt.get(v.ziel).anbruch, v.wert)) aus.push({ typ: "feld", art: "eintrag", ziel: v.ziel, feld: "anbruch", wert: vorher.anbruch ?? null });
+    }
+    return aus.length ? aus : "Inzwischen geändert – Rückgängig nicht mehr möglich.";
   }
 
   // v6.16: Umbau-Knoepfe unter der Zeichnung - NUR im Bearbeiten-Modus. Liefert { id, gruppe, text, aria } in Anzeige-
@@ -530,7 +573,8 @@
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
-    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe };
+    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe,
+    ANBRUCH_STUFEN, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);

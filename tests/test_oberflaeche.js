@@ -339,8 +339,9 @@ fall("v6.16 Bearbeiten-Modus: Umbau-Knoepfe NUR im Modus, sonst keiner", () => {
 fall("v6.16 Menue-Gliederung: nichts geht verloren, Bedingungen fallen weg, Loeschen zuletzt", () => {
   const a = ["−1", () => 1], b = ["Bearbeiten", () => 2], c = ["Foto", () => 3], d = ["🗑 Löschen", () => 4];
   const t = H.menueTeile({ oben: [a, false, b], liste: [null, c, undefined], gefahr: [d] });
-  assert.deepStrictEqual(t, { oben: [a, b], liste: [c], gefahr: [d] });
-  assert.deepStrictEqual(H.menueTeile({}), { oben: [], liste: [], gefahr: [] });
+  assert.deepStrictEqual(t, { oben: [a, b], reihe: [], liste: [c], gefahr: [d] });
+  assert.deepStrictEqual(H.menueTeile({}), { oben: [], reihe: [], liste: [], gefahr: [] });
+  assert.deepStrictEqual(H.menueTeile({ reihe: [a, null] }).reihe, [a], "v6.23 Reihe: falsch faellt weg");
 });
 
 fall("v6.21 woSchon: Code vor Name, je Fach summiert, Unsichtbares zaehlt nicht", () => {
@@ -354,6 +355,114 @@ fall("v6.21 woSchon: Code vor Name, je Fach summiert, Unsichtbares zaehlt nicht"
   assert.deepStrictEqual(H.woSchon(es, "hand:x", "MÜSLI"), [{ fach: null, menge: 1 }], "von Hand: nur codelose Eintraege");
   const alt = [e("Reis", "gtin:2", "weg1", 1), e("Reis", "gtin:2", "weg2", 2), e("Reis", "gtin:2", "f1", 0)]; // zwei geloeschte Faecher, Menge 0
   assert.deepStrictEqual(H.woSchon(alt, "gtin:2", "Reis", (f) => f === "f1"), [{ fach: null, menge: 3 }], "ungueltige Faecher = eine Zeile, Menge 0 weg");
+});
+
+// ---- v6.23 Teilmengen ----
+function teilHandy(inst = "teilgeraet1") {
+  let z = { inst, nr: 1, uhr: 0 };
+  const vs = [];
+  const tu = (liste) => liste.map((d) => { const e = M.erzeuge(z, d); z = e.zaehler; vs.push(e.vorgang); return e.vorgang; });
+  return { vs, tu, sieh: (andere) => { z = M.uhrNachziehen(z, Math.max(...andere.map((v) => v.uhr))); } };
+}
+const jetztMap = (vs) => new Map(M.berechne(vs).eintraege.map((x) => [x.id, x]));
+const HEUTE = "2026-11-20";
+
+fall("v6.23 anbrechenSchritte: Menge 1 = nur Feld, Menge >= 2 = abspalten mit gleichen Werten (ohne geloescht, code nur falls da), Rueckgaengig nur Mengen", () => {
+  const h = teilHandy();
+  const [o] = h.tu([{ typ: "neu", art: "ort", werte: { name: "Regal", reihen: 1, spalten: 1 } }]);
+  const [f] = h.tu([{ typ: "neu", art: "fach", werte: { name: "Backen", lage: { ort: o.id, reihe: 0, spalte: 0 } } }]);
+  const [eins] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Zucker", fach: f.id }, menge: 1 }]);
+  const [drei] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", symbol: null, mhd: "2027-03", fach: f.id, code: "gtin:4000417025005" }, menge: 3 }]);
+  let j = jetztMap(h.vs);
+  assert.deepStrictEqual(H.anbrechenSchritte(j.get(eins.id), 50, HEUTE),
+    [{ typ: "feld", art: "eintrag", ziel: eins.id, feld: "anbruch", wert: { seit: HEUTE, rest: 50 } }]);
+  const vorher = j.get(drei.id);
+  const s = H.anbrechenSchritte(vorher, 75, HEUTE);
+  assert.deepStrictEqual(s, [{ typ: "menge", art: "eintrag", ziel: drei.id, delta: -1, grund: "entnahme" },
+    { typ: "neu", art: "eintrag", werte: { name: "Mehl", mhd: "2027-03", fach: f.id, code: "gtin:4000417025005", anbruch: { seit: HEUTE, rest: 75 } }, menge: 1 }]);
+  const ohneCode = H.anbrechenSchritte(Object.assign({}, vorher, { code: null }), 75, HEUTE)[1].werte;
+  assert.ok(!("code" in ohneCode) && !("geloescht" in ohneCode) && !("summe" in ohneCode), "kein code: null, keine Rechenfelder");
+  const fertig = h.tu(s);
+  j = jetztMap(h.vs);
+  const neu = j.get(fertig[1].id);
+  assert.deepStrictEqual([j.get(drei.id).menge, neu.menge, neu.anbruch, neu.name, neu.fach, neu.code], [2, 1, { seit: HEUTE, rest: 75 }, "Mehl", f.id, "gtin:4000417025005"], "x2 zu + x1 offen");
+  assert.strictEqual(j.get(drei.id).anbruch, undefined, "alter bleibt zu");
+  // Rueckgaengig: nur Mengen (+1 alt, -1 neu), kein geloescht (Codex #1)
+  const r = H.rueckSchritte(fertig, vorher, j);
+  assert.deepStrictEqual(r, [{ typ: "menge", art: "eintrag", ziel: drei.id, delta: 1, grund: "zugang" },
+    { typ: "menge", art: "eintrag", ziel: fertig[1].id, delta: -1, grund: "entnahme" }]);
+  h.tu(r);
+  j = jetztMap(h.vs);
+  assert.deepStrictEqual([j.get(drei.id).menge, j.get(fertig[1].id).sichtbar, j.get(fertig[1].id).bestandPruefen], [3, false, false], "wieder x3, Abspaltung unsichtbar");
+});
+
+fall("v6.23 Rueckgaengig: Menge 1, fremder Fuellstand, geloescht, verschoben, Leer weg (x1/x2)", () => {
+  const h = teilHandy();
+  const [o] = h.tu([{ typ: "neu", art: "ort", werte: { name: "Regal", reihen: 1, spalten: 2 } }]);
+  const [f, g] = h.tu([{ typ: "neu", art: "fach", werte: { name: "A", lage: { ort: o.id, reihe: 0, spalte: 0 } } },
+    { typ: "neu", art: "fach", werte: { name: "B", lage: { ort: o.id, reihe: 0, spalte: 1 } } }]);
+  const [e] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Zucker", fach: f.id }, menge: 1 }]);
+  let vorher = jetztMap(h.vs).get(e.id);
+  const fertig = h.tu(H.anbrechenSchritte(vorher, 100, HEUTE));
+  assert.deepStrictEqual(H.rueckSchritte(fertig, vorher, jetztMap(h.vs)), [{ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: null }]);
+  // Fuellstand inzwischen geaendert (anderes Handy): nichts ueberschreiben (R2 #5)
+  const b = teilHandy("teilgeraet2"); b.sieh(h.vs);
+  const fremd = b.tu([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: HEUTE, rest: 25 } }]);
+  assert.match(H.rueckSchritte(fertig, vorher, jetztMap([...h.vs, ...fremd])), /geändert/);
+  // geloescht -> nicht mehr moeglich
+  const weg = b.tu([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert: true }]);
+  assert.match(H.rueckSchritte(fertig, vorher, jetztMap([...h.vs, ...fremd, ...weg])), /gelöscht/);
+  // Leer weg x1 -> Menge 0 (unsichtbar), Rueckgaengig trotzdem erlaubt
+  vorher = jetztMap(h.vs).get(e.id);
+  const leer1 = h.tu(H.leerSchritte(vorher));
+  assert.deepStrictEqual(leer1.map((v) => [v.typ, v.delta]), [["menge", -1]], "x1: nur -1");
+  let j = jetztMap(h.vs);
+  assert.strictEqual(j.get(e.id).sichtbar, false);
+  assert.deepStrictEqual(H.rueckSchritte(leer1, vorher, j), [{ typ: "menge", art: "eintrag", ziel: e.id, delta: 1, grund: "zugang" }]);
+  h.tu(H.rueckSchritte(leer1, vorher, j));
+  // Leer weg x2 (offen): -1 + anbruch null; Rueckgaengig +1 + alter Wert
+  h.tu([{ typ: "menge", art: "eintrag", ziel: e.id, delta: 1, grund: "zugang" }]);
+  vorher = jetztMap(h.vs).get(e.id);
+  assert.deepStrictEqual([vorher.menge, vorher.anbruch.rest], [2, 100]);
+  assert.strictEqual(H.anbruchText(vorher), "1 offen voll");
+  const leer2 = h.tu(H.leerSchritte(vorher));
+  j = jetztMap(h.vs);
+  assert.deepStrictEqual([j.get(e.id).menge, j.get(e.id).anbruch], [1, null], "x2: Rest ist zu");
+  assert.deepStrictEqual(H.rueckSchritte(leer2, vorher, j), [{ typ: "menge", art: "eintrag", ziel: e.id, delta: 1, grund: "zugang" },
+    { typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: HEUTE, rest: 100 } }]);
+  // Abspalten, danach alter Eintrag verschoben -> Hinweis (R2 #3)
+  h.tu([{ typ: "menge", art: "eintrag", ziel: e.id, delta: 1, grund: "zugang" }, { typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: null }]);
+  vorher = jetztMap(h.vs).get(e.id);
+  const ab = h.tu(H.anbrechenSchritte(vorher, 50, HEUTE));
+  h.tu([{ typ: "feld", art: "eintrag", ziel: e.id, feld: "fach", wert: g.id }]);
+  assert.match(H.rueckSchritte(ab, vorher, jetztMap(h.vs)), /verschoben/);
+});
+
+fall("v6.23 Codex #1: Rueckgaengig nach fremdem -1 auf die abgespaltene Packung -> Bestand pruefen statt still falsch", () => {
+  const a = teilHandy();
+  const [o] = a.tu([{ typ: "neu", art: "ort", werte: { name: "Regal", reihen: 1, spalten: 1 } }]);
+  const [f] = a.tu([{ typ: "neu", art: "fach", werte: { name: "Backen", lage: { ort: o.id, reihe: 0, spalte: 0 } } }]);
+  const [e] = a.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: f.id }, menge: 3 }]);
+  const vorher = jetztMap(a.vs).get(e.id);
+  const fertig = a.tu(H.anbrechenSchritte(vorher, 50, HEUTE));
+  const neuId = fertig[1].id;
+  const b = teilHandy("teilgeraet2"); b.sieh(a.vs);
+  const fremd = b.tu([{ typ: "menge", art: "eintrag", ziel: neuId, delta: -1, grund: "entnahme" }]); // B verbraucht die offene
+  const r = H.rueckSchritte(fertig, vorher, jetztMap([...a.vs, ...fremd])); // A sieht B schon (Menge 0, auch unsichtbar gefunden)
+  assert.ok(Array.isArray(r) && r.length === 2, String(r));
+  a.tu(r);
+  const s = M.berechne([...a.vs, ...fremd]);
+  const alt = s.eintraege.find((x) => x.id === e.id), neu = s.eintraege.find((x) => x.id === neuId);
+  assert.deepStrictEqual([alt.menge, neu.summe, neu.bestandPruefen, neu.sichtbar], [3, -1, true, true], "Summe 2 stimmt, Minus wird gezeigt");
+});
+
+fall("v6.23 anbruchText: kurz/lang, Menge >= 2, zu = leer; Stufen = Modellwerte", () => {
+  assert.strictEqual(H.anbruchText({ menge: 1, anbruch: { seit: HEUTE, rest: 50 } }), "offen ½");
+  assert.strictEqual(H.anbruchText({ menge: 1, anbruch: { seit: HEUTE, rest: 50 } }, true), "angebrochen, halb voll");
+  assert.strictEqual(H.anbruchText({ menge: 3, anbruch: { seit: HEUTE, rest: 10 } }), "1 offen fast leer");
+  assert.strictEqual(H.anbruchText({ menge: 1 }), "");
+  assert.strictEqual(H.anbruchText({ menge: 1, anbruch: null }, true), "");
+  assert.deepStrictEqual(H.ANBRUCH_STUFEN.map((s) => s[0]), M.ANBRUCH_REST);
 });
 
 console.log("\n" + faelle + " Faelle bestanden.");
