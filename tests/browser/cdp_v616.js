@@ -1081,9 +1081,9 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     pruefe(await js(`fachVon(${JSON.stringify(rand)}).ortKlaeren`) === true, "R2 #2: Randfach danach in „Ort klären“");
     await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(rand)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
     pruefe(frage.includes("16 Dosen/Ablagen werden neu angelegt") && frage.includes("1 vorhandene Fächer werden umgesetzt"), "Rückfrage nennt neue und umgesetzte Fächer");
-    pruefe(await js(`(() => { const o = ${kO}; return o.reihen === 8 && o.spalten === 5 && o.stil === "dosen"; })()`), "Raster 8 × 5, Stil dosen");
+    pruefe(await js(`(() => { const o = ${kO}; return o.reihen === 4 && o.spalten === 5 && o.stil === "dosen"; })()`), "v6.26: Raster 4 × 5, Stil dosen");
     pruefe(await js(`stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ${kO}.id).length`) === 17, "16 neue Fächer + alte Schublade, nichts in „Ort klären“");
-    pruefe(await js(`(() => { const f = fachVon(${JSON.stringify(schub)}); return f.lage.reihe === 6 && f.lage.spalte === 0 && f.hoch === 2; })()`), "R10: „Schublade“ vorne links (Reihe 7, Spalte 1, 2 hoch)");
+    pruefe(await js(`(() => { const f = fachVon(${JSON.stringify(schub)}); return f.lage.reihe === 3 && f.lage.spalte === 0 && !f.hoch; })()`), "R10: „Schublade“ vorne links (Reihe 4, Spalte 1, 1 Platz)");
     pruefe(await js(`imFach(${JSON.stringify(schub)}).map((e) => e.id).sort().join()`) === inhalt, "Inhalt der Schublade bleibt drin");
     const farbenOk = await js(`H.kuechePlaetze().filter((p) => !p.nurUmsetzen).map((p) => { const f = stand.faecher.find((x) => !x.geloescht && x.name === p.name && x.lage.ort === ${kO}.id);
       const g = f && document.querySelector('svg .platz[data-fach="' + f.id + '"]'); return !!g && (p.offen ? !g.dataset.farbe && !!g.querySelector(".etikett") : g.dataset.farbe === p.farbe); }).every(Boolean)`);
@@ -1106,13 +1106,13 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await bild("9k-kueche.png");
 
     // Neue Dose über „+“ mit Farbe, dann Name und Farbe ändern (die Vorlage füllt alle 40 Plätze -> eine Reihe dazu)
-    await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 9 }]).then(() => 1)`); await warte(400);
+    await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 5 }]).then(() => 1)`); await warte(400);
     // v6.25 Codex R2 #7 + #8: Ablage 1 Platz hoch (mit Inhalt) ohne kaputte Bildfläche; aufgeteilte Dose mit langem Namen
-    const r2 = await js(`tun([{ typ: "neu", art: "fach", werte: { name: "Flachablage", offen: true, lage: { ort: ${kO}.id, reihe: 8, spalte: 3 } } },
-      { typ: "neu", art: "fach", werte: { name: "Backpulver/Vanillezucker", lage: { ort: ${kO}.id, reihe: 8, spalte: 4 } } },
-      { typ: "neu", art: "fach", werte: { name: "Schokostückchen", lage: { ort: ${kO}.id, reihe: 8, spalte: 4 } } }]).then((v) => v.map((x) => x.id))`); await warte(400);
+    const r2 = await js(`tun([{ typ: "neu", art: "fach", werte: { name: "Flachablage", offen: true, lage: { ort: ${kO}.id, reihe: 4, spalte: 3 } } },
+      { typ: "neu", art: "fach", werte: { name: "Backpulver/Vanillezucker", lage: { ort: ${kO}.id, reihe: 4, spalte: 4 } } },
+      { typ: "neu", art: "fach", werte: { name: "Schokostückchen", lage: { ort: ${kO}.id, reihe: 4, spalte: 4 } } }]).then((v) => v.map((x) => x.id))`); await warte(400);
     const r2e = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Flachtest", fach: ${JSON.stringify(r2[0])} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
-    pruefe(await js(`(() => { const g = document.querySelector('svg .platz[data-fach="${r2[0]}"]'); return !g.querySelector("foreignObject") && g.querySelector(".kname").textContent.startsWith("Flach"); })()`), "R2 #7: Ablage 1 hoch mit Inhalt: nur Etikett, keine Bildfläche mit negativer Höhe");
+    pruefe(await js(`(() => { const g = document.querySelector('svg .platz[data-fach="${r2[0]}"]'); const fo = g.querySelector("foreignObject"); return !!fo && Number(fo.getAttribute("height")) >= 16 && g.querySelector(".kname").textContent.startsWith("Flach"); })()`), "R2 #7 / v6.26: Ablage 1 Platz (4er-Raster) zeigt Bilder mit gültiger Höhe + Etikett");
     pruefe(await js(`[...document.querySelectorAll("svg foreignObject")].every((f) => Number(f.getAttribute("height")) > 0)`), "R2 #7: keine Bildfläche mit Höhe ≤ 0");
     pruefe(await js(`[${JSON.stringify(r2[1])}, ${JSON.stringify(r2[2])}].every((id) => { const g = document.querySelector('svg .platz[data-fach="' + id + '"]'), t = g.querySelector(".treffer").getBoundingClientRect();
       return [...g.querySelectorAll(".dname")].every((x) => { const b = x.getBoundingClientRect(); return b.left >= t.left - .5 && b.right <= t.right + .5; }); })`), "R2 #8: aufgeteilte Dosen: Etikett-Text bleibt in der eigenen Dose");
@@ -1145,9 +1145,46 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     const wid = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Warntest", mhd: ${JSON.stringify(Hilfen_plus(new Date().toISOString().slice(0, 10), 2))}, fach: ${JSON.stringify(reis)} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
     pruefe(await js(`!!${reisG}.querySelector(".punkt.rot") && ${reisG}.getAttribute("aria-label").includes("laufen bald ab")`), "Warnpunkt an der Dose");
     await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(wid)}, feld: "geloescht", wert: true }, { typ: "feld", art: "fach", ziel: ${JSON.stringify(td)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
-    await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 8 }]).then(() => 1)`); await warte(400);
+    await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 4 }]).then(() => 1)`); await warte(400);
     const kDialog2 = await ortDialogKnoepfe("Küchenschublade");
-    pruefe(!kDialog2.includes("einrichten") && !kDialog2.includes("Foto"), "Ort-Dialog nach dem Einrichten: keine Vorlage mehr (" + kDialog2 + ")");
+    pruefe(!kDialog2.includes("einrichten") && !kDialog2.includes("Foto") && !kDialog2.includes("Gleich große"), "Ort-Dialog nach dem Einrichten: keine Vorlage mehr (" + kDialog2 + ")");
+    // v6.26: Dose ohne Größen-Knöpfe, Ablage behält sie
+    await js(`(fachMenue(fachVon(${JSON.stringify(reis)})), 1)`); await warte(300);
+    pruefe(!(await js(`[...document.querySelectorAll(".blatt button")].some((b) => /↕|↑ Nach oben|Wieder 1 Platz/.test(b.textContent))`)), "v6.26: Dose hat keine Größen-Knöpfe");
+    await js(`history.back(), 1`); await warte(300);
+    // Codex R3 #2: Dose mit hoch 2 (altes Handy / umgewandelte Ablage) kann wieder klein werden, aber nicht weiter wachsen
+    const woks = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Woknudeln").id`);
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(woks)}, feld: "hoch", wert: 2 }]).then(() => 1)`); await warte(400);
+    await js(`(fachMenue(fachVon(${JSON.stringify(woks)})), 1)`); await warte(300);
+    const wk = await js(`[...document.querySelectorAll(".blatt button")].map((b) => b.textContent).join("|")`);
+    pruefe(wk.includes("Wieder 1 Platz hoch") && !/↕|↑ Nach oben/.test(wk), "R3 #2: hohe Dose: nur „Wieder 1 Platz hoch“ (" + wk + ")");
+    await klick(".blatt button", "Wieder 1 Platz hoch"); await warte(400);
+    pruefe(!(await js(`fachVon(${JSON.stringify(woks)}).hoch`)), "R3 #2: Dose wieder 1 Platz");
+
+    // v6.26 Umstellung der alten Fassung 8 × 5 (Tobias' Handy, v6.24/v6.25): alles umsetzen, Inhalt bleibt, nichts neu
+    const ALT = [["Reis", 0, 0, 3], ["Woknudeln", 3, 0, 3], ["Schublade", 6, 0, 2], ["Risottoreis", 0, 1, 2], ["Tüten", 2, 1, 4], ["Croutons", 6, 1, 2],
+      ["Grieß", 0, 2, 3], ["Dr. Oetker", 3, 2, 2], ["Schokoguss", 5, 2, 3], ["Pudding", 0, 3, 3], ["Backpulver/Vanillezucker", 3, 3, 1], ["Schokostückchen", 4, 3, 2],
+      ["Kakaopulver", 6, 3, 2], ["Puderzucker", 0, 4, 2], ["Zucker", 2, 4, 2], ["Mehl", 4, 4, 2], ["Speisestärke", 6, 4, 2]];
+    await js(`(() => { const o = ${kO}, f = (n) => stand.faecher.find((x) => !x.geloescht && x.lage.ort === o.id && x.name === n);
+      return tun([{ typ: "feld", art: "ort", ziel: o.id, feld: "reihen", wert: 8 }, ...${JSON.stringify(ALT)}.flatMap(([n, r, c, h]) => [
+        { typ: "feld", art: "fach", ziel: f(n).id, feld: "lage", wert: { ort: o.id, reihe: r, spalte: c } },
+        { typ: "feld", art: "fach", ziel: f(n).id, feld: "hoch", wert: h > 1 ? h : null }])]).then(() => 1); })()`); await warte(500);
+    pruefe(await js(`stand.faecher.filter((f) => !f.geloescht && f.lage.ort === ${kO}.id && (f.hoch || 1) === 3).length`) === 5 &&
+      await js(`stand.faecher.filter((f) => !f.geloescht && f.ortKlaeren && f.lage.ort === ${kO}.id).length`) === 0, "alte Fassung 8 × 5 nachgestellt");
+    const wid2 = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Umzugstest", fach: ${JSON.stringify(reis)} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
+    await bearb(true);
+    pruefe((await umbauTexte()).includes("🫙 Gleich große Dosen übernehmen (4 × 5)"), "alte Fassung: Knopf „Gleich große Dosen übernehmen (4 × 5)“");
+    const dV2 = dialoge.length;
+    await klick(".umbau button", "Gleich große Dosen"); await warte(800);
+    const frage2 = dialoge[dV2] || "";
+    pruefe(frage2.includes("17 vorhandene Fächer werden umgesetzt") && !frage2.includes("neu angelegt") && !frage2.includes("Bleiben stehen") && !frage2.includes("außerhalb"), "Rückfrage: 17 umgesetzt, nichts neu, nichts bleibt, nichts außerhalb");
+    pruefe(await js(`(() => { const o = ${kO}, ff = stand.faecher.filter((f) => !f.geloescht && f.lage.ort === o.id);
+      return o.reihen === 4 && ff.length === 17 && ff.every((f) => !f.ortKlaeren) && ff.filter((f) => (f.hoch || 1) > 1).map((f) => f.name).sort().join() === "Dr. Oetker,Tüten"; })()`), "danach 4 × 5, 17 Fächer, nichts in „Ort klären“, nur die Ablagen 2 hoch");
+    pruefe(await js(`(() => { const f = fachVon(${JSON.stringify(reis)}); return f.lage.reihe === 0 && f.lage.spalte === 0 && !f.hoch && f.farbe === "pink" && imFach(f.id).some((e) => e.id === ${JSON.stringify(wid2)}); })()`), "Reis: hinten links, 1 Platz, Farbe und Inhalt bleiben");
+    pruefe(await js(`[...document.querySelectorAll("svg foreignObject")].every((f) => Number(f.getAttribute("height")) > 0) && !document.querySelector(".umbau button.gross")`), "Zeichnung ok, Knopf weg");
+    await bild("9k-kueche-4x5.png");
+    await bearb(false);
+    await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(wid2)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
   }
 
   console.log("9j. v6.16: Daumenleiste, Menüs gruppiert, ⓘ statt Erklärzeilen");

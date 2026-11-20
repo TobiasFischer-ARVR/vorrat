@@ -213,15 +213,15 @@
     }
     return best ? best[1] : ((k) => [name.slice(0, k) + "-", name.slice(k)])(Math.min(max - 1, Math.ceil(name.length / 2)));
   }
-  // Raster 8 x 5 vom Foto (Reihe 0 = hinten): [Name, Reihe, Spalte, hoch, Farbe | "ablage" | "alt"]. Spalte 1 ist oben
-  // buendig (vorne links frei), deshalb feste Plaetze statt Tuerme. "alt" = Grundausstattungs-Fach "Schublade" (stand auf
-  // dem Platz von Reis): wird nur nach vorne links umgesetzt (Inhalt bleibt), nie neu angelegt (R10).
-  const KUECHE = { reihen: 8, spalten: 5, plaetze: [
-    ["Reis", 0, 0, 3, "pink"], ["Woknudeln", 3, 0, 3, "dunkelblau"], ["Schublade", 6, 0, 2, "alt"],
-    ["Risottoreis", 0, 1, 2, "pink"], ["Tüten", 2, 1, 4, "ablage"], ["Croutons", 6, 1, 2, "dunkelblau"],
-    ["Grieß", 0, 2, 3, "dunkelblau"], ["Dr. Oetker", 3, 2, 2, "ablage"], ["Schokoguss", 5, 2, 3, "schwarz"],
-    ["Pudding", 0, 3, 3, "rot"], ["Backpulver/Vanillezucker", 3, 3, 1, "dunkelblau"], ["Schokostückchen", 4, 3, 2, "dunkelblau"], ["Kakaopulver", 6, 3, 2, "hellgruen"],
-    ["Puderzucker", 0, 4, 2, "dunkelblau"], ["Zucker", 2, 4, 2, "pink"], ["Mehl", 4, 4, 2, "pink"], ["Speisestärke", 6, 4, 2, "petrol"],
+  // v6.26 (Tobias 20.11.: "von oben sind alle Dosen gleich gross, nur die Hoehe unterscheidet sich"): Raster 4 x 5, jede Dose
+  // 1 Platz, nur die zwei Ablagen sind 2 hoch. Reihe 0 = hinten. [Name, Reihe, Spalte, hoch, Farbe | "ablage" | "alt"].
+  // Vorne links + Reihe 2 links frei. "alt" = Grundausstattungs-Fach "Schublade": wird nur umgesetzt (Inhalt bleibt), nie neu angelegt (R10).
+  const KUECHE = { reihen: 4, spalten: 5, plaetze: [
+    ["Reis", 0, 0, 1, "pink"], ["Woknudeln", 1, 0, 1, "dunkelblau"], ["Schublade", 3, 0, 1, "alt"],
+    ["Risottoreis", 0, 1, 1, "pink"], ["Tüten", 1, 1, 2, "ablage"], ["Croutons", 3, 1, 1, "dunkelblau"],
+    ["Grieß", 0, 2, 1, "dunkelblau"], ["Dr. Oetker", 1, 2, 2, "ablage"], ["Schokoguss", 3, 2, 1, "schwarz"],
+    ["Pudding", 0, 3, 1, "rot"], ["Backpulver/Vanillezucker", 1, 3, 1, "dunkelblau"], ["Schokostückchen", 2, 3, 1, "dunkelblau"], ["Kakaopulver", 3, 3, 1, "hellgruen"],
+    ["Puderzucker", 0, 4, 1, "dunkelblau"], ["Zucker", 1, 4, 1, "pink"], ["Mehl", 2, 4, 1, "pink"], ["Speisestärke", 3, 4, 1, "petrol"],
   ] };
   const kuechePlaetze = () => KUECHE.plaetze.map(([name, reihe, spalte, hoch, art]) => ({ name, reihe, spalte, hoch,
     ...(art === "ablage" ? { offen: true } : art === "alt" ? { nurUmsetzen: true } : { farbe: art }) }));
@@ -235,11 +235,13 @@
       text: "2 Seiten nebeneinander, Schubladen in den Größen vom Foto.",
       knopf: (o) => (o.stil ? "🩹 Schubladen-Größen wie auf dem Foto übernehmen" : "🩹 Wie auf dem Foto einrichten (34 Schubladen)"),
       dialogKnopf: (o) => (o.stil ? "🩹 Größen wie auf dem Foto übernehmen" : "🩹 Als Medizinschrank einrichten (Vorlage)") },
-    { ortName: "Küchenschublade", noetig: (o) => o.stil !== "dosen", plaetze: kuechePlaetze,
+    // v6.26: auch die alte 8-Reihen-Fassung (v6.24/v6.25) braucht die Vorlage, um auf gleich grosse Dosen umzustellen.
+    // ponytail: 8 Reihen = alte Fassung; wer das Raster von Hand auf 8 Reihen stellt, sieht den Knopf wieder.
+    { ortName: "Küchenschublade", noetig: (o) => o.stil !== "dosen" || o.reihen === 8, plaetze: kuechePlaetze,
       ort: { reihen: KUECHE.reihen, spalten: KUECHE.spalten, stil: "dosen" }, wort: "Dosen",
-      text: "Draufsicht mit " + KUECHE.reihen + " Reihen × " + KUECHE.spalten + " Spalten, Dosen mit farbigen Deckeln wie auf dem Foto.",
-      knopf: () => "🫙 Wie auf dem Foto einrichten (" + kuecheZahl(false) + " Dosen, " + kuecheZahl(true) + " Ablagen)",
-      dialogKnopf: () => "🫙 Als Küchenschublade einrichten (Vorlage)" },
+      text: "Draufsicht mit " + KUECHE.reihen + " Reihen × " + KUECHE.spalten + " Spalten, alle Dosen gleich groß, Deckelfarben wie auf dem Foto.",
+      knopf: (o) => (o.stil ? "🫙 Gleich große Dosen übernehmen (" + KUECHE.reihen + " × " + KUECHE.spalten + ")" : "🫙 Wie auf dem Foto einrichten (" + kuecheZahl(false) + " Dosen, " + kuecheZahl(true) + " Ablagen)"),
+      dialogKnopf: (o) => (o.stil ? "🫙 Gleich große Dosen übernehmen" : "🫙 Als Küchenschublade einrichten (Vorlage)") },
   ];
   const vorlageFuer = (o) => (o && VORLAGEN.find((v) => v.ortName === o.name && v.noetig(o))) || null;
 

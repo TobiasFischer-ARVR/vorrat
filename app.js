@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.25"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.26"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -981,7 +981,7 @@ function zeichnung(ort) {
   const ds = ort.stil === "dosen"; // v6.24 Kuechenschublade: Draufsicht, 360 breit wie das Regal (kein Wischen), feines Raster
   const W = sk ? Math.max(360, 100 * ort.spalten + tb) : 360, schub = !sk && !ds && ort.spalten === 1;
   const fein = sk && ort.reihen > 6; // v6.10: feines Raster (Medizinschrank 12 Reihen) - niedrigere Reihen
-  const rand = schub ? 14 : ds ? 10 : 12, luft = schub ? 9 : ds ? 3 : sk ? (fein ? 4 : 6) : 10, rh = schub ? 66 : ds ? 28 : sk ? (fein ? 30 : 58) : 96, spalt = 6;
+  const rand = schub ? 14 : ds ? 10 : 12, luft = schub ? 9 : ds ? 3 : sk ? (fein ? 4 : 6) : 10, rh = schub ? 66 : ds ? (ort.reihen > 6 ? 28 : 52) : sk ? (fein ? 30 : 58) : 96, spalt = 6;
   const cw = (W - 2 * rand - (ort.spalten - 1) * luft - tb) / ort.spalten;
   const xVon = (c) => rand + c * (cw + luft) + (tb && c >= ort.trenner ? tb : 0);
   const hoehe = 2 * rand + ort.reihen * rh + (ort.reihen - 1) * luft;
@@ -2438,7 +2438,9 @@ function fachMenue(alt) {
     liste: [
       !f.ortKlaeren && ["✂ Aufteilen", weiter(() => aufteilenDialog(f))],
       nb.length > 0 && ["⊕ Zusammenlegen", weiter(() => zusammenDialog(f, nb))],
-      ...hoehenKnoepfe(f),
+      // v6.26: Dosen sind alle gleich gross, nur Ablagen wachsen. Verkleinern bleibt (Codex R3 #2: hohe Dose aus altem
+      // Handy/Abgleich oder aus einer umgewandelten Ablage muss wieder klein werden koennen).
+      ...(o && o.stil === "dosen" && !f.offen ? hoehenKnoepfe(f).filter((k) => k && k[0].startsWith("⤒")) : hoehenKnoepfe(f)),
       o && [f.offen ? "📦 In " + fachWort(o) + " umwandeln" : "🧺 In Ablage umwandeln (ohne Kiste)", async (melde, schliessen) => {
         const jetzt = fachVon(f.id);
         if (!jetzt || jetzt.geloescht) return melde("Dieses Fach gibt es nicht mehr.");
