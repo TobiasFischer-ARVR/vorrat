@@ -2627,11 +2627,14 @@ const fachZug = (f) => { let vorher = null; return zug(() => [el("span", { class
   if (!z || !ich || z.dataset.fach === f.id) return null;
   const x = z.dataset.fach && fachVon(z.dataset.fach);
   if (x && gleicheLage(x.lage, ich.lage)) return null;
-  vorher = { ich: lageKopie(ich), ziel: x ? lageKopie(x) : null };
+  const ids = (g) => g.map((d) => d.id).sort().join();
+  vorher = { ich: lageKopie(ich), ziel: x ? lageKopie(x) : null, gruppe: ids(zugGruppe(ich)), zielGruppe: x ? ids(zugGruppe(x)) : "" };
   return z;
 }, (z) => {
   const ich = fachVon(f.id), x = z.dataset.fach && fachVon(z.dataset.fach);
-  if (!vorher || !ich || !gleicheLage(ich.lage, vorher.ich) || (z.dataset.fach && (!x || !vorher.ziel || !gleicheLage(x.lage, vorher.ziel))))
+  const ids = (g) => g.map((d) => d.id).sort().join();
+  if (!vorher || !ich || !gleicheLage(ich.lage, vorher.ich) || ids(zugGruppe(ich)) !== vorher.gruppe ||
+    (z.dataset.fach && (!x || !vorher.ziel || !gleicheLage(x.lage, vorher.ziel) || ids(zugGruppe(x)) !== vorher.zielGruppe)))
     return hinweis("Inzwischen anders verschoben – bitte nochmal ziehen.");
   return z.dataset.platz ? fachAufPlatz(f.id, JSON.parse(z.dataset.platz)) : fachAufFach(f.id, z.dataset.fach);
 }); };
@@ -2642,7 +2645,9 @@ const fachZug = (f) => { let vorher = null; return zug(() => [el("span", { class
 async function lagenSetzen(neu, text, extra = []) {
   const alt = neu.map(([id]) => [id, lageKopie(fachVon(id))]);
   // Review v6.27: alte ebene merken, Rueckgaengig stellt sie mit zurueck (nur die, die sich wirklich aendert)
-  const altEbene = extra.filter((v) => v.feld === "ebene").map((v) => [v.ziel, fachVon(v.ziel).ebene ?? null]).filter(([i, e]) => e !== (extra.find((v) => v.ziel === i && v.feld === "ebene").wert ?? null));
+  // [id, alt, geschrieben, lage danach]; lage danach = neue Lage aus neu, sonst die jetzige (Dose zieht nicht um)
+  const altEbene = extra.filter((v) => v.feld === "ebene").map((v) => [v.ziel, fachVon(v.ziel).ebene ?? null, v.wert ?? null,
+    (neu.find(([i]) => i === v.ziel) || [null, lageKopie(fachVon(v.ziel))])[1]]).filter(([, alt, wert]) => alt !== wert);
   if (!(await tun([...neu.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })), ...extra]))) return;
   untenZeigen(text, "Rückgängig", async () => {
     if (!neu.every(([id, lage]) => fachGueltig(id) && gleicheLage(fachVon(id).lage, lage)))
@@ -2650,7 +2655,9 @@ async function lagenSetzen(neu, text, extra = []) {
     if (!alt.every(([i, l]) => lageGueltig(l) && (hoeheVon(fachVon(i)) === 1 ? !verdeckt(l, i) : platzFrei(l.ort, l.reihe, l.spalte, i, hoeheVon(fachVon(i))))))
       return hinweis("Den alten Platz gibt es nicht mehr – Rückgängig nicht möglich.");
     if (await tun([...alt.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })),
-      ...altEbene.filter(([i]) => fachGueltig(i)).map(([id, e]) => ({ typ: "feld", art: "fach", ziel: id, feld: "ebene", wert: e }))])) untenZeigen("Zurück verschoben");
+      // Pruefer #2: nur zurueck, wenn das andere Handy inzwischen nichts an ebene/Platz geaendert hat
+      ...altEbene.filter(([i, , wert, l]) => fachGueltig(i) && (fachVon(i).ebene ?? null) === wert && gleicheLage(fachVon(i).lage, l))
+        .map(([id, e]) => ({ typ: "feld", art: "fach", ziel: id, feld: "ebene", wert: e }))])) untenZeigen("Zurück verschoben");
   });
 }
 // v6.27 K6/R9: im Stil dosen zieht der ganze Stapel - Kennungen beim Loslassen aus dem aktuellen Stand, nie aus der Zeichnung.
