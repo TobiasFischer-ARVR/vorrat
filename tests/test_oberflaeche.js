@@ -438,22 +438,36 @@ fall("v6.23 Rueckgaengig: Menge 1, fremder Fuellstand, geloescht, verschoben, Le
   assert.match(H.rueckSchritte(ab, vorher, jetztMap(h.vs)), /verschoben/);
 });
 
-fall("v6.23 Codex #1: Rueckgaengig nach fremdem -1 auf die abgespaltene Packung -> Bestand pruefen statt still falsch", () => {
+fall("v6.23 Review #3/#4: Rueckgaengig des Abspaltens nur, wenn die neue Packung unbenutzt und beide im alten Fach sind", () => {
   const a = teilHandy();
-  const [o] = a.tu([{ typ: "neu", art: "ort", werte: { name: "Regal", reihen: 1, spalten: 1 } }]);
-  const [f] = a.tu([{ typ: "neu", art: "fach", werte: { name: "Backen", lage: { ort: o.id, reihe: 0, spalte: 0 } } }]);
+  const [o] = a.tu([{ typ: "neu", art: "ort", werte: { name: "Regal", reihen: 1, spalten: 2 } }]);
+  const [f, g] = a.tu([{ typ: "neu", art: "fach", werte: { name: "Backen", lage: { ort: o.id, reihe: 0, spalte: 0 } } },
+    { typ: "neu", art: "fach", werte: { name: "Rest", lage: { ort: o.id, reihe: 0, spalte: 1 } } }]);
   const [e] = a.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: f.id }, menge: 3 }]);
   const vorher = jetztMap(a.vs).get(e.id);
   const fertig = a.tu(H.anbrechenSchritte(vorher, 50, HEUTE));
   const neuId = fertig[1].id;
   const b = teilHandy("teilgeraet2"); b.sieh(a.vs);
-  const fremd = b.tu([{ typ: "menge", art: "eintrag", ziel: neuId, delta: -1, grund: "entnahme" }]); // B verbraucht die offene
-  const r = H.rueckSchritte(fertig, vorher, jetztMap([...a.vs, ...fremd])); // A sieht B schon (Menge 0, auch unsichtbar gefunden)
-  assert.ok(Array.isArray(r) && r.length === 2, String(r));
-  a.tu(r);
+  // Codex #1 / Review #3: B verbraucht die offene Packung -> kein Rueckgaengig mehr, Bestand bleibt richtig (2)
+  const fremd = b.tu([{ typ: "menge", art: "eintrag", ziel: neuId, delta: -1, grund: "entnahme" }]);
+  assert.match(H.rueckSchritte(fertig, vorher, jetztMap([...a.vs, ...fremd])), /benutzt/);
   const s = M.berechne([...a.vs, ...fremd]);
-  const alt = s.eintraege.find((x) => x.id === e.id), neu = s.eintraege.find((x) => x.id === neuId);
-  assert.deepStrictEqual([alt.menge, neu.summe, neu.bestandPruefen, neu.sichtbar], [3, -1, true, true], "Summe 2 stimmt, Minus wird gezeigt");
+  assert.deepStrictEqual(s.eintraege.filter((x) => x.sichtbar && !x.bestandPruefen).map((x) => x.menge), [2], "kein Minus, nichts zu pruefen");
+  // auch nach +1 (Menge 2 statt 1) nicht
+  assert.match(H.rueckSchritte(fertig, vorher, jetztMap([...a.vs, { ...fremd[0], delta: 1, grund: "zugang" }])), /benutzt/);
+  // Review #4: neue Packung verschoben -> nicht mehr moeglich
+  const weg = b.tu([{ typ: "feld", art: "eintrag", ziel: neuId, feld: "fach", wert: g.id }]);
+  assert.match(H.rueckSchritte(fertig, vorher, jetztMap([...a.vs, ...weg])), /verschoben/);
+  // unberuehrt -> geht
+  assert.ok(Array.isArray(H.rueckSchritte(fertig, vorher, jetztMap(a.vs))));
+});
+
+fall("v6.23 Review #5: Laeuft bald ab und Fach sortieren gleich - offene vor gleichnamiger zu-Packung", () => {
+  const e = (id, anbruch) => ({ id, name: "Mehl", sichtbar: true, menge: 1, ablauf: "2026-11-25", anbruch });
+  const l = H.baldAb([e("a1", undefined), e("b2", { seit: HEUTE, rest: 50 })], HEUTE);
+  assert.deepStrictEqual(l.map((x) => x.e.id), ["b2", "a1"]);
+  assert.strictEqual(H.offenZuerst(e("x", null), e("y", { seit: HEUTE, rest: 10 })), 1);
+  assert.strictEqual(H.offenZuerst(e("x"), e("y")), 0);
 });
 
 fall("v6.23 anbruchText: kurz/lang, Menge >= 2, zu = leer; Stufen = Modellwerte", () => {
@@ -463,6 +477,7 @@ fall("v6.23 anbruchText: kurz/lang, Menge >= 2, zu = leer; Stufen = Modellwerte"
   assert.strictEqual(H.anbruchText({ menge: 1 }), "");
   assert.strictEqual(H.anbruchText({ menge: 1, anbruch: null }, true), "");
   assert.deepStrictEqual(H.ANBRUCH_STUFEN.map((s) => s[0]), M.ANBRUCH_REST);
+  assert.deepStrictEqual([H.stufeText(75), H.stufeText(10), H.stufeText(33)], ["¾", "fast leer", ""]);
 });
 
 console.log("\n" + faelle + " Faelle bestanden.");

@@ -75,12 +75,15 @@ main .kacheln button.kachel.markiert::after { content: "✓"; position: absolute
 .knoepfe.raster { justify-content: center; margin: 8px 0 0; }
 .kachel .bild { font-size: 2.4rem; line-height: 1.1; }
 .kachel .name { font-size: .85rem; font-weight: 600; line-height: 1.15; text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.kachel .zahl { position: absolute; top: 4px; right: 7px; font-size: .95rem; font-weight: 800; }
+.kachel .ecke { position: absolute; top: 4px; right: 7px; display: flex; gap: 5px; align-items: baseline; } /* v6.23: "offen" + ×n */
+.kachel .zahl { font-size: .95rem; font-weight: 800; }
 .kachel .datum { font-size: .75rem; opacity: .9; }
 .kachel .marke { position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 0; background: #0006; color: #fff; font-size: .65rem; }
-/* v6.23 Teilmengen: offene Packung = "offen" oben links + Fuellstands-Leiste unten (Breite = Rest), Farbe wie die Schrift */
-.kachel .offen { position: absolute; top: 4px; left: 7px; font-size: .7rem; font-weight: 800; }
+/* v6.23 Teilmengen: offene Packung = "offen" oben rechts + Fuellstands-Leiste unten (Breite = Rest), Farbe wie die Schrift */
+.kachel .offen { font-size: .7rem; font-weight: 800; }
 .kachel .fuellstand { position: absolute; left: 8px; right: 8px; bottom: 5px; height: 6px; border-radius: 3px; background: #0003; overflow: hidden; }
+.kachel .marke + .fuellstand { bottom: 17px; } /* ueber dem Balken "Bestand prüfen" / "Ort klären" ... */
+main button.kachel:has(.marke + .fuellstand) { padding-bottom: 24px; } /* ... Inhalt ruckt dafuer nach oben */
 .kachel .fuellstand i { display: block; height: 100%; background: currentColor; }
 
 /* Dialoge */

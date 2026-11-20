@@ -222,6 +222,18 @@ function untenZeigen(text, knopf, fn) {
 }
 
 // ---- Daten ----
+// Speicher + OneDrive-Stand lesen und zusammenfuehren (laden(), v6.23 auch eintraegeFrisch()). Wirft bei Lesefehler.
+async function lesen() {
+  sp = sp || (await Speicher.oeffnen());
+  let vs, a, z;
+  do { z = aenderungen; vs = await sp.alleVorgaenge(); a = await sp.abgleich(); } while (z !== aenderungen);
+  // Lesefehler nie als leeren Vorrat behandeln (Bauplan R2 #10). OneDrive-Stand nur fuer den eingestellten
+  // Ordner (nach Ordnerwechsel nie den alten mischen).
+  const neuAb = a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null;
+  const r = Cloud.zusammenfuehren(vs, neuAb ? neuAb.dateien : {});
+  if (!r.ok) throw new Error(r.fehler);
+  return { vs, neuAb, vorgaenge: r.vorgaenge };
+}
 async function laden() {
   // Kein Standtausch unter offenem Dialog oder laufendem Schreiben (UGC #15): der Dialog rechnet
   // mit dem alten Stand (z. B. Nachzaehlen = gezaehlt minus bekannte Summe). Danach nachholen.
@@ -229,15 +241,8 @@ async function laden() {
   nachladen = false;
   let neu;
   try {
-    sp = sp || (await Speicher.oeffnen());
-    let vs, a, z;
-    do { z = aenderungen; vs = await sp.alleVorgaenge(); a = await sp.abgleich(); } while (z !== aenderungen);
-    // Lesefehler nie als leeren Vorrat behandeln (Bauplan R2 #10). OneDrive-Stand nur fuer den eingestellten
-    // Ordner (nach Ordnerwechsel nie den alten mischen).
-    const neuAb = a && a.ordner === Cloud.ordnerSchluessel(einst.datenPfad) ? a : null;
-    const r = Cloud.zusammenfuehren(vs, neuAb ? neuAb.dateien : {});
-    if (!r.ok) throw new Error(r.fehler);
-    neu = () => { ab = neuAb; lokal = vs; liste = r.vorgaenge; stand = Modell.berechne(liste); ladeFehler = null; };
+    const { vs, neuAb, vorgaenge } = await lesen();
+    neu = () => { ab = neuAb; lokal = vs; liste = vorgaenge; stand = Modell.berechne(liste); ladeFehler = null; };
   } catch (x) {
     neu = () => { stand = null; ladeFehler = "Daten konnten nicht gelesen werden: " + ((x && x.message) || x) + ". Es wurde nichts verändert."; };
   }
@@ -697,7 +702,7 @@ const imFach = (id) => stand.eintraege.filter((e) => e.sichtbar && e.fach === id
 // v6.18 (Tobias 18.11.): Anzeige zaehlt Stueck, nicht Eintraege (Muesli x2 = "2 Sachen"). Sichtbar mit Menge 0 (Bestand pruefen) zaehlt 1.
 const stueckImFach = (id) => imFach(id).reduce((s, e) => s + Math.max(1, e.menge), 0);
 // v6.23: bei gleichem Datum und Namen die offene Packung zuerst (erst die offene aufbrauchen)
-const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de") || !!b.anbruch - !!a.anbruch;
+const nachAblauf = (a, b) => ((a.ablauf || "9") + a.name).localeCompare((b.ablauf || "9") + b.name, "de") || H.offenZuerst(a, b);
 // v6.23 Teilmengen: Zusatz hinter dem Namen ("· offen ½") und fuers aria-label (Suche, Laeuft bald ab)
 const offenZusatz = (e) => { const t = H.anbruchText(e); return t ? " · " + t : ""; };
 const offenAria = (e) => { const t = H.anbruchText(e, true); return t ? ", " + t : ""; };
@@ -1303,7 +1308,7 @@ function eintragMenue(e) {
   const anbrechKnopf = e.bestandPruefen ? ["Erst nachzählen", weiter(() => eintragDialog(e))]
     : e.ortKlaeren ? ["Erst Ort klären", weiter(verschiebenAuf)] : ["🥣 Anbrechen", weiter(() => stufenMenue(e))];
   menue(kuerze(e.name, 40), [flaeche, umschalt, el("p", { className: "klein" }, (e.menge >= 2 ? e.menge + " Stück · " : "") + (e.ortKlaeren ? "Ort klären" : fachText(e.fach))),
-    a && el("p", { className: "klein offenseit" }, (e.menge >= 2 ? "1 Packung " : "") + "offen seit " + a.seit.slice(8, 10) + "." + a.seit.slice(5, 7) + ". · " + stufeKurz(a.rest))], {
+    a && el("p", { className: "klein offenseit" }, (e.menge >= 2 ? "1 Packung " : "") + "offen seit " + H.deDatum(a.seit).slice(0, 6) + " · " + H.stufeText(a.rest))], {
     oben: [
       a ? ["Leer, weg", weiter(() => leerWeg(e)), "an"] : ["−1" + (e.menge === 1 ? " (das letzte)" : " · eins raus"), weiter(() => entnehmen(e)), "an"],
       !a && anbrechKnopf,
@@ -1323,7 +1328,6 @@ function eintragMenue(e) {
 }
 
 // ---- v6.23 Teilmengen (Bauplan Teilmengen Fassung 3) ----
-const stufeKurz = (rest) => (H.ANBRUCH_STUFEN.find((s) => s[0] === rest) || [0, ""])[1];
 // Ein Tipp auf eine Stufe = fertig (schliesst das Menue, dann anbrechen). aktuell = Stufe markieren.
 const stufenKnoepfe = (e, aktuell) => H.ANBRUCH_STUFEN.map(([rest, kurz]) => [kurz, weiter(() => anbrechen(e, rest)), rest === aktuell ? "an" : ""]);
 function stufenMenue(e) {
@@ -1335,10 +1339,7 @@ function stufenMenue(e) {
 // berechne. Map Kennung -> Eintrag, auch unsichtbar (Menge 0) und geloescht. null = nicht lesbar (Hinweis steht).
 async function eintraegeFrisch() {
   try {
-    const vs = await sp.alleVorgaenge(), a = mitOrdner(await sp.abgleich());
-    const r = Cloud.zusammenfuehren(vs, a ? a.dateien : {});
-    if (!r.ok) throw new Error(r.fehler);
-    return new Map(Modell.berechne(r.vorgaenge).eintraege.map((x) => [x.id, x]));
+    return new Map(Modell.berechne((await lesen()).vorgaenge).eintraege.map((x) => [x.id, x]));
   } catch (x) { hinweis("Daten nicht lesbar – nichts geändert."); return null; }
 }
 const frischHolen = async (id) => {
@@ -1359,18 +1360,21 @@ function rueckAnbieten(text, fertig, vorher, zurueckText) {
 async function anbrechen(e, rest) {
   const x = await frischHolen(e.id);
   if (!x) return;
+  // Review v6.23 #2: auch der Fuellstand nur bei sauberem, sichtbarem Bestand (nie auf leere/unsichtbare Eintraege schreiben)
+  if (x.bestandPruefen || x.ortKlaeren) return hinweis(x.ortKlaeren ? "Erst Ort klären, dann anbrechen." : "Erst nachzählen, dann anbrechen.");
+  if (!x.sichtbar || x.menge < 1) return hinweis("Schon leer – inzwischen auf dem anderen Handy entnommen.");
   if (x.anbruch) { // schon offen (auch vom anderen Handy): nur der Fuellstand, kein Rueckgaengig (Codex #10)
     if (x.anbruch.rest !== rest && (await tun([{ typ: "feld", art: "eintrag", ziel: x.id, feld: "anbruch", wert: { seit: x.anbruch.seit, rest } }])))
-      untenZeigen(x.name + ": " + stufeKurz(rest));
+      untenZeigen(x.name + ": " + H.stufeText(rest));
     return;
   }
-  if (x.menge < 1 || x.bestandPruefen || x.ortKlaeren) return hinweis(x.ortKlaeren ? "Erst Ort klären, dann anbrechen." : "Erst nachzählen, dann anbrechen.");
   const fertig = await tun(H.anbrechenSchritte(x, rest, Modell.heuteIso()));
-  if (fertig) rueckAnbieten(x.name + (x.menge >= 2 ? ": 1 von " + x.menge + " geöffnet · " : " geöffnet · ") + stufeKurz(rest), fertig, x, x.name + " wieder zu");
+  if (fertig) rueckAnbieten(x.name + (x.menge >= 2 ? ": 1 von " + x.menge + " geöffnet · " : " geöffnet · ") + H.stufeText(rest), fertig, x, x.name + " wieder zu");
 }
 async function leerWeg(e) {
   const x = await frischHolen(e.id);
   if (!x) return;
+  if (x.menge < 1) return hinweis("Schon leer – inzwischen auf dem anderen Handy entnommen."); // Review v6.23 #1: nie ins Minus
   const fertig = await tun(H.leerSchritte(x));
   if (fertig) rueckAnbieten(x.name + " leer, weg", fertig, x, x.name + " zurück");
 }
@@ -1450,12 +1454,13 @@ function kachel(e, kurz, lang, ziehbar) {
   const k = el("button", { className: "kachel" + (st === "rot" || st === "gelb" ? " " + st : "") + (e.bestandPruefen ? " pruefen" : "") },
     el("span", { className: "bild" }, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name))),
     el("span", { className: "name" }, e.name),
-    e.menge >= 2 && el("span", { className: "zahl" }, "×" + e.menge),
+    // v6.23 Teilmengen: "offen" oben rechts neben ×n (oben links sitzt der Markier-Haken), Leiste unten ueber .marke
+    (e.menge >= 2 || e.anbruch) && el("span", { className: "ecke" },
+      e.anbruch && el("span", { className: "offen" }, e.menge >= 2 ? "1 offen" : "offen"),
+      e.menge >= 2 && el("span", { className: "zahl" }, "×" + e.menge)),
     el("span", { className: "datum" }, H.kurzDatum(e)),
-    // v6.23 Teilmengen: offene Packung = "offen" + Fuellstands-Leiste (Breite = Rest)
-    e.anbruch && el("span", { className: "offen" }, e.menge >= 2 ? "1 offen" : "offen"),
-    e.anbruch && el("span", { className: "fuellstand", "aria-hidden": "true" }, el("i", { style: "width:" + e.anbruch.rest + "%" })),
-    (e.bestandPruefen || e.ortKlaeren) && el("span", { className: "marke" }, e.bestandPruefen ? "Bestand prüfen" : "Ort klären"));
+    (e.bestandPruefen || e.ortKlaeren) && el("span", { className: "marke" }, e.bestandPruefen ? "Bestand prüfen" : "Ort klären"),
+    e.anbruch && el("span", { className: "fuellstand", "aria-hidden": "true" }, el("i", { style: "width:" + e.anbruch.rest + "%" })));
   druck(k, kurz, lang, ziehbar ? zugStart(e) : null);
   return k;
 }

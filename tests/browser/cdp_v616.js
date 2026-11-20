@@ -205,6 +205,28 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   const nB = await js(`liste.length`);
   await js(`anbrechen(eintragJetzt(${JSON.stringify(tm)}), 50).then(() => 1)`); await warte(200);
   pruefe(await js(`liste.length`) === nB, "anbrechen() bei Bestand prüfen schreibt nichts");
+  // Review v6.23 #6: "offen" kollidiert nicht mit dem Markier-Haken (oben links)
+  await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(offenId)}, feld: "anbruch", wert: { seit: Modell.heuteIso(), rest: 50 } }]).then(() => 1)`); await warte(300);
+  await js(`(oeffne({ art: "fach", id: ${JSON.stringify(fT)}, markiert: new Set([${JSON.stringify(offenId)}]) }), 1)`); await warte(400);
+  pruefe(await js(`(() => { const k = document.querySelector("main .kachel.markiert"), o = k && k.querySelector(".offen"); if (!o) return false;
+    const a = k.getBoundingClientRect(), b = o.getBoundingClientRect(), z = k.querySelector(".zahl").getBoundingClientRect(); return b.left > a.left + 34 && b.right <= z.left; })()`), "Markier-Modus: „1 offen“ rechts neben ×2, frei vom Haken oben links");
+  await bild("5a-markiert-offen.png");
+  await js(`history.back(), 1`); await warte(400);
+  // Review #1/#2: das andere Handy hat inzwischen mehr entnommen -> Leer weg / Fuellstand schreiben nichts
+  await klick("main button.kachel", "Testmehl"); await warte(400);
+  pruefe(await obenText() === "Leer, weg|↦ Verschieben|✎ Bearbeiten", "Menü der offenen ×2 offen");
+  await js(`tun([{ typ: "menge", art: "eintrag", ziel: ${JSON.stringify(offenId)}, delta: -3, grund: "entnahme" }]).then(() => 1)`); await warte(200); // unter offenem Menü
+  const nL = await js(`liste.length`);
+  await klick(".menueoben button", "Leer, weg"); await warte(800);
+  pruefe(await js(`liste.length`) === nL && await js(`[...document.querySelectorAll(".hinweis")].some(d => d.textContent.includes("Schon leer"))`), "Leer, weg auf frisch leeren Eintrag: nichts geschrieben, Hinweis „Schon leer“");
+  await js(`anbrechen(stand.eintraege.find(e => e.id === ${JSON.stringify(offenId)}), 25).then(() => 1)`); await warte(200);
+  pruefe(await js(`liste.length`) === nL && await js(`stand.eintraege.find(e => e.id === ${JSON.stringify(offenId)}).anbruch.rest`) === 50 &&
+    await js(`[...document.querySelectorAll(".hinweis")].some(d => d.textContent.includes("Erst nachzählen"))`), "Füllstand auf zu prüfenden Eintrag: nichts geschrieben, „Erst nachzählen“");
+  pruefe(await js(`(() => { const k = [...document.querySelectorAll("main .kachel.pruefen")].find(k => k.querySelector(".fuellstand")); return k.querySelector(".fuellstand").getBoundingClientRect().top >= k.querySelector(".datum").getBoundingClientRect().bottom; })()`), "Leiste überdeckt das Datum nicht");
+  // Review #6: Fuellstandsleiste ueber dem Balken "Bestand prüfen"
+  pruefe(await js(`(() => { const k = [...document.querySelectorAll("main .kachel.pruefen")].find(k => k.querySelector(".fuellstand")); if (!k) return false;
+    const l = k.querySelector(".fuellstand").getBoundingClientRect(), m = k.querySelector(".marke").getBoundingClientRect(); return l.width > 20 && l.bottom <= m.top + 0.5; })()`), "Bestand prüfen + offen: Leiste sichtbar über dem Balken");
+  await bild("5a-pruefen-offen.png");
   // aufraeumen: alle Testmehl-Eintraege (auch unsichtbare) loeschen
   await js(`tun(stand.eintraege.filter(e => e.name === "Testmehl" && !e.geloescht).map(e => ({ typ: "feld", art: "eintrag", ziel: e.id, feld: "geloescht", wert: true }))).then(() => 1)`); await warte(400);
   pruefe(await tmK() === "" && await js(`stand.eintraege.filter(e => e.name === "Testmehl" && !e.geloescht).length`) === 0, "Testmehl wieder weg");

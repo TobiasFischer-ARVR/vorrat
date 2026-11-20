@@ -80,8 +80,10 @@
     return eintraege.filter((e) => e.sichtbar && e.menge > 0 && e.ablauf)
       .map((e) => ({ e, stufe: baldStufe(e.ablauf, heute), tage: Modell.tageBis(e.ablauf, heute) }))
       .filter((x) => x.stufe)
-      .sort((a, b) => a.e.ablauf.localeCompare(b.e.ablauf) || a.e.name.localeCompare(b.e.name, "de") || (a.e.id < b.e.id ? -1 : 1));
+      .sort((a, b) => a.e.ablauf.localeCompare(b.e.ablauf) || a.e.name.localeCompare(b.e.name, "de") || offenZuerst(a.e, b.e) || (a.e.id < b.e.id ? -1 : 1));
   }
+  // v6.23: bei gleichem Datum und Namen die offene Packung zuerst (erst die offene aufbrauchen). Fach, Suche, Laeuft bald ab.
+  const offenZuerst = (a, b) => !!b.anbruch - !!a.anbruch;
   // Markierung je Fach fuer die Zeichnung: Map fachId -> { n, farbe }. n = Zahl der bald ablaufenden Eintraege
   // (nicht Stueck), farbe "rot", wenn mindestens einer abgelaufen/rot ist, sonst "gelb".
   // Eintraege mit "Ort klaeren" zaehlen nicht (ihr Fach ist weg oder hat keinen Platz).
@@ -506,8 +508,10 @@
   const ANBRUCH_STUFEN = [[100, "voll", "noch voll"], [75, "¾", "dreiviertel voll"], [50, "½", "halb voll"], [25, "¼", "ein Viertel voll"], [10, "fast leer", "fast leer"]];
   // Gemeinsamer Text fuer Kachel, Suche, Laeuft bald ab. "" = zu. Ein offener Eintrag ist genau EINE offene Packung
   // (Codex #4): bei Menge >= 2 "1 offen". lang = fuers aria-label.
+  const stufe = (rest) => ANBRUCH_STUFEN.find((x) => x[0] === rest);
+  const stufeText = (rest) => (stufe(rest) || [0, ""])[1]; // "½"; unbekannt -> ""
   function anbruchText(e, lang) {
-    const s = e && e.anbruch && ANBRUCH_STUFEN.find((x) => x[0] === e.anbruch.rest);
+    const s = e && e.anbruch && stufe(e.anbruch.rest);
     if (!s) return "";
     const eine = e.menge >= 2 ? "1 " : "";
     return lang ? eine + "angebrochen, " + s[2] : eine + "offen " + s[1];
@@ -533,7 +537,11 @@
   function rueckSchritte(fertig, vorher, jetzt) {
     const ids = [...new Set(fertig.map((v) => v.ziel))];
     if (ids.some((id) => !jetzt.get(id) || jetzt.get(id).geloescht)) return "Inzwischen gelöscht – Rückgängig nicht mehr möglich.";
-    if (fertig.some((v) => v.typ === "neu") && jetzt.get(vorher.id).fach !== vorher.fach) return "Inzwischen verschoben – Rückgängig nicht mehr möglich.";
+    // Review v6.23 #4: alter UND neuer Eintrag noch im Fach von damals
+    if (fertig.some((v) => v.typ === "neu" && (jetzt.get(vorher.id).fach !== vorher.fach || jetzt.get(v.ziel).fach !== v.werte.fach)))
+      return "Inzwischen verschoben – Rückgängig nicht mehr möglich.";
+    // Review v6.23 #3: die abgespaltene Packung muss noch genau die angelegte Menge haben (sonst ginge sie ins Minus)
+    if (fertig.some((v) => v.typ === "neu" && jetzt.get(v.ziel).summe !== v.menge)) return "Inzwischen benutzt – Rückgängig nicht mehr möglich.";
     const aus = [];
     for (const v of fertig) {
       if (v.typ === "neu") aus.push({ typ: "menge", art: "eintrag", ziel: v.ziel, delta: -v.menge, grund: "entnahme" });
@@ -574,7 +582,7 @@
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe,
-    ANBRUCH_STUFEN, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte };
+    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
 })(typeof window !== "undefined" ? window : globalThis);
