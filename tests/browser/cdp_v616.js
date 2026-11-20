@@ -1271,10 +1271,11 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await klick(".fenster .knoepfe button", "Speichern"); await warte(600);
     pruefe(await lageVon(reis) === "2/0/-" && !(await js(`${kG(bas)}.dataset.stapel`)) && !(await js(`${kG(reis)}.dataset.stapel`)), "Reis allein auf Reihe 3, ebene null, kein Stapel mehr");
     await klick("#unten button", "Rückgängig"); await warte(600);
-    pruefe(await lageVon(reis) === "0/0/-" && await lageVon(bas) === "0/0/-", "Rückgängig: Reis zurück in den Stapel (beide ohne ebene)");
+    // Review v6.27: Rückgängig stellt auch die ebene zurück -> keine gleiche Ebene, Reihenfolge wie vorher
+    pruefe((await lageVon(reis)).startsWith("0/0/") && await lageVon(bas) === "0/0/-" && (await lageVon(reis)) !== "0/0/-", "Rückgängig: Reis zurück in den Stapel, mit seiner alten ebene (" + await lageVon(reis) + ")");
     await klick(`svg .platz[data-stapel='2']`); await warte(400);
-    pruefe(await js(`document.querySelector(".blatt").textContent.includes("Reihenfolge unklar – „Nach oben holen“ ordnet")`) &&
-      (await js(`[...document.querySelectorAll(".blatt .menueliste button")].map((b) => b.textContent.split(" · ")[0]).slice(0, 2).join()`)) === "● Reis,● Reis Basmati", "M1: gleiche ebene → Name zuerst (Reis), Hinweis „Reihenfolge unklar“");
+    pruefe(!(await js(`document.querySelector(".blatt").textContent.includes("Reihenfolge unklar")`)) &&
+      (await js(`[...document.querySelectorAll(".blatt .menueliste button")].map((b) => b.textContent.split(" · ")[0]).slice(0, 2).join()`)) === "● Reis Basmati,● Reis", "nach Rückgängig: Reihenfolge wie vorher (Basmati oben), kein „Reihenfolge unklar“");
     await js(`history.back(), 1`); await warte(300);
     // Kunstdaten: zwei Dosen mit derselben ebene 3 -> Name, dann Kennung; Nach oben holen räumt auf
     await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(reis)}, feld: "ebene", wert: 3 }, { typ: "feld", art: "fach", ziel: ${JSON.stringify(bas)}, feld: "ebene", wert: 3 }]).then(() => 1)`); await warte(400);
@@ -1283,6 +1284,17 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     pruefe((await menueKnoepfe()).includes("⤒ Nach oben holen"), "oberste bei unklarer Reihenfolge: „Nach oben holen“ angeboten");
     await klick(".blatt button", "Nach oben holen"); await warte(500);
     pruefe(await lageVon(reis) === "0/0/-" && await lageVon(bas) === "0/0/1", "Nach oben holen räumt auf (null, 1)");
+    // Review v6.27: ein Stapel zieht nicht aus der Küchenschublade (im Regal lägen alle Dosen nebeneinander in einer Kiste)
+    const tOrt = await js(`tun([{ typ: "neu", art: "ort", werte: { name: "Stapeltest", reihen: 1, spalten: 2, reihenfolge: 991 } }]).then((v) => v[0].id)`); await warte(400);
+    await js(`(fachAufPlatz(${JSON.stringify(reis)}, { ort: ${JSON.stringify(tOrt)}, reihe: 0, spalte: 0 }), 1)`); await warte(400);
+    pruefe(await lageVon(reis) === "0/0/-" && await lageVon(bas) === "0/0/1" && (await js(`document.body.textContent`)).includes("Ein Stapel zieht nur innerhalb der Küchenschublade um"),
+      "Stapel auf freien Platz eines anderen Orts: abgelehnt mit Hinweis, nichts verschoben");
+    await js(`tun([{ typ: "feld", art: "ort", ziel: ${JSON.stringify(tOrt)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
+    const regalKiste1 = await js(`stand.faecher.find((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === orteSichtbar().find((o) => o.name === "Vorrats-Regal").id && (f.hoch || 1) === 1).id`);
+    await js(`(fachAufFach(${JSON.stringify(reis)}, ${JSON.stringify(regalKiste1)}), 1)`); await warte(300);
+    await klick(".fenster .knoepfe button", "Plätze tauschen"); await warte(400);
+    pruefe(await lageVon(reis) === "0/0/-" && (await js(`document.querySelector(".fenster")?.textContent || ""`)).includes("Ein Stapel zieht nur innerhalb"), "Stapel ⇄ Regal-Kiste: abgelehnt, nichts getauscht");
+    await js(`history.back(), 1`); await warte(300);
     // Platz ändern einer einzelnen Dose: belegter Dosen-Platz = „(Stapel mit …)“, stapelt darunter; zurück auf frei -> ebene null
     await js(`(fachDialog(fachVon(${JSON.stringify(zucker)}), null, "platz"), 1)`); await warte(400);
     const popts = await js(`[...document.querySelectorAll(".fenster select option")].map((o) => o.textContent)`);

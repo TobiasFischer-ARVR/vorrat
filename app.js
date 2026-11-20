@@ -2620,34 +2620,50 @@ const lageGueltig = (l) => { const o = ortVon(l.ort); return !!o && !o.geloescht
 // Gleicher Name wie ein Fach auf dem Platz l? (sonst lassen sich Teile nicht unterscheiden, wie beim Aufteilen)
 const nameDort = (name, l, ausser) => faecherAn(l.ort, l.reihe, l.spalte, ausser).some((x) => x.name.toLowerCase() === name.toLowerCase());
 // Ziel: anderes Fach (nicht auf demselben Platz) oder freier Platz. Immer gegen den aktuellen Stand.
-const fachZug = (f) => zug(() => [el("span", { className: "bild" }, "🗄️"), el("span", null, f.name)], null, (t) => {
+// Codex R4 #1: fertig() laedt vor dem Ablegen den neuen Stand nach. Liegen die angefasste Dose oder das Ziel-Fach dann
+// woanders, wuerde sonst ein fremder Stapel mitgenommen -> Lagen beim Ziehen merken, beim Ablegen vergleichen.
+const fachZug = (f) => { let vorher = null; return zug(() => [el("span", { className: "bild" }, "🗄️"), el("span", null, f.name)], null, (t) => {
   const z = t.closest("[data-fach],[data-platz]"), ich = fachVon(f.id);
   if (!z || !ich || z.dataset.fach === f.id) return null;
   const x = z.dataset.fach && fachVon(z.dataset.fach);
-  return x && gleicheLage(x.lage, ich.lage) ? null : z;
-}, (z) => (z.dataset.platz ? fachAufPlatz(f.id, JSON.parse(z.dataset.platz)) : fachAufFach(f.id, z.dataset.fach)));
+  if (x && gleicheLage(x.lage, ich.lage)) return null;
+  vorher = { ich: lageKopie(ich), ziel: x ? lageKopie(x) : null };
+  return z;
+}, (z) => {
+  const ich = fachVon(f.id), x = z.dataset.fach && fachVon(z.dataset.fach);
+  if (!vorher || !ich || !gleicheLage(ich.lage, vorher.ich) || (z.dataset.fach && (!x || !vorher.ziel || !gleicheLage(x.lage, vorher.ziel))))
+    return hinweis("Inzwischen anders verschoben – bitte nochmal ziehen.");
+  return z.dataset.platz ? fachAufPlatz(f.id, JSON.parse(z.dataset.platz)) : fachAufFach(f.id, z.dataset.fach);
+}); };
 
 // Lagen mehrerer Faecher in EINEM Schritt setzen. Rueckgaengig nur, wenn noch alles so liegt und die alten Plaetze gelten.
 // v6.27: extra = weitere Vorgaenge im selben Schritt (ebene beim Stapeln/Verlassen); Rueckgaengig stellt nur die Lagen zurueck
 // (ebene ist reine Anzeige-Reihenfolge, Bauplan Ablaeufe).
 async function lagenSetzen(neu, text, extra = []) {
   const alt = neu.map(([id]) => [id, lageKopie(fachVon(id))]);
+  // Review v6.27: alte ebene merken, Rueckgaengig stellt sie mit zurueck (nur die, die sich wirklich aendert)
+  const altEbene = extra.filter((v) => v.feld === "ebene").map((v) => [v.ziel, fachVon(v.ziel).ebene ?? null]).filter(([i, e]) => e !== (extra.find((v) => v.ziel === i && v.feld === "ebene").wert ?? null));
   if (!(await tun([...neu.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })), ...extra]))) return;
   untenZeigen(text, "Rückgängig", async () => {
     if (!neu.every(([id, lage]) => fachGueltig(id) && gleicheLage(fachVon(id).lage, lage)))
       return hinweis("Inzwischen anders verschoben – Rückgängig nicht mehr möglich.");
     if (!alt.every(([i, l]) => lageGueltig(l) && (hoeheVon(fachVon(i)) === 1 ? !verdeckt(l, i) : platzFrei(l.ort, l.reihe, l.spalte, i, hoeheVon(fachVon(i))))))
       return hinweis("Den alten Platz gibt es nicht mehr – Rückgängig nicht möglich.");
-    if (await tun(alt.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })))) untenZeigen("Zurück verschoben");
+    if (await tun([...alt.map(([id, lage]) => ({ typ: "feld", art: "fach", ziel: id, feld: "lage", wert: lage })),
+      ...altEbene.filter(([i]) => fachGueltig(i)).map(([id, e]) => ({ typ: "feld", art: "fach", ziel: id, feld: "ebene", wert: e }))])) untenZeigen("Zurück verschoben");
   });
 }
 // v6.27 K6/R9: im Stil dosen zieht der ganze Stapel - Kennungen beim Loslassen aus dem aktuellen Stand, nie aus der Zeichnung.
 const zugGruppe = (f) => stapelVon(f) || [f];
 const gruppeName = (g) => (g.length > 1 ? "Stapel „" + g[0].name + "“ (" + g.length + " Dosen)" : "„" + g[0].name + "“");
+// Review v6.27: ein Stapel gehoert in die Kuechenschublade - im Regal laegen alle Dosen nebeneinander in einer Kiste
+const STAPEL_BLEIBT = "Ein Stapel zieht nur innerhalb der Küchenschublade um. Einzelne Dose: lange drücken → „Aus dem Stapel nehmen“.";
+const stapelRaus = (g, ortId) => g.length > 1 && ortVon(ortId)?.stil !== "dosen";
 function fachAufPlatz(id, lage) {
   if (!fachGueltig(id)) return hinweis("Dieses Fach gibt es nicht mehr.");
   if (!lageGueltig(lage)) return hinweis("Diesen Platz gibt es nicht mehr.");
   const h = hoeheVon(fachVon(id)), g = zugGruppe(fachVon(id));
+  if (stapelRaus(g, lage.ort)) return hinweis(STAPEL_BLEIBT);
   if (!platzFrei(lage.ort, lage.reihe, lage.spalte, id, h))
     return hinweis(h > 1 ? "Dort ist nicht genug Platz für ein Fach über " + h + " Reihen." : "Der Platz ist inzwischen belegt – bitte nochmal ziehen.");
   const o = ortVon(lage.ort);
@@ -2670,9 +2686,11 @@ function fachAufFach(id, zielId) {
   dialog(gruppeName(q0) + " auf „" + kuerze(fachVon(zielId).name, 25) + "“", [
     el("p", { className: "klein" }, (q0.length > 1 ? "Der ganze Stapel zieht mit. " : "") + "Der Inhalt zieht jeweils mit um."),
   ], [
-    knopf("⇄ Plätze tauschen", (x, y) => [...zugGruppe(x).map((f) => [f.id, lageKopie(y)]), ...zugGruppe(y).map((f) => [f.id, lageKopie(x)])],
+    knopf("⇄ Plätze tauschen", (x, y) => (stapelRaus(zugGruppe(x), y.lage.ort) || stapelRaus(zugGruppe(y), x.lage.ort) ? STAPEL_BLEIBT
+      : [...zugGruppe(x).map((f) => [f.id, lageKopie(y)]), ...zugGruppe(y).map((f) => [f.id, lageKopie(x)])]),
       (x, y) => gruppeName(zugGruppe(x)) + " ⇄ „" + y.name + "“ getauscht"),
-    !dosen && knopf("⊕ Daneben legen", (x, y) => (nameDort(x.name, y.lage, id) ? "Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen." : [[id, lageKopie(y)]]),
+    !dosen && knopf("⊕ Daneben legen", (x, y) => (stapelRaus(zugGruppe(x), y.lage.ort) ? STAPEL_BLEIBT
+      : nameDort(x.name, y.lage, id) ? "Dort liegt schon ein Fach mit diesem Namen – bitte erst umbenennen." : [[id, lageKopie(y)]]),
       (x, y) => "„" + x.name + "“ liegt jetzt neben „" + y.name + "“"),
     dosen && stapelbar(fachVon(id)) && stapelVon(fachVon(zielId)) && knopf("📚 Darunter stapeln", (x, y) => {
       const q = zugGruppe(x), z = stapelVon(y);

@@ -210,6 +210,11 @@ fall("nachObenSchritte: oberste null, Rest 1, 2 ... in angezeigter Reihenfolge, 
   assert.deepStrictEqual(H.nachObenSchritte(gleich, "a").map((v) => [v.ziel, v.wert]), [["a", null], ["b", 1]], "M1: raeumt doppelte Ebenen auf");
   assert.deepStrictEqual(H.nachObenSchritte(gleich, "fehlt"), []);
   assert.ok(H.nachObenSchritte(st, "d3").every((v) => M.FELDER.fach.ebene(v.wert)), "nur gueltige Ebenen (null, 1-9)");
+  // Codex R4 #2: durch Abgleich gewachsener Stapel mit 11 Dosen -> hoechstens ebene 9, nichts Ungueltiges
+  const elf = Array.from({ length: 11 }, (_, i) => dose("e" + i, "Dose " + i, Math.min(i, 9) || undefined));
+  const s11 = H.nachObenSchritte(elf, "e10");
+  assert.ok(s11.length > 0 && s11.every((v) => M.FELDER.fach.ebene(v.wert)), "11 Dosen: alle Ebenen gueltig");
+  assert.deepStrictEqual(s11[0], { typ: "feld", art: "fach", ziel: "e10", feld: "ebene", wert: null }, "geholte Dose oben");
 });
 
 fall("stapelDazuSchritte: neue Dose max+1 mit lage, vorhandene nur ebene, > 9 neu nummerieren, > 10 abgelehnt", () => {

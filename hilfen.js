@@ -124,7 +124,8 @@
   const stapelUnklar = (st) => st.some((f, i) => i > 0 && (f.ebene || 0) === (st[i - 1].ebene || 0));
   const ebeneSchritt = (f, wert) => ({ typ: "feld", art: "fach", ziel: f.id, feld: "ebene", wert });
   // Lueckenlos neu nummerieren in dieser Reihenfolge (oberste null, dann 1, 2 ...), nur Werte, die sich aendern.
-  const neuNummerieren = (geordnet) => geordnet.flatMap((f, i) => ((f.ebene ?? null) === (i || null) ? [] : [ebeneSchritt(f, i || null)]));
+  // Codex R4 #2: hoechstens 9 (Modellgrenze) - ein durch Abgleich gewachsener Stapel > 10 hat unten dann Gleichstand nach Name
+  const neuNummerieren = (geordnet) => geordnet.flatMap((f, i) => ((f.ebene ?? null) === (Math.min(i, 9) || null) ? [] : [ebeneSchritt(f, Math.min(i, 9) || null)]));
   // "Nach oben holen": diese Dose oben, der Rest in der angezeigten Reihenfolge (raeumt doppelte Ebenen mit auf).
   function nachObenSchritte(st, id) {
     const s = [...st].sort(stapelOrdnung), f = s.find((x) => x.id === id);
