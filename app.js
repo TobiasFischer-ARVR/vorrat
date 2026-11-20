@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.24"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.25"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -944,8 +944,8 @@ function klarTeile(x, y, w, h, name, zahl) {
 // stehen bis zu 3 Produktbilder auf dem Boden (Foto oder Bildchen, wie auf den Kacheln), darunter das Etikett.
 function ablageTeile(x, y, w, h, f, n) {
   const es = imFach(f.id).sort(nachAblauf);
-  const fo = sv("foreignObject", { x: x + 4, y: y + 4, width: w - 8, height: h - 30 });
-  fo.append(el("div", { className: "ablage" }, es.slice(0, 3).map((e) => el("span", null, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name)))),
+  const fo = h - 30 >= 16 && sv("foreignObject", { x: x + 4, y: y + 4, width: w - 8, height: h - 30 }); // Codex R2 #7: zu niedrig -> nur Etikett
+  if (fo) fo.append(el("div", { className: "ablage" }, es.slice(0, 3).map((e) => el("span", null, bildOder(e.code, e.name, e.symbol || H.bildchen(e.name)))),
     es.length > 3 && el("b", null, "+" + (es.length - 3))));
   const kurz = kuerze(f.name, Math.max(3, Math.floor((w - 16) / 7.2)));
   const lw = Math.min(w - 8, kurz.length * 7.2 + 14), mitte = x + w / 2;
@@ -961,7 +961,8 @@ function ablageTeile(x, y, w, h, f, n) {
 // Name zweizeilig (kein Wischen bei 412 px, K8), Stueckzahl darunter erst ab 2 Reihen Hoehe. Farbwert NUR aus H.deckel().
 function doseTeile(x, y, w, h, f, zahl) {
   const d = H.deckel(f.farbe), mitte = x + w / 2, rx = Math.min(w, h) / 2.4;
-  const zeilen = H.etikettZeilen(f.name, 13).slice(0, 2).map((z) => kuerze(z, 13));
+  const zk = Math.max(3, Math.floor((w - 8) / 4.3)); // Codex R2 #8: Zeichen je Zeile nach Fachbreite (5 Spalten = 13)
+  const zeilen = H.etikettZeilen(f.name, zk).slice(0, 2).map((z) => kuerze(z, zk));
   const lw = Math.min(w - 8, Math.max(...zeilen.map((z) => z.length)) * 4.3 + 8), lh = zeilen.length * 8 + 4;
   const ly = y + Math.max(2, (h - lh) / 2 - (h >= 50 ? 5 : 0));
   return [
@@ -2604,12 +2605,16 @@ async function vorlageEinrichten(id) {
   const frei = (r, c, umzug) => !faecherUeber(id, r, c).some((f) => !umzug.has(f.id));
   const { schritte, bleiben, leer } = H.vorlageSchritte(id, vorlage, frei, vorhanden);
   const neu = schritte.filter((v) => v.typ === "neu").length, um = vorhanden.length - bleiben.length;
+  // Codex R2 #2: die Vorlage setzt das Raster - wer dann ausserhalb liegt (ausser echten Umzueglern), kommt nach "Ort klaeren"
+  const ziehtUm = new Set(vorhanden.filter((v) => !bleiben.includes(v.name)).map((v) => v.id));
+  const raus = ausserhalb(id, vorlage.ort.reihen, vorlage.ort.spalten).filter((f) => !ziehtUm.has(f.id)).map((f) => f.name);
   const namenText = (l) => l.slice(0, 8).join(", ") + (l.length > 8 ? " …" : "");
   if (!confirm("„" + o.name + "“ wie auf dem Foto einrichten?\n\n" + vorlage.text +
     (um ? "\n" + um + " vorhandene Fächer werden umgesetzt, der Inhalt bleibt drin." : "") +
     (neu ? "\n" + neu + " " + vorlage.wort + "/Ablagen werden neu angelegt." : "") +
     (bleiben.length ? "\nBleiben stehen (Zielplatz belegt): " + namenText(bleiben) + "." : "") +
     (leer.length ? "\nNicht angelegt (Platz belegt): " + namenText(leer) + "." : "") +
+    (raus.length ? "\n⚠ Liegen dann außerhalb und kommen nach „Ort klären“ (Inhalt bleibt): " + namenText(raus) + "." : "") +
     "\nEigene Fächer mit anderen Namen bleiben, wo sie sind.")) return false;
   if (!(await tun(schritte))) return false;
   ortWahl = id;

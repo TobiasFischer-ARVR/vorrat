@@ -1072,9 +1072,14 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     // Vorlage anwenden: alte „Schublade“ (mit Inhalt) wandert nach vorne links
     const schub = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Schublade" && f.lage.ort === ${kO}.id).id`);
     const inhalt = await js(`imFach(${JSON.stringify(schub)}).map((e) => e.id).sort().join()`);
+    // v6.25 Codex R2 #2: eigenes Fach, das nach dem Einrichten außerhalb des 8 × 5-Rasters läge, wird in der Rückfrage genannt
+    const rand = await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "spalten", wert: 7 }, { typ: "neu", art: "fach", werte: { name: "Randfach", lage: { ort: ${kO}.id, reihe: 0, spalte: 6 } } }]).then((v) => v[1].id)`); await warte(400);
     const dVorher = dialoge.length;
     await klick(".umbau button", "Wie auf dem Foto einrichten"); await warte(800);
     const frage = dialoge[dVorher] || "";
+    pruefe(frage.includes("kommen nach „Ort klären“") && frage.includes("Randfach") && !frage.match(/außerhalb[^\n]*Schublade/), "R2 #2: Rückfrage nennt „Randfach“ außerhalb, nicht die umziehende Schublade");
+    pruefe(await js(`fachVon(${JSON.stringify(rand)}).ortKlaeren`) === true, "R2 #2: Randfach danach in „Ort klären“");
+    await js(`tun([{ typ: "feld", art: "fach", ziel: ${JSON.stringify(rand)}, feld: "geloescht", wert: true }]).then(() => 1)`); await warte(400);
     pruefe(frage.includes("16 Dosen/Ablagen werden neu angelegt") && frage.includes("1 vorhandene Fächer werden umgesetzt"), "Rückfrage nennt neue und umgesetzte Fächer");
     pruefe(await js(`(() => { const o = ${kO}; return o.reihen === 8 && o.spalten === 5 && o.stil === "dosen"; })()`), "Raster 8 × 5, Stil dosen");
     pruefe(await js(`stand.faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === ${kO}.id).length`) === 17, "16 neue Fächer + alte Schublade, nichts in „Ort klären“");
@@ -1102,6 +1107,16 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // Neue Dose über „+“ mit Farbe, dann Name und Farbe ändern (die Vorlage füllt alle 40 Plätze -> eine Reihe dazu)
     await js(`tun([{ typ: "feld", art: "ort", ziel: ${kO}.id, feld: "reihen", wert: 9 }]).then(() => 1)`); await warte(400);
+    // v6.25 Codex R2 #7 + #8: Ablage 1 Platz hoch (mit Inhalt) ohne kaputte Bildfläche; aufgeteilte Dose mit langem Namen
+    const r2 = await js(`tun([{ typ: "neu", art: "fach", werte: { name: "Flachablage", offen: true, lage: { ort: ${kO}.id, reihe: 8, spalte: 3 } } },
+      { typ: "neu", art: "fach", werte: { name: "Backpulver/Vanillezucker", lage: { ort: ${kO}.id, reihe: 8, spalte: 4 } } },
+      { typ: "neu", art: "fach", werte: { name: "Schokostückchen", lage: { ort: ${kO}.id, reihe: 8, spalte: 4 } } }]).then((v) => v.map((x) => x.id))`); await warte(400);
+    const r2e = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Flachtest", fach: ${JSON.stringify(r2[0])} }, menge: 1 }]).then((v) => v[0].id)`); await warte(400);
+    pruefe(await js(`(() => { const g = document.querySelector('svg .platz[data-fach="${r2[0]}"]'); return !g.querySelector("foreignObject") && g.querySelector(".kname").textContent.startsWith("Flach"); })()`), "R2 #7: Ablage 1 hoch mit Inhalt: nur Etikett, keine Bildfläche mit negativer Höhe");
+    pruefe(await js(`[...document.querySelectorAll("svg foreignObject")].every((f) => Number(f.getAttribute("height")) > 0)`), "R2 #7: keine Bildfläche mit Höhe ≤ 0");
+    pruefe(await js(`[${JSON.stringify(r2[1])}, ${JSON.stringify(r2[2])}].every((id) => { const g = document.querySelector('svg .platz[data-fach="' + id + '"]'), t = g.querySelector(".treffer").getBoundingClientRect();
+      return [...g.querySelectorAll(".dname")].every((x) => { const b = x.getBoundingClientRect(); return b.left >= t.left - .5 && b.right <= t.right + .5; }); })`), "R2 #8: aufgeteilte Dosen: Etikett-Text bleibt in der eigenen Dose");
+    await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(r2e)}, feld: "geloescht", wert: true }, ...${JSON.stringify(r2)}.map((id) => ({ typ: "feld", art: "fach", ziel: id, feld: "geloescht", wert: true }))]).then(() => 1)`); await warte(400);
     pruefe((await js(`document.querySelector("svg .frei").getAttribute("aria-label")`)).endsWith("neue Dose anlegen"), "freier Platz: „neue Dose anlegen“");
     await klick("svg .frei"); await warte(300);
     pruefe(await js(`document.querySelector(".fenster h2").textContent`) === "Neue Dose", "Dialog „Neue Dose“");
