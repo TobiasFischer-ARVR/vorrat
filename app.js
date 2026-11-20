@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.21"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.22"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -1432,7 +1432,7 @@ function fachAnsicht(ebene) {
       return k;
     }),
       ...(m ? [] : [
-        el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "+"), el("span", { className: "name" }, "Neu")),
+        el("button", { className: "kachel neu", onclick: () => eintragDialog(null, id) }, el("span", { className: "bild" }, "📝"), el("span", { className: "name" }, "Manuell")), // v6.22 (Tobias 20.11.): „+ Neu“ war nicht als „von Hand“ erkennbar
         el("button", { className: "kachel neu", onclick: () => multiScan(id) }, el("span", { className: "bild" }, "📷"), el("span", { className: "name" }, "Scannen"))])),
   ];
 }
@@ -2052,7 +2052,7 @@ function multiScan(fachId, alt) {
   };
   dialog("Gescannt", [kopfAnz, tabelle,
     el("div", { className: "zeilen" }, el("button", { type: "button", className: "an weiterscannen", onclick: scannen }, "📷 Weiter scannen"),
-      el("button", { type: "button", className: "zweit weiterscannen", onclick: handDazu }, "✎ Ohne Code dazu")),
+      el("button", { type: "button", className: "zweit weiterscannen", onclick: handDazu }, "📝 Manuell dazu")),
     el("h3", null, "Speichern in"), ziel.teil], [["Alle speichern", speichern], ["Liste verwerfen", verwerfen, "gefahr"]], () => {
     document.removeEventListener("vorrat-bild", bildNeu);
     merken(); // Ziel kann sich seit dem letzten Merken geaendert haben
