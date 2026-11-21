@@ -2813,7 +2813,13 @@ function fachAufFach(id, zielId) {
 // v6.28: neuer Ort ans Ende (Max ueber alle Orte, auch geloeschte)
 const reihenfolgeNeu = () => Math.min(999, stand.orte.reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0));
 // v6.28 (Tobias 21.11.): Haengeregal/Kuehlschrank per Knopf, Ort + Faecher in EINEM Schritt (ganz oder gar nicht).
+let ortAnlage = false; // Codex v6.28 R2: Doppeltipp -> zwei Aufrufe vor dem ersten Schreiben -> zwei Orte
 async function neuerOrt(name) {
+  if (ortAnlage) return;
+  ortAnlage = true;
+  try { await neuerOrtJetzt(name); } finally { ortAnlage = false; }
+}
+async function neuerOrtJetzt(name) {
   const s = await standFrisch(); // Codex R1 #5: frisch, nicht der angezeigte Stand (anderes Handy hat ihn evtl. schon angelegt)
   if (!s) return;
   const d = H.neueOrteFuer(s.orte).find((x) => x.name === name);
