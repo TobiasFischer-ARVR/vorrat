@@ -1077,7 +1077,7 @@ function sortierRahmen(svg, ortId) {
 // v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
 // mehreren Spalten; Schubladen-Orte sind feste Moebel). "−" nur, wenn die letzte Reihe/Spalte leer ist.
 function umbauTeil(o, bearbeiten) {
-  const liste = H.umbauKnoepfe(o, bearbeiten);
+  const liste = H.umbauKnoepfe(o, bearbeiten, darfSchreiben() ? H.neueOrteFuer(stand.orte) : []);
   if (!liste.length) return null;
   const aendern = (feld, delta) => {
     const jetzt = ortVon(o.id);
@@ -1116,7 +1116,8 @@ function umbauTeil(o, bearbeiten) {
   for (const x of liste) {
     let g = gruppen.find((y) => y.name === x.gruppe);
     if (!g) gruppen.push((g = { name: x.gruppe, k: [] }));
-    g.k.push(el("button", { className: "neben" + (x.id === "vorlage" ? " gross" : ""), "aria-label": x.aria, onclick: tat[x.id] }, x.text));
+    const neu = x.id.startsWith("neu:");
+    g.k.push(el("button", { className: "neben" + (x.id === "vorlage" ? " gross" : ""), "aria-label": x.aria, onclick: neu ? () => neuerOrt(x.id.slice(4)) : tat[x.id] }, x.text));
   }
   const raster = (n) => ["Reihen", "Spalten", "Linke Seite", "Rechte Seite"].includes(n);
   return el("section", { className: "umbau", "aria-label": "Umbau " + o.name },
@@ -2775,6 +2776,17 @@ function fachAufFach(id, zielId) {
   ]);
 }
 
+// v6.28: neuer Ort ans Ende (Max ueber alle Orte, auch geloeschte)
+const reihenfolgeNeu = () => Math.min(999, stand.orte.reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0));
+// v6.28 (Tobias 21.11.): Haengeregal/Kuehlschrank per Knopf, Ort + Faecher in EINEM Schritt (ganz oder gar nicht).
+async function neuerOrt(name) {
+  const d = H.neueOrteFuer(stand.orte).find((x) => x.name === name); // gegen den AKTUELLEN Stand
+  if (!d) return hinweis("„" + name + "“ gibt es schon.");
+  if (!confirm("„" + d.name + "“ anlegen?\n\n" + d.text + "\n\nKommt als neuer Reiter ans Ende, danach ist alles änderbar.")) return;
+  const v = await tun(H.neuerOrtSchritte(d, reihenfolgeNeu()));
+  if (v) { ortWahl = v[0].id; zeichnen(); }
+}
+
 // v6.5/v6.6: Vorlage anwenden (Ort-Dialog und Knopf unter der Zeichnung), v6.24 fuer Medizinschrank UND Kuechenschublade
 // (H.vorlageFuer nach Ort-Namen). Belegte Plaetze bleiben.
 async function vorlageEinrichten(id) {
@@ -2828,7 +2840,7 @@ function ortDialog(o) {
       const fe = H.pruefe("ort", werte);
       if (fe) return melde(fe);
       if (!o) { // neuer Ort ans Ende (Max ueber alle Orte, auch geloeschte)
-        werte.reihenfolge = Math.min(999, stand.orte.reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0));
+        werte.reihenfolge = reihenfolgeNeu();
         const v = await tun([{ typ: "neu", art: "ort", werte }]);
         if (v) { ortWahl = v[0].id; schliessen(); }
         return;

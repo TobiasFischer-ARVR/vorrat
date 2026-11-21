@@ -587,4 +587,29 @@ fall("v6.28 rueckSchritte mit Map (Teil verschieben): beide zurueck, fremd geaen
   assert.deepStrictEqual(H.rueckSchritte(fe1, v1, jetztMap(h.vs)), [{ typ: "feld", art: "eintrag", ziel: e1.id, feld: "anbruch", wert: null }]);
 });
 
+fall("v6.28 neue Orte: Haengeregal + Kuehlschrank in EINEM Schritt, alles Ablagen, Knopf nur solange der Name fehlt", () => {
+  const h = teilHandy();
+  // wie Speicher.ausfuehrenAlle: Funktionen bekommen die bisher erzeugten Vorgaenge
+  const lauf = (schritte) => { const bisher = []; for (const s of schritte) for (const d of [].concat(typeof s === "function" ? s(bisher) : s)) bisher.push(...h.tu([d])); return bisher; };
+  assert.deepStrictEqual(H.neueOrteFuer([]).map((d) => d.name), ["Hängeregal", "Kühlschrank"]);
+  const k = lauf(H.neuerOrtSchritte(H.NEUE_ORTE[1], 4));
+  const r = lauf(H.neuerOrtSchritte(H.NEUE_ORTE[0], 5));
+  assert.deepStrictEqual([k.length, r.length], [7, 2], "Ort + 6 bzw. 1 Fach");
+  const s = M.berechne(h.vs);
+  const ort = (n) => s.orte.find((o) => o.name === n);
+  assert.deepStrictEqual([ort("Kühlschrank").reihen, ort("Kühlschrank").spalten, ort("Kühlschrank").reihenfolge, ort("Kühlschrank").farben], [3, 2, 4, ["weiß", "weiß", "weiß"]]);
+  const an = (n, r, c) => s.faecher.find((f) => f.lage.ort === ort(n).id && f.lage.reihe === r && f.lage.spalte === c);
+  assert.deepStrictEqual([[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]].map(([r, c]) => an("Kühlschrank", r, c).name),
+    ["Oben", "Unten", "Gemüsefach", "Tür oben", "Tür Mitte", "Tür unten"]);
+  assert.deepStrictEqual([ort("Hängeregal").reihen, ort("Hängeregal").spalten, an("Hängeregal", 0, 0).name], [1, 1, "Boden"]);
+  assert.ok(s.faecher.every((f) => f.offen === true && !f.ortKlaeren), "alles Ablagen, alles auf gueltigem Platz");
+  // Knoepfe: nur fehlende, geloeschter Ort zaehlt nicht
+  assert.deepStrictEqual(H.neueOrteFuer(s.orte), []);
+  assert.deepStrictEqual(H.neueOrteFuer([{ ...ort("Kühlschrank"), geloescht: true }]).map((d) => d.name), ["Hängeregal", "Kühlschrank"]);
+  const o = { name: "Regal", reihen: 2, spalten: 1 };
+  assert.deepStrictEqual(H.umbauKnoepfe(o, true, H.neueOrteFuer([])).filter((x) => x.gruppe === "Neuer Ort").map((x) => x.text), ["➕ Hängeregal anlegen", "➕ Kühlschrank anlegen"]);
+  assert.deepStrictEqual(H.umbauKnoepfe(o, false, H.neueOrteFuer([])), [], "nur im Bearbeiten-Modus");
+  assert.ok(!H.umbauKnoepfe(o, true).some((x) => x.gruppe === "Neuer Ort"), "ohne Freigabe (darfSchreiben) keine");
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

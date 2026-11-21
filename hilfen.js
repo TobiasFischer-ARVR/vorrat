@@ -195,6 +195,28 @@
     return g.faecher(o.id);
   }]);
 
+  // ---- v6.28 neue Orte per Knopf (Tobias 21.11.): Ort + Faecher in EINEM Schritt, alles Ablagen ohne Kiste ----
+  // faecher: [Name, Reihe, Spalte], Reihe 0 = oben. Kuehlschrank: links innen, rechts die Tuer (dort liegen die Faecher nah
+  // beieinander). farben "weiß" = vorhandener Modellwert (sichtbar nur bei Schubladen-Orten, das Regal bleibt hell).
+  const NEUE_ORTE = [
+    { name: "Hängeregal", reihen: 1, spalten: 1, faecher: [["Boden", 0, 0]], text: "1 Boden als Ablage ohne Kiste." },
+    { name: "Kühlschrank", reihen: 3, spalten: 2,
+      faecher: [["Oben", 0, 0], ["Unten", 1, 0], ["Gemüsefach", 2, 0], ["Tür oben", 0, 1], ["Tür Mitte", 1, 1], ["Tür unten", 2, 1]],
+      text: "3 Reihen × 2 Spalten, alles Ablagen ohne Kiste:\n• links (innen): Oben, Unten, Gemüsefach\n• rechts (Tür): Tür oben, Tür Mitte, Tür unten" },
+  ];
+  // Knopf nur, solange es keinen (nicht geloeschten) Ort mit diesem Namen gibt. ponytail: zwei Handys gleichzeitig = zwei
+  // gleichnamige Orte (bekannter Randfall wie bei den Vorlagen), einen davon loeschen.
+  const neueOrteFuer = (orte) => NEUE_ORTE.filter((d) => !orte.some((o) => !o.geloescht && o.name === d.name));
+  // Schrittliste fuer Speicher.ausfuehrenAlle (Muster grundSchritte): erst der Ort, dann seine Faecher mit der neuen Kennung.
+  const neuerOrtSchritte = (d, reihenfolge) => [
+    { typ: "neu", art: "ort", werte: { name: d.name, reihen: d.reihen, spalten: d.spalten, farben: Array(d.reihen).fill("weiß"), reihenfolge } },
+    (bisher) => {
+      const o = bisher.find((v) => v.typ === "neu" && v.art === "ort" && v.werte.name === d.name);
+      if (!o) throw new Error("Neuer Ort: Ort fehlt");
+      return d.faecher.map(([name, r, c]) => { const v = fachNeu(name, o.id, r, c); v.werte.offen = true; return v; });
+    },
+  ];
+
   // ---- v6.7 Hoehe (Tobias 16.11.: Waermepflaster/Schmerzen sind doppelt hohe Schubladen) ----
   // Verbinden: Inhalt des Fachs darunter wandert nach oben, das untere verschwindet, das obere wird entsprechend hoeher.
   const verbindenSchritte = (obenId, hochNeu, untenId, eintragIds) => [
@@ -712,7 +734,8 @@
   // v6.16: Umbau-Knoepfe unter der Zeichnung - NUR im Bearbeiten-Modus. Liefert { id, gruppe, text, aria } in Anzeige-
   // Reihenfolge; dieselben Bedingungen wie bisher (Raster nur bei mehreren Spalten, "−" nur wenn moeglich,
   // Spalte links/rechts bei Trennwand, Vorlage solange der Ort sie noch nicht hat, v6.24 vorlageFuer).
-  function umbauKnoepfe(o, bearbeiten) {
+  // v6.28 neu = Eintraege aus neueOrteFuer (der Aufrufer gibt nur etwas mit, wenn das Geraet schreiben darf).
+  function umbauKnoepfe(o, bearbeiten, neu = []) {
     if (!bearbeiten || !o) return [];
     const k = [], dazu = (id, gruppe, text, aria) => k.push({ id, gruppe, text, aria: aria || text });
     if (o.spalten >= 2) {
@@ -729,6 +752,7 @@
     const v = vorlageFuer(o);
     if (v) dazu("vorlage", "Vorlage", v.knopf(o));
     dazu("ort", "Ort", "✎ Name und Größe …", "Ort " + o.name + " bearbeiten: Name, Reihen, Spalten");
+    for (const d of neu) dazu("neu:" + d.name, "Neuer Ort", "➕ " + d.name + " anlegen", d.name + " als neuen Ort anlegen");
     return k;
   }
 
@@ -739,7 +763,7 @@
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, KUECHE, kuechePlaetze, VORLAGEN, vorlageFuer, vorlageSchritte, DECKEL, deckel, etikettZeilen, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
-    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe,
+    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe, NEUE_ORTE, neueOrteFuer, neuerOrtSchritte,
     ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte, gleichesProdukt, teilZiel, teilSchritte,
     STAPEL_MAX, stapelbar, stapelOrdnung, stapelVon, stapelUnklar, nachObenSchritte, stapelDazuSchritte, verlassenSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
