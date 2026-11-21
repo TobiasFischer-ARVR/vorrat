@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.27"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.28"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -1355,7 +1355,9 @@ function eintragMenue(e) {
       ["↦ Verschieben", weiter(verschiebenAuf)],
       ["✎ Bearbeiten", weiter(() => eintragDialog(e))],
     ],
-    reihe: a && stufenKnoepfe(e, a.rest),
+    // v6.28: im %-Modus statt der Stufen ein Knopf zum Regler; im Bruch-Modus fuehrt "%" dorthin
+    reihe: a && (inProzent() ? [["🎚 " + H.stufeText(a.rest) + " · ändern", weiter(() => stufenMenue(e)), "an"]]
+      : [...stufenKnoepfe(e, a.rest), ["%", weiter(() => { prozentMerken(true); stufenMenue(e); })]]),
     liste: [
       a && ["↩ Doch nicht offen", weiter(() => dochZu(e))],
       // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
@@ -1369,10 +1371,28 @@ function eintragMenue(e) {
 
 // ---- v6.23 Teilmengen (Bauplan Teilmengen Fassung 3) ----
 // Ein Tipp auf eine Stufe = fertig (schliesst das Menue, dann anbrechen). aktuell = Stufe markieren.
-const stufenKnoepfe = (e, aktuell) => H.ANBRUCH_STUFEN.map(([rest, kurz]) => [kurz, weiter(() => anbrechen(e, rest)), rest === aktuell ? "an" : ""]);
+const stufenKnoepfe = (e, aktuell, stufen = H.ANBRUCH_STUFEN, fn = (rest) => anbrechen(e, rest)) =>
+  stufen.map(([rest, kurz]) => [kurz, weiter(() => fn(rest)), rest === aktuell ? "an" : ""]);
+// v6.28 (Tobias 21.11.): Fuellstand auch in %. Die letzte Wahl Bruch/% merkt sich NUR dieses Geraet (nie OneDrive).
+const FUELL_KEY = "vorrat-fuellstand";
+const inProzent = () => { try { return localStorage.getItem(FUELL_KEY) === "prozent"; } catch (_) { return false; } };
+const prozentMerken = (an) => { try { if (an) localStorage.setItem(FUELL_KEY, "prozent"); else localStorage.removeItem(FUELL_KEY); } catch (_) { /* gesperrt: nur nicht gemerkt */ } };
+const auf5 = (w) => Math.min(100, Math.max(5, Math.round(w / 5) * 5));
+// Fuellstand waehlen: Bruch = Knopfreihe (ein Tipp = fertig), % = Regler 5-100 + "Übernehmen". Umschalten oeffnet dasselbe
+// Menue neu. inhalt() baut den Text jedes Mal frisch; start = Reglerstellung, fertig(rest) laeuft nach dem Schliessen.
+function fuellMenue(titel, inhalt, stufen, aktuell, start, fertig) {
+  const umschalten = (an) => weiter(() => { prozentMerken(an); fuellMenue(titel, inhalt, stufen, aktuell, start, fertig); });
+  if (!inProzent()) return menue(titel, inhalt(), { reihe: stufenKnoepfe(null, aktuell, stufen, fertig), liste: [["🎚 In Prozent wählen", umschalten(true)]] });
+  const zahl = el("output", { className: "prozentzahl", "aria-hidden": "true" }, auf5(start) + " %");
+  const regler = el("input", { type: "range", min: "5", max: "100", step: "5", value: String(auf5(start)), className: "prozentregler", "aria-label": "Füllstand in Prozent",
+    oninput: () => { zahl.textContent = regler.value + " %"; } });
+  return menue(titel, [inhalt(), zahl, regler], { oben: [["Übernehmen", weiter(() => fertig(Number(regler.value))), "an"]], liste: [["½ Als Bruch wählen", umschalten(false)]] });
+}
 function stufenMenue(e) {
-  menue("„" + kuerze(e.name, 30) + "“ anbrechen", [el("p", null, (e.menge >= 2 ? "1 von " + e.menge + " Packungen wird geöffnet. " : "") + "Wie voll ist sie noch?")],
-    { reihe: stufenKnoepfe(e, null) });
+  const a = e.anbruch;
+  fuellMenue("„" + kuerze(e.name, 30) + "“ " + (a ? "Füllstand" : "anbrechen"),
+    () => [el("p", null, a ? "Jetzt: " + H.stufeText(a.rest) + ". Wie voll ist sie noch?" : (e.menge >= 2 ? "1 von " + e.menge + " Packungen wird geöffnet. " : "") + "Wie voll ist sie noch?")],
+    H.ANBRUCH_STUFEN, a ? a.rest : null, a ? a.rest : 100, (rest) => anbrechen(e, rest));
 }
 // Frischer Stand vor jedem Schreiben und Rueckgaengig (Codex #2, R2 #1): unter offenem Menue tauscht laden() nicht,
 // ein Abgleich kann aber schon im Speicher liegen. Eigener Lesezugriff nach Muster offenFrisch: Speicher + OneDrive-Stand,

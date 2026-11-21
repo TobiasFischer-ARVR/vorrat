@@ -477,7 +477,10 @@ fall("v6.23 anbruchText: kurz/lang, Menge >= 2, zu = leer; Stufen = Modellwerte"
   assert.strictEqual(H.anbruchText({ menge: 1 }), "");
   assert.strictEqual(H.anbruchText({ menge: 1, anbruch: null }, true), "");
   assert.deepStrictEqual(H.ANBRUCH_STUFEN.map((s) => s[0]), M.ANBRUCH_REST);
-  assert.deepStrictEqual([H.stufeText(75), H.stufeText(10), H.stufeText(33)], ["¾", "fast leer", ""]);
+  assert.deepStrictEqual([H.stufeText(75), H.stufeText(10), H.stufeText(33), H.stufeText(0), H.stufeText(35.5), H.stufeText("50")], ["¾", "fast leer", "33 %", "", "", ""]);
+  // v6.28: Werte ausserhalb der Stufen als Prozent, auch im aria-Text
+  assert.strictEqual(H.anbruchText({ menge: 1, anbruch: { seit: HEUTE, rest: 35 } }), "offen 35 %");
+  assert.strictEqual(H.anbruchText({ menge: 2, anbruch: { seit: HEUTE, rest: 35 } }, true), "1 angebrochen, 35 Prozent voll");
 });
 
 console.log("\n" + faelle + " Faelle bestanden.");

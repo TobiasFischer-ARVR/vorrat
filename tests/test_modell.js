@@ -395,7 +395,8 @@ fall("v6.23 Feld anbruch: gueltig/ungueltig, strikte Schluessel, __proto__ rutsc
   for (const rest of [100, 75, 50, 25, 10]) assert.ok(ok({ seit: "2026-11-20", rest }), "rest " + rest);
   assert.ok(ok({ rest: 50, seit: "2026-11-20" }), "Schluesselreihenfolge egal");
   const nein = [undefined, false, "offen", 50, [], {}, { seit: "2026-11-20" }, { rest: 50 },
-    { seit: "2026-11-20", rest: 33 }, { seit: "2026-11-20", rest: "50" }, { seit: "2026-11-20", rest: 0 },
+    { seit: "2026-11-20", rest: 101 }, { seit: "2026-11-20", rest: "50" }, { seit: "2026-11-20", rest: 0 }, { seit: "2026-11-20", rest: 35.5 },
+    { seit: "2026-11-20", rest: -5 }, { seit: "2026-11-20", rest: NaN }, { seit: "2026-11-20", rest: null }, { seit: "2026-11-20", rest: true },
     { seit: "2026-02-30", rest: 50 }, { seit: "2026-11", rest: 50 }, { seit: "20.11.2026", rest: 50 }, { seit: null, rest: 50 },
     { seit: "2026-11-20", rest: 50, extra: 1 }];
   for (const w of nein) assert.ok(!ok(w), JSON.stringify(w));
@@ -406,7 +407,7 @@ fall("v6.23 Feld anbruch: gueltig/ungueltig, strikte Schluessel, __proto__ rutsc
   const a = handy("aaaaaaaa1");
   const g = grund(a);
   const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.fach }, menge: 1 });
-  assert.throws(() => a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 33 } }), /Wert ungueltig: anbruch/);
+  assert.throws(() => a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 101 } }), /Wert ungueltig: anbruch/);
   assert.throws(() => a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: JSON.parse('{"seit":"2026-11-20","rest":50,"__proto__":{}}') }), /Wert ungueltig: anbruch/);
   a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-20", rest: 50 } });
   a.tu({ typ: "neu", art: "eintrag", werte: { name: "Zucker", fach: g.fach, anbruch: { seit: "2026-11-19", rest: 10 } }, menge: 1 });
@@ -417,6 +418,31 @@ fall("v6.23 Feld anbruch: gueltig/ungueltig, strikte Schluessel, __proto__ rutsc
   // Kopie nach aussen: Aendern der Anzeige veraendert die Historie nicht (Codex 1a #9)
   eintrag(s, e.id).anbruch.rest = 10;
   assert.strictEqual(eintrag(stand(a), e.id).anbruch.rest, 50);
+});
+
+fall("v6.28 rest: jede ganze Zahl 1-100 (Schieberegler), 0/101/35.5/\"50\" nicht", () => {
+  const ok = M.FELDER.eintrag.anbruch;
+  for (const rest of [1, 5, 33, 35, 99, 100]) assert.ok(ok({ seit: "2026-11-21", rest }), "rest " + rest);
+  for (const rest of [0, 101, 35.5, "50", "35", -1, Infinity]) assert.ok(!ok({ seit: "2026-11-21", rest }), "rest " + String(rest));
+  const a = handy("aaaaaaaa1");
+  const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: grund(a).fach, anbruch: { seit: "2026-11-21", rest: 35 } }, menge: 1 });
+  assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok);
+  assert.strictEqual(eintrag(stand(a), e.id).anbruch.rest, 35);
+});
+
+fall("v6.28 Gegenprobe gemischter Betrieb: die Pruefung von v6.23-v6.27 (nur Stufen) stoppt die Datei bei rest 35", () => {
+  const a = handy("aaaaaaaa1");
+  const e = a.tu({ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: grund(a).fach }, menge: 1 });
+  a.tu({ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: { seit: "2026-11-21", rest: 50 } });
+  const regel = M.FELDER.eintrag.anbruch;
+  // wortgleich die Regel aus modell.js v6.27 (Stufenliste)
+  M.FELDER.eintrag.anbruch = (w) => w === null || (!!w && typeof w === "object" && !Array.isArray(w) && Object.keys(w).length === 2 && Object.hasOwn(w, "seit") &&
+    Object.hasOwn(w, "rest") && /^2[01]\d\d-\d\d-\d\d$/.test(w.seit) && [100, 75, 50, 25, 10].includes(w.rest));
+  try {
+    assert.ok(M.pruefeDatei(datei("aaaaaaaa1", a.liste)).ok, "Stufe 50 liest auch die alte Version");
+    const mit35 = [...a.liste, { ...a.liste.at(-1), id: a.liste.at(-1).inst + "-" + (a.liste.at(-1).n + 1), n: a.liste.at(-1).n + 1, uhr: a.liste.at(-1).uhr + 1, wert: { seit: "2026-11-21", rest: 35 } }];
+    assert.match(M.pruefeDatei(datei("aaaaaaaa1", mit35)).fehler, /^Vorgang \d+: Wert ungueltig: anbruch$/);
+  } finally { M.FELDER.eintrag.anbruch = regel; }
 });
 
 fall("v6.23 Abgleich zweier anbruch-Werte: juengerer Stempel gewinnt als Ganzes (seit + rest passen zusammen)", () => {

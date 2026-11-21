@@ -635,8 +635,10 @@
   const ANBRUCH_STUFEN = [[100, "voll", "noch voll"], [75, "¾", "dreiviertel voll"], [50, "½", "halb voll"], [25, "¼", "ein Viertel voll"], [10, "fast leer", "fast leer"]];
   // Gemeinsamer Text fuer Kachel, Suche, Laeuft bald ab. "" = zu. Ein offener Eintrag ist genau EINE offene Packung
   // (Codex #4): bei Menge >= 2 "1 offen". lang = fuers aria-label.
-  const stufe = (rest) => ANBRUCH_STUFEN.find((x) => x[0] === rest);
-  const stufeText = (rest) => (stufe(rest) || [0, ""])[1]; // "½"; unbekannt -> ""
+  // v6.28: andere Werte (Schieberegler) als "35 %" bzw. "35 Prozent voll". Kein gueltiger Wert -> "".
+  const stufe = (rest) => ANBRUCH_STUFEN.find((x) => x[0] === rest) ||
+    (Number.isInteger(rest) && rest >= 1 && rest <= 100 ? [rest, rest + " %", rest + " Prozent voll"] : null);
+  const stufeText = (rest) => (stufe(rest) || [0, ""])[1]; // "½", "35 %"; unbekannt -> ""
   function anbruchText(e, lang) {
     const s = e && e.anbruch && stufe(e.anbruch.rest);
     if (!s) return "";

@@ -71,7 +71,9 @@
   const lageGueltig = (w) => objekt(w) && Object.keys(w).length === 3 && kennung(w.ort) &&
     ((w.reihe === null && w.spalte === null) || (ganzzahl(w.reihe, 0, 19) && ganzzahl(w.spalte, 0, 19)));
 
-  const ANBRUCH_REST = [100, 75, 50, 25, 10]; // v6.23: Fuellstand in Prozent (voll, 3/4, 1/2, 1/4, fast leer)
+  // v6.23: Fuellstand in Prozent, Stufen voll, 3/4, 1/2, 1/4, fast leer. v6.28 (Tobias 21.11.): jede ganze Zahl 1-100 erlaubt
+  // (Schieberegler), die Stufen bleiben die Knopfreihe. v6.23-v6.27 lehnen andere Werte ab -> Datei-Stopp (fail-safe).
+  const ANBRUCH_REST = [100, 75, 50, 25, 10];
 
   // Erlaubte Felder je Art mit Pruefregel. Unbekanntes Feld = Fehler.
   const FELDER = {
@@ -108,7 +110,7 @@
       // v6.23 Teilmengen: offene Packung, EIN Feld (seit + Fuellstand gleichen sich zusammen ab). Genau diese zwei eigenen
       // Schluessel, sonst Fehler; fehlt/null = zu. Nur geschrieben, wenn eine Packung geoeffnet wird.
       anbruch: (w) => w === null || (objekt(w) && Object.keys(w).length === 2 && Object.hasOwn(w, "seit") && Object.hasOwn(w, "rest") &&
-        datumGueltig(w.seit) && ANBRUCH_REST.includes(w.rest)),
+        datumGueltig(w.seit) && ganzzahl(w.rest, 1, 100)),
       geloescht: bool,
     },
     // Kein "geloescht": Entfernen und Ersetzen sind dasselbe Feld, der juengere Stempel gewinnt (R2 #1).

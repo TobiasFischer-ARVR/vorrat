@@ -266,7 +266,9 @@ main button.ikon { background: transparent; color: #1d6b49; font-size: 1.35rem; 
 .menueoben { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin: 4px 0 10px; }
 .fenster .menueoben button { padding: 14px 6px; font-weight: 600; line-height: 1.2; }
 .fenster .menueoben button.an { background: #1d6b49; color: #fff; }
-.menuereihe { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 0 0 10px; } /* v6.23 Fuellstand-Stufen */
+.menuereihe { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; margin: 0 0 10px; } /* v6.23 Fuellstand-Stufen, v6.28 beliebig viele */
+.prozentzahl { display: block; text-align: center; font-size: 2.6rem; font-weight: 700; margin: 4px 0; } /* v6.28 Regler */
+.prozentregler { display: block; width: 100%; height: 44px; margin: 0 0 12px; accent-color: #1d6b49; }
 .fenster .menuereihe button { padding: 12px 2px; font-weight: 600; line-height: 1.1; }
 .menueliste { display: flex; flex-direction: column; gap: 0; margin-bottom: 4px; }
 .fenster .menueliste button.zeile { margin: 0; padding: 12px 10px; border-radius: 0; background: transparent; color: #1d2b24; border-bottom: 1px solid #e3ece7; }
