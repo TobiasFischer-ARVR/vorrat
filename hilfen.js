@@ -691,10 +691,13 @@
   // Eintrag vor dem Schreiben ODER Map Kennung -> Eintrag vor dem Schreiben (mehrere, v6.28), jetzt = Map Kennung -> frischer
   // Eintrag (auch unsichtbar). Mengen kehren sich immer um, nie ueber geloescht (Codex #1); anbruch nur, wenn dort noch der
   // eben geschriebene Wert steht (R2 #5), dann der Wert von vorher DIESES Eintrags. Liefert Vorgangsdaten oder einen Hinweistext.
-  function rueckSchritte(fertig, vorher, jetzt) {
+  // ganz (v6.28 Teil verschieben, Codex R1 #2-#4): nur zurueck, wenn JEDER beteiligte Eintrag noch genau so dasteht wie nach
+  // dem eigenen Schreiben (Fach, Menge, Fuellstand) - sonst ginge ein Anteil verloren oder entstuende neu.
+  function rueckSchritte(fertig, vorher, jetzt, ganz = false) {
     const vor = vorher instanceof Map ? vorher : new Map([[vorher.id, vorher]]);
     const ids = [...new Set(fertig.map((v) => v.ziel))];
     if (ids.some((id) => !jetzt.get(id) || jetzt.get(id).geloescht)) return "Inzwischen gelöscht – Rückgängig nicht mehr möglich.";
+    if (ganz && !ids.every((id) => unveraendert(id, fertig, vor.get(id), jetzt.get(id)))) return "Inzwischen geändert – Rückgängig nicht mehr möglich.";
     // Review v6.23 #4: alte UND neue Eintraege noch im Fach von damals
     if (fertig.some((v) => v.typ === "neu") && ([...vor.values()].some((x) => jetzt.get(x.id)?.fach !== x.fach) ||
       fertig.some((v) => v.typ === "neu" && jetzt.get(v.ziel).fach !== v.werte.fach)))
@@ -708,6 +711,15 @@
       else if (v.feld === "anbruch" && anbruchGleich(jetzt.get(v.ziel).anbruch, v.wert)) aus.push({ typ: "feld", art: "eintrag", ziel: v.ziel, feld: "anbruch", wert: vor.get(v.ziel)?.anbruch ?? null });
     }
     return aus.length ? aus : "Inzwischen geändert – Rückgängig nicht mehr möglich.";
+  }
+
+  // Stand eines Eintrags direkt nach dem eigenen Schreiben (alt = vorher oder undefined bei neu) gleich dem frischen j?
+  function unveraendert(id, fertig, alt, j) {
+    const neu = fertig.find((v) => v.typ === "neu" && v.ziel === id);
+    const summe = (neu ? neu.menge : alt.summe) + fertig.reduce((s, v) => s + (v.typ === "menge" && v.ziel === id ? v.delta : 0), 0);
+    const feld = fertig.filter((v) => v.typ === "feld" && v.ziel === id && v.feld === "anbruch").pop();
+    const anbruch = feld ? feld.wert : neu ? neu.werte.anbruch : alt.anbruch;
+    return j.fach === (neu ? neu.werte.fach : alt.fach) && j.summe === summe && anbruchGleich(j.anbruch, anbruch);
   }
 
   // ---- v6.28 Teil verschieben (Tobias 21.11.): x Prozent EINER Packung in ein anderes Fach ----

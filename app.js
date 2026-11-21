@@ -1415,11 +1415,11 @@ const frischHolen = async (id) => {
   return x && !x.geloescht ? x : null;
 };
 // Leiste mit Rueckgaengig; was rueckgaengig geht, entscheidet H.rueckSchritte mit dem frischen Stand.
-function rueckAnbieten(text, fertig, vorher, zurueckText) {
+function rueckAnbieten(text, fertig, vorher, zurueckText, ganz = false) {
   untenZeigen(text, "Rückgängig", async () => {
     const jetzt = await eintraegeFrisch();
     if (!jetzt) return;
-    const r = H.rueckSchritte(fertig, vorher, jetzt);
+    const r = H.rueckSchritte(fertig, vorher, jetzt, ganz);
     if (typeof r === "string") return hinweis(r);
     if (await tun(r)) untenZeigen(zurueckText);
   });
@@ -1488,7 +1488,7 @@ async function teilVerschieben(id, x, zielFach) {
   // weniger als gewaehlt: Quelle war leerer (jetzt leer) oder das Ziel ist voll
   const rest = x <= t.m ? "" : t.m >= (q.anbruch ? q.anbruch.rest : 100) ? " (Packung jetzt leer)" : " (mehr passte nicht)";
   rueckAnbieten(q.name + ": " + (t.m === x ? H.stufeText(x) : t.m + " %") + " → " + fachText(zielFach) + (ziel ? ", dazugezählt" : "") + rest, fertig,
-    new Map([q, ziel].filter(Boolean).map((y) => [y.id, y])), q.name + ": Teil zurück");
+    new Map([q, ziel].filter(Boolean).map((y) => [y.id, y])), q.name + ": Teil zurück", true);
   return true;
 }
 
@@ -2814,7 +2814,9 @@ function fachAufFach(id, zielId) {
 const reihenfolgeNeu = () => Math.min(999, stand.orte.reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0));
 // v6.28 (Tobias 21.11.): Haengeregal/Kuehlschrank per Knopf, Ort + Faecher in EINEM Schritt (ganz oder gar nicht).
 async function neuerOrt(name) {
-  const d = H.neueOrteFuer(stand.orte).find((x) => x.name === name); // gegen den AKTUELLEN Stand
+  const s = await standFrisch(); // Codex R1 #5: frisch, nicht der angezeigte Stand (anderes Handy hat ihn evtl. schon angelegt)
+  if (!s) return;
+  const d = H.neueOrteFuer(s.orte).find((x) => x.name === name);
   if (!d) return hinweis("„" + name + "“ gibt es schon.");
   if (!confirm("„" + d.name + "“ anlegen?\n\n" + d.text + "\n\nKommt als neuer Reiter ans Ende, danach ist alles änderbar.")) return;
   const v = await tun(H.neuerOrtSchritte(d, reihenfolgeNeu()));

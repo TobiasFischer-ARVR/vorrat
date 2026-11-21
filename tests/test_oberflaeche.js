@@ -587,6 +587,33 @@ fall("v6.28 rueckSchritte mit Map (Teil verschieben): beide zurueck, fremd geaen
   assert.deepStrictEqual(H.rueckSchritte(fe1, v1, jetztMap(h.vs)), [{ typ: "feld", art: "eintrag", ziel: e1.id, feld: "anbruch", wert: null }]);
 });
 
+fall("v6.28 Codex R1 #2-#4: Teil verschieben nur ganz oder gar nicht zurueck", () => {
+  // Quelle offen 75, Ziel offen 25 -> 25 verschieben -> 50/50; dann fremde Aenderung, dann Rueckgaengig (ganz = true)
+  const fall1 = (fremd) => {
+    const { h, f, g } = teilAufbau();
+    const [q, z] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: f.id, anbruch: { seit: HEUTE, rest: 75 } }, menge: 1 },
+      { typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.id, anbruch: { seit: HEUTE, rest: 25 } }, menge: 1 }]);
+    let j = jetztMap(h.vs);
+    const vor = new Map([[q.id, j.get(q.id)], [z.id, j.get(z.id)]]);
+    const fertig = h.tu(H.teilSchritte(j.get(q.id), j.get(z.id), 25, g.id, HEUTE).schritte);
+    if (fremd) h.tu(fremd({ q, z, f, g }));
+    return H.rueckSchritte(fertig, vor, jetztMap(h.vs), true);
+  };
+  assert.ok(Array.isArray(fall1(null)), "ohne fremde Aenderung geht Rueckgaengig");
+  assert.match(fall1(({ q }) => [{ typ: "feld", art: "eintrag", ziel: q.id, feld: "anbruch", wert: { seit: HEUTE, rest: 25 } }]), /geändert/, "#2 Quelle-Fuellstand fremd");
+  assert.match(fall1(({ z }) => [{ typ: "menge", art: "eintrag", ziel: z.id, delta: -1, grund: "entnahme" }]), /geändert/, "#3a Ziel Leer weg");
+  assert.match(fall1(({ z, f }) => [{ typ: "feld", art: "eintrag", ziel: z.id, feld: "fach", wert: f.id }]), /geändert/, "#4 Ziel verschoben, ohne neu");
+  // #3b: neue Packung im Ziel fremd auf 10 runter -> gesperrt
+  const { h, f, g } = teilAufbau();
+  const [q] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: f.id }, menge: 1 }]);
+  let j = jetztMap(h.vs);
+  const vor = new Map([[q.id, j.get(q.id)]]);
+  const fertig = h.tu(H.teilSchritte(j.get(q.id), null, 25, g.id, HEUTE).schritte);
+  assert.ok(Array.isArray(H.rueckSchritte(fertig, vor, jetztMap(h.vs), true)), "neu ohne fremde Aenderung geht");
+  h.tu([{ typ: "feld", art: "eintrag", ziel: fertig[1].id, feld: "anbruch", wert: { seit: HEUTE, rest: 10 } }]);
+  assert.match(H.rueckSchritte(fertig, vor, jetztMap(h.vs), true), /geändert/, "#3b neue Packung fremd benutzt");
+});
+
 fall("v6.28 neue Orte: Haengeregal + Kuehlschrank in EINEM Schritt, alles Ablagen, Knopf nur solange der Name fehlt", () => {
   const h = teilHandy();
   // wie Speicher.ausfuehrenAlle: Funktionen bekommen die bisher erzeugten Vorgaenge
