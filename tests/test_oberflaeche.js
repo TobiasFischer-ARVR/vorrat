@@ -483,4 +483,108 @@ fall("v6.23 anbruchText: kurz/lang, Menge >= 2, zu = leer; Stufen = Modellwerte"
   assert.strictEqual(H.anbruchText({ menge: 2, anbruch: { seit: HEUTE, rest: 35 } }, true), "1 angebrochen, 35 Prozent voll");
 });
 
+// ---- v6.28 Teil verschieben ----
+function teilAufbau() {
+  const h = teilHandy();
+  const [o] = h.tu([{ typ: "neu", art: "ort", werte: { name: "Regal", reihen: 1, spalten: 2 } }]);
+  const [f, g] = h.tu([{ typ: "neu", art: "fach", werte: { name: "Backen", lage: { ort: o.id, reihe: 0, spalte: 0 } } },
+    { typ: "neu", art: "fach", werte: { name: "Dose", lage: { ort: o.id, reihe: 0, spalte: 1 } } }]);
+  return { h, f, g };
+}
+const MEHL = "gtin:4000417025005";
+
+fall("v6.28 teilSchritte: zu x1 / zu x3 / offen, ohne Ziel = neue offene Packung mit den Werten der Quelle", () => {
+  const { h, f, g } = teilAufbau();
+  const [eins, drei, offen] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", mhd: "2027-03", fach: f.id, code: MEHL }, menge: 1 },
+    { typ: "neu", art: "eintrag", werte: { name: "Zucker", fach: f.id }, menge: 3 },
+    { typ: "neu", art: "eintrag", werte: { name: "Reis", fach: f.id, anbruch: { seit: "2026-11-01", rest: 60 } }, menge: 1 }]);
+  const j = jetztMap(h.vs);
+  // zu x1, 1/4 -> Quelle offen 75, neu im Ziel 25 (alle belegten Felder, fach = Ziel, kein geloescht)
+  let t = H.teilSchritte(j.get(eins.id), null, 25, g.id, HEUTE);
+  assert.strictEqual(t.m, 25);
+  assert.deepStrictEqual(t.schritte, [{ typ: "feld", art: "eintrag", ziel: eins.id, feld: "anbruch", wert: { seit: HEUTE, rest: 75 } },
+    { typ: "neu", art: "eintrag", werte: { name: "Mehl", mhd: "2027-03", fach: g.id, code: MEHL, anbruch: { seit: HEUTE, rest: 25 } }, menge: 1 }]);
+  // zu x3, 1/2 -> abspalten mit 50 + neu im Ziel 50
+  t = H.teilSchritte(j.get(drei.id), null, 50, g.id, HEUTE);
+  assert.deepStrictEqual(t.schritte.map((v) => [v.typ, v.delta || v.werte.anbruch.rest, v.werte && v.werte.fach]),
+    [["menge", -1, undefined], ["neu", 50, f.id], ["neu", 50, g.id]]);
+  // offen 60, 3/4 -> nur 60 da: Quelle leer (-1), Ziel 60
+  t = H.teilSchritte(j.get(offen.id), null, 75, g.id, HEUTE);
+  assert.strictEqual(t.m, 60);
+  assert.deepStrictEqual(t.schritte.map((v) => [v.typ, v.delta || v.werte.anbruch.rest]), [["menge", -1], ["neu", 60]]);
+  // offen 60, 1/4 -> Quelle 35 (seit bleibt)
+  t = H.teilSchritte(j.get(offen.id), null, 25, g.id, HEUTE);
+  assert.deepStrictEqual(t.schritte[0], { typ: "feld", art: "eintrag", ziel: offen.id, feld: "anbruch", wert: { seit: "2026-11-01", rest: 35 } });
+  // Ergebnis gueltig fuers Modell (35 ist erlaubt): Reis 35 in Backen, 25 in Dose
+  h.tu(t.schritte);
+  const s = jetztMap(h.vs);
+  assert.deepStrictEqual([...s.values()].filter((x) => x.name === "Reis" && x.sichtbar).map((x) => x.fach + ":" + x.anbruch.rest).sort(), [f.id + ":35", g.id + ":25"].sort());
+});
+
+fall("v6.28 teilZiel + teilSchritte mit Ziel: dazuzaehlen bis voll, Rest bleibt in der Quelle, voll -> Hinweis", () => {
+  const { h, f, g } = teilAufbau();
+  const [q, z, , andersCode, ohneCode] = h.tu([
+    { typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: f.id, code: MEHL, anbruch: { seit: "2026-11-01", rest: 50 } }, menge: 1 },
+    { typ: "neu", art: "eintrag", werte: { name: "Weizenmehl", fach: g.id, code: MEHL, anbruch: { seit: "2026-11-10", rest: 80 } }, menge: 1 }, // gleicher Code, anderer Name
+    { typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.id, code: MEHL }, menge: 2 },                         // zu -> kein Ziel
+    { typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.id, code: "gtin:4000000000013", anbruch: { seit: HEUTE, rest: 10 } }, menge: 1 }, // anderer Code
+    { typ: "neu", art: "eintrag", werte: { name: " mehl ", fach: g.id, anbruch: { seit: HEUTE, rest: 10 } }, menge: 1 }]); // ohne Code, Name gleich
+  const es = M.berechne(h.vs).eintraege, j = jetztMap(h.vs);
+  assert.strictEqual(H.teilZiel(es, j.get(q.id), g.id).id, [z.id, ohneCode.id].sort()[0], "offen + gleiches Produkt (Code bzw. Name), erste nach Kennung");
+  assert.ok(!H.gleichesProdukt(j.get(q.id), j.get(andersCode.id)), "beide mit Code: Code entscheidet");
+  assert.ok(H.gleichesProdukt(j.get(q.id), j.get(ohneCode.id)), "einer ohne Code: Namensregel (klein, Leerraum)");
+  assert.strictEqual(H.teilZiel(es, j.get(q.id), f.id), null, "eigenes Fach: kein Ziel");
+  assert.strictEqual(H.teilZiel(es.map((x) => (x.id === z.id || x.id === ohneCode.id ? { ...x, bestandPruefen: true } : x)), j.get(q.id), g.id), null, "Bestand pruefen ist kein Ziel");
+  // dazuzaehlen: Ziel 80 + min(50, 50, 20) = 100, Quelle 30
+  const ziel = j.get(z.id);
+  let t = H.teilSchritte(j.get(q.id), ziel, 50, g.id, HEUTE);
+  assert.strictEqual(t.m, 20);
+  assert.deepStrictEqual(t.schritte, [{ typ: "feld", art: "eintrag", ziel: q.id, feld: "anbruch", wert: { seit: "2026-11-01", rest: 30 } },
+    { typ: "feld", art: "eintrag", ziel: z.id, feld: "anbruch", wert: { seit: "2026-11-10", rest: 100 } }]);
+  assert.strictEqual(H.teilSchritte(j.get(q.id), { ...ziel, anbruch: { seit: HEUTE, rest: 100 } }, 25, g.id, HEUTE), "Am Ziel schon voll.");
+  // Ziel nimmt alles, Quelle wird leer
+  t = H.teilSchritte(j.get(q.id), { ...ziel, anbruch: { seit: "2026-11-10", rest: 10 } }, 75, g.id, HEUTE);
+  assert.deepStrictEqual([t.m, t.schritte[0].delta, t.schritte[1].wert.rest], [50, -1, 60]);
+});
+
+fall("v6.28 rueckSchritte mit Map (Teil verschieben): beide zurueck, fremd geaendert/benutzt/verschoben, alte Aufrufer unveraendert", () => {
+  const { h, f, g } = teilAufbau();
+  const [q, z] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: f.id, anbruch: { seit: "2026-11-01", rest: 50 } }, menge: 1 },
+    { typ: "neu", art: "eintrag", werte: { name: "Mehl", fach: g.id, anbruch: { seit: "2026-11-10", rest: 40 } }, menge: 1 }]);
+  let j = jetztMap(h.vs);
+  const vor = new Map([[q.id, j.get(q.id)], [z.id, j.get(z.id)]]);
+  const fertig = h.tu(H.teilSchritte(j.get(q.id), j.get(z.id), 25, g.id, HEUTE).schritte);
+  j = jetztMap(h.vs);
+  assert.deepStrictEqual([j.get(q.id).anbruch.rest, j.get(z.id).anbruch.rest], [25, 65]);
+  assert.deepStrictEqual(H.rueckSchritte(fertig, vor, j), [
+    { typ: "feld", art: "eintrag", ziel: q.id, feld: "anbruch", wert: { seit: "2026-11-01", rest: 50 } },
+    { typ: "feld", art: "eintrag", ziel: z.id, feld: "anbruch", wert: { seit: "2026-11-10", rest: 40 } }], "jeder Eintrag bekommt SEINEN alten Wert");
+  // anderes Handy aendert den Ziel-Fuellstand: nur die Quelle zurueck (R2 #5)
+  const b = teilHandy("teilgeraet2"); b.sieh(h.vs);
+  const fremd = b.tu([{ typ: "feld", art: "eintrag", ziel: z.id, feld: "anbruch", wert: { seit: "2026-11-10", rest: 10 } }]);
+  assert.deepStrictEqual(H.rueckSchritte(fertig, vor, jetztMap([...h.vs, ...fremd])).map((v) => v.ziel), [q.id]);
+  // ohne Ziel: Quelle zu x3 -> abspalten + neu im Ziel, Rueckgaengig = nur Mengen, alle Kennungen geprueft
+  const [drei] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Zucker", fach: f.id }, menge: 3 }]);
+  const vor3 = new Map([[drei.id, jetztMap(h.vs).get(drei.id)]]);
+  const f3 = h.tu(H.teilSchritte(vor3.get(drei.id), null, 25, g.id, HEUTE).schritte);
+  j = jetztMap(h.vs);
+  assert.deepStrictEqual([j.get(drei.id).menge, j.get(f3[1].id).anbruch.rest, j.get(f3[2].id).anbruch.rest, j.get(f3[2].id).fach], [2, 75, 25, g.id]);
+  const r3 = H.rueckSchritte(f3, vor3, j);
+  assert.deepStrictEqual(r3.map((v) => [v.ziel, v.delta]), [[drei.id, 1], [f3[1].id, -1], [f3[2].id, -1]]);
+  assert.ok(!r3.some((v) => v.feld === "geloescht"));
+  b.sieh(h.vs);
+  // Teil am Ziel inzwischen benutzt -> kein Rueckgaengig; alter Eintrag verschoben -> kein Rueckgaengig
+  const benutzt = b.tu([{ typ: "menge", art: "eintrag", ziel: f3[2].id, delta: -1, grund: "entnahme" }]);
+  assert.match(H.rueckSchritte(f3, vor3, jetztMap([...h.vs, ...benutzt])), /benutzt/);
+  const weg = b.tu([{ typ: "feld", art: "eintrag", ziel: drei.id, feld: "fach", wert: g.id }]);
+  assert.match(H.rueckSchritte(f3, vor3, jetztMap([...h.vs, ...weg])), /verschoben/);
+  h.tu(r3);
+  j = jetztMap(h.vs);
+  assert.deepStrictEqual([j.get(drei.id).menge, j.get(f3[1].id).sichtbar, j.get(f3[2].id).sichtbar], [3, false, false], "wieder x3, beide Teile unsichtbar");
+  // alter Aufruf mit EINEM Eintrag geht weiter
+  const [e1] = h.tu([{ typ: "neu", art: "eintrag", werte: { name: "Salz", fach: f.id }, menge: 1 }]);
+  const v1 = jetztMap(h.vs).get(e1.id), fe1 = h.tu(H.anbrechenSchritte(v1, 50, HEUTE));
+  assert.deepStrictEqual(H.rueckSchritte(fe1, v1, jetztMap(h.vs)), [{ typ: "feld", art: "eintrag", ziel: e1.id, feld: "anbruch", wert: null }]);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

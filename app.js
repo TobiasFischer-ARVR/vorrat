@@ -1272,16 +1272,17 @@ async function verschieben(ids, fachId) {
 }
 // Ziel waehlen: Ort -> Fach. Vorbelegt mit dem jetzigen Platz. wert(): undefined = kein Ort gewaehlt (nichts
 // aendern), "" = Ort ohne Faecher, sonst die Fach-Kennung. Faecher ohne gueltigen Platz sind kein Ziel.
-function zielWahl(aktFach, jetztWort = " (jetzt)") {
+// v6.28 ohne = eigenes Fach nicht anbieten (Teil verschieben).
+function zielWahl(aktFach, jetztWort = " (jetzt)", ohne = false) {
   const f = aktFach && fachVon(aktFach);
   const startOrt = f && !f.geloescht && !f.ortKlaeren ? f.lage.ort : "";
   const fachSel = el("select");
   const fachFeld = feld("Fach", fachSel);
-  const leer = el("p", { className: "hinweis-rot" }, "Dieser Ort hat noch keine Kiste.");
+  const leer = el("p", { className: "hinweis-rot" }, ohne ? "Hier gibt es kein anderes Fach." : "Dieser Ort hat noch keine Kiste.");
   const ortSel = el("select", { onchange: () => fuellen() }, el("option", { value: "" }, "– Ort wählen –"),
     orteSichtbar().map((o) => el("option", { value: o.id, selected: o.id === startOrt }, o.name)));
   const fuellen = () => {
-    const fs = ortSel.value ? faecherVonOrt(ortSel.value) : [];
+    const fs = (ortSel.value ? faecherVonOrt(ortSel.value) : []).filter((x) => !ohne || x.id !== aktFach);
     fachSel.replaceChildren(...fs.map((x) => el("option", { value: x.id, selected: x.id === aktFach }, x.name + (x.id === aktFach ? jetztWort : ""))));
     fachFeld.hidden = !fs.length;
     leer.hidden = !ortSel.value || fs.length > 0;
@@ -1360,6 +1361,8 @@ function eintragMenue(e) {
       : [...stufenKnoepfe(e, a.rest), ["%", weiter(() => { prozentMerken(true); stufenMenue(e); })]]),
     liste: [
       a && ["↩ Doch nicht offen", weiter(() => dochZu(e))],
+      // v6.28: gleiche Sperren wie Anbrechen (dort steht dann "Erst nachzählen"/"Erst Ort klären")
+      !e.bestandPruefen && !e.ortKlaeren && e.menge >= 1 && ["↔ Teil verschieben", weiter(() => teilMenue(e))],
       // Dateiauswahl direkt im Tipp oeffnen (braucht die Nutzergeste), erst dann das Menue schliessen.
       ["📷 Foto" + (eig ? " ersetzen" : " aufnehmen oder wählen"), (melde, schliessen) => { fotoWaehlen(e, eig); schliessen(); }],
       eig && ["✖ Foto entfernen", weiter(() => fotoEntfernen(e, eig))],
@@ -1397,10 +1400,13 @@ function stufenMenue(e) {
 // Frischer Stand vor jedem Schreiben und Rueckgaengig (Codex #2, R2 #1): unter offenem Menue tauscht laden() nicht,
 // ein Abgleich kann aber schon im Speicher liegen. Eigener Lesezugriff nach Muster offenFrisch: Speicher + OneDrive-Stand,
 // berechne. Map Kennung -> Eintrag, auch unsichtbar (Menge 0) und geloescht. null = nicht lesbar (Hinweis steht).
+// v6.28 standFrisch: derselbe Lesezugriff, ganzer Stand (Teil verschieben prueft auch das Zielfach frisch).
+async function standFrisch() {
+  try { return Modell.berechne((await lesen()).vorgaenge); } catch (x) { hinweis("Daten nicht lesbar – nichts geändert."); return null; }
+}
 async function eintraegeFrisch() {
-  try {
-    return new Map(Modell.berechne((await lesen()).vorgaenge).eintraege.map((x) => [x.id, x]));
-  } catch (x) { hinweis("Daten nicht lesbar – nichts geändert."); return null; }
+  const s = await standFrisch();
+  return s && new Map(s.eintraege.map((x) => [x.id, x]));
 }
 const frischHolen = async (id) => {
   const jetzt = await eintraegeFrisch(), x = jetzt && jetzt.get(id);
@@ -1442,6 +1448,46 @@ async function leerWeg(e) {
 async function dochZu(e) {
   const x = await frischHolen(e.id);
   if (x && x.anbruch && (await tun([{ typ: "feld", art: "eintrag", ziel: x.id, feld: "anbruch", wert: null }]))) untenZeigen(x.name + " wieder zu");
+}
+
+// ---- v6.28 Teil verschieben (Tobias 21.11.): wie viel von EINER Packung, dann wohin ----
+const TEIL_STUFEN = H.ANBRUCH_STUFEN.filter(([rest]) => rest === 75 || rest === 50 || rest === 25);
+const packungText = (e) => (e.menge >= 2 ? (e.anbruch ? "1 von " + e.menge + " Packungen ist offen, noch " + H.stufeText(e.anbruch.rest) : e.menge + " Packungen, alle zu (voll)")
+  : e.anbruch ? "Die Packung ist offen, noch " + H.stufeText(e.anbruch.rest) : "Die Packung ist zu (voll)");
+function teilMenue(e) {
+  fuellMenue("„" + kuerze(e.name, 30) + "“: Teil verschieben", () => [el("p", { className: "klein" }, packungText(e) + "."), el("p", null, "Wie viel von einer Packung soll woanders hin?")],
+    TEIL_STUFEN, null, 50, (x) => teilZielDialog(e, x));
+}
+function teilZielDialog(e, x) {
+  const z = zielWahl(e.fach, "", true);
+  dialog("„" + kuerze(e.name, 30) + "“: " + H.stufeText(x) + " nach …", [
+    el("p", { className: "klein" }, "Liegt jetzt in: " + fachText(e.fach) + ". Steht dort schon dieselbe offene Packung, wird dazugezählt (höchstens voll)."), z.teil,
+  ], [["Verschieben", async (melde, schliessen) => {
+    const w = z.wert();
+    if (w === undefined) return melde("Bitte Ort wählen.");
+    if (w === "") return melde("Dieser Ort hat noch kein anderes Fach.");
+    if (await teilVerschieben(e.id, x, w)) schliessen();
+  }]]);
+}
+// Quelle, Ziel und Zielfach aus dem FRISCHEN Stand (Bauplan R2 #1), dann EIN tun(), EIN Rueckgaengig.
+async function teilVerschieben(id, x, zielFach) {
+  const s = await standFrisch();
+  if (!s) return false;
+  const q = s.eintraege.find((y) => y.id === id), f = s.faecher.find((y) => y.id === zielFach);
+  if (!q || q.geloescht) { hinweis("Diesen Eintrag gibt es nicht mehr."); return false; }
+  if (q.bestandPruefen || q.ortKlaeren) { hinweis(q.ortKlaeren ? "Erst Ort klären, dann verschieben." : "Erst nachzählen, dann verschieben."); return false; }
+  if (!q.sichtbar || q.menge < 1) { hinweis("Schon leer – inzwischen auf dem anderen Handy entnommen."); return false; }
+  if (!f || f.geloescht || f.ortKlaeren) { hinweis("Dieses Fach gibt es nicht mehr."); return false; }
+  if (q.fach === zielFach) { hinweis("Liegt schon dort – bitte ein anderes Fach wählen."); return false; }
+  const ziel = H.teilZiel(s.eintraege, q, zielFach);
+  const t = H.teilSchritte(q, ziel, x, zielFach, Modell.heuteIso());
+  if (typeof t === "string") { hinweis(t); return false; }
+  const fertig = await tun(t.schritte);
+  if (!fertig) return false;
+  const rest = x > t.m ? " (mehr passte nicht)" : "";
+  rueckAnbieten(q.name + ": " + H.stufeText(t.m) + " → " + fachText(zielFach) + (ziel ? ", dazugezählt" : "") + rest, fertig,
+    new Map([q, ziel].filter(Boolean).map((y) => [y.id, y])), q.name + ": Teil zurück");
+  return true;
 }
 
 // Inhaltsstoffe je EAN, einmal je App-Start geholt; offline wird nicht gemerkt (naechster Tipp versucht es neu).

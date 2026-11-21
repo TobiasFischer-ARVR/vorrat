@@ -649,25 +649,33 @@
   // Packung oeffnen, EIN Schritt (e = frischer Eintrag aus berechne, zu, Menge >= 1). Menge 1: nur das Feld.
   // Menge >= 2: abspalten (T3) = -1 am alten + neuer Eintrag Menge 1 mit denselben Werten (ohne geloescht, nur belegte
   // Felder, also code nur falls vorhanden) und anbruch.
+  // Neue Packung mit den Werten von e (nur belegte Felder, ohne geloescht), Menge 1, offen. v6.28 auch fuers Teil-Verschieben.
+  function packungNeu(e, fach, anbruch) {
+    const werte = {};
+    for (const f of Object.keys(Modell.FELDER.eintrag)) if (f !== "geloescht" && f !== "anbruch" && e[f] != null) werte[f] = e[f];
+    if (fach != null) werte.fach = fach;
+    werte.anbruch = anbruch;
+    return { typ: "neu", art: "eintrag", werte, menge: 1 };
+  }
   function anbrechenSchritte(e, rest, heute) {
     const anbruch = { seit: heute, rest };
     if (e.menge < 2) return [{ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: anbruch }];
-    const werte = {};
-    for (const f of Object.keys(Modell.FELDER.eintrag)) if (f !== "geloescht" && f !== "anbruch" && e[f] != null) werte[f] = e[f];
-    werte.anbruch = anbruch;
-    return [{ typ: "menge", art: "eintrag", ziel: e.id, delta: -1, grund: "entnahme" }, { typ: "neu", art: "eintrag", werte, menge: 1 }];
+    return [{ typ: "menge", art: "eintrag", ziel: e.id, delta: -1, grund: "entnahme" }, packungNeu(e, null, anbruch)];
   }
   // "Leer, weg": -1; bei Menge >= 2 ist die offene leer und der Rest zu (Codex #4).
   const leerSchritte = (e) => [{ typ: "menge", art: "eintrag", ziel: e.id, delta: -1, grund: "entnahme" },
     ...(e.anbruch && e.menge >= 2 ? [{ typ: "feld", art: "eintrag", ziel: e.id, feld: "anbruch", wert: null }] : [])];
-  // Rueckgaengig fuer Anbrechen und "Leer, weg". fertig = die gespeicherten Vorgaenge, vorher = Eintrag vor dem Schreiben,
-  // jetzt = Map Kennung -> frischer Eintrag (auch unsichtbar). Mengen kehren sich immer um, nie ueber geloescht (Codex #1);
-  // anbruch nur, wenn dort noch der eben geschriebene Wert steht (R2 #5). Liefert Vorgangsdaten oder einen Hinweistext.
+  // Rueckgaengig fuer Anbrechen, "Leer, weg" und (v6.28) Teil verschieben. fertig = die gespeicherten Vorgaenge, vorher =
+  // Eintrag vor dem Schreiben ODER Map Kennung -> Eintrag vor dem Schreiben (mehrere, v6.28), jetzt = Map Kennung -> frischer
+  // Eintrag (auch unsichtbar). Mengen kehren sich immer um, nie ueber geloescht (Codex #1); anbruch nur, wenn dort noch der
+  // eben geschriebene Wert steht (R2 #5), dann der Wert von vorher DIESES Eintrags. Liefert Vorgangsdaten oder einen Hinweistext.
   function rueckSchritte(fertig, vorher, jetzt) {
+    const vor = vorher instanceof Map ? vorher : new Map([[vorher.id, vorher]]);
     const ids = [...new Set(fertig.map((v) => v.ziel))];
     if (ids.some((id) => !jetzt.get(id) || jetzt.get(id).geloescht)) return "Inzwischen gelöscht – Rückgängig nicht mehr möglich.";
-    // Review v6.23 #4: alter UND neuer Eintrag noch im Fach von damals
-    if (fertig.some((v) => v.typ === "neu" && (jetzt.get(vorher.id).fach !== vorher.fach || jetzt.get(v.ziel).fach !== v.werte.fach)))
+    // Review v6.23 #4: alte UND neue Eintraege noch im Fach von damals
+    if (fertig.some((v) => v.typ === "neu") && ([...vor.values()].some((x) => jetzt.get(x.id)?.fach !== x.fach) ||
+      fertig.some((v) => v.typ === "neu" && jetzt.get(v.ziel).fach !== v.werte.fach)))
       return "Inzwischen verschoben – Rückgängig nicht mehr möglich.";
     // Review v6.23 #3: die abgespaltene Packung muss noch genau die angelegte Menge haben (sonst ginge sie ins Minus)
     if (fertig.some((v) => v.typ === "neu" && jetzt.get(v.ziel).summe !== v.menge)) return "Inzwischen benutzt – Rückgängig nicht mehr möglich.";
@@ -675,9 +683,30 @@
     for (const v of fertig) {
       if (v.typ === "neu") aus.push({ typ: "menge", art: "eintrag", ziel: v.ziel, delta: -v.menge, grund: "entnahme" });
       else if (v.typ === "menge") aus.push({ typ: "menge", art: "eintrag", ziel: v.ziel, delta: -v.delta, grund: v.delta < 0 ? "zugang" : "entnahme" });
-      else if (v.feld === "anbruch" && anbruchGleich(jetzt.get(v.ziel).anbruch, v.wert)) aus.push({ typ: "feld", art: "eintrag", ziel: v.ziel, feld: "anbruch", wert: vorher.anbruch ?? null });
+      else if (v.feld === "anbruch" && anbruchGleich(jetzt.get(v.ziel).anbruch, v.wert)) aus.push({ typ: "feld", art: "eintrag", ziel: v.ziel, feld: "anbruch", wert: vor.get(v.ziel)?.anbruch ?? null });
     }
     return aus.length ? aus : "Inzwischen geändert – Rückgängig nicht mehr möglich.";
+  }
+
+  // ---- v6.28 Teil verschieben (Tobias 21.11.): x Prozent EINER Packung in ein anderes Fach ----
+  // Gleiches Produkt: beide mit Code -> gleicher Code, sonst gleicher Name nach der Namensregel des Modells.
+  const gleichesProdukt = (a, b) => (a.code && b.code ? a.code === b.code : Modell.namensSchluessel(a.name) === Modell.namensSchluessel(b.name));
+  // Offene Packung desselben Produkts im Zielfach, sauberer Bestand (nicht pruefen/klaeren). Mehrere (zwei Handys): die erste
+  // nach Kennung (feste Wahl auf beiden Handys).
+  const teilZiel = (eintraege, q, fach) => eintraege.filter((e) => e.id !== q.id && e.sichtbar && e.menge >= 1 && e.anbruch && e.fach === fach &&
+    !e.bestandPruefen && !e.ortKlaeren && gleichesProdukt(e, q)).sort((a, b) => (a.id < b.id ? -1 : 1))[0] || null;
+  // q = frische Quelle (Menge >= 1), ziel = teilZiel(...) oder null, x = gewuenschte Prozent einer Packung.
+  // Liefert { schritte, m } (m = wirklich verschoben) oder einen Hinweistext. Was am Ziel nicht passt, bleibt in der Quelle.
+  function teilSchritte(q, ziel, x, zielFach, heute) {
+    const r = q.anbruch ? q.anbruch.rest : 100;
+    const m = Math.min(x, r, ziel ? 100 - ziel.anbruch.rest : 100);
+    if (!(m > 0)) return "Am Ziel schon voll.";
+    const quelle = m >= r ? leerSchritte(q)
+      : q.anbruch ? [{ typ: "feld", art: "eintrag", ziel: q.id, feld: "anbruch", wert: { seit: q.anbruch.seit, rest: r - m } }]
+        : anbrechenSchritte(q, r - m, heute);
+    const dazu = ziel ? { typ: "feld", art: "eintrag", ziel: ziel.id, feld: "anbruch", wert: { seit: ziel.anbruch.seit, rest: ziel.anbruch.rest + m } }
+      : packungNeu(q, zielFach, { seit: heute, rest: m });
+    return { schritte: [...quelle, dazu], m };
   }
 
   // v6.16: Umbau-Knoepfe unter der Zeichnung - NUR im Bearbeiten-Modus. Liefert { id, gruppe, text, aria } in Anzeige-
@@ -711,7 +740,7 @@
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, KUECHE, kuechePlaetze, VORLAGEN, vorlageFuer, vorlageSchritte, DECKEL, deckel, etikettZeilen, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe,
-    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte,
+    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte, gleichesProdukt, teilZiel, teilSchritte,
     STAPEL_MAX, stapelbar, stapelOrdnung, stapelVon, stapelUnklar, nachObenSchritte, stapelDazuSchritte, verlassenSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;
