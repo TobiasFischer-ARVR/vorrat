@@ -672,4 +672,23 @@ fall("v6.28 kochText: Prompt oben, je Ort/Fach, Menge/MHD/essen bis/offen/Markie
   assert.ok(!H.kochText([oM], s.faecher, s.eintraege.filter((e) => e.fach !== m1.id), HEUTE).includes("=="), "leerer Ort: keine Ueberschrift");
 });
 
+fall("v6.29 reiterSchritte: ein Platz je Tipp, nur geaenderte Nummern, gleiche Nummern loesen sich auf, Rand = nichts", () => {
+  const o = (id, reihenfolge) => ({ id, reihenfolge });
+  const orte = [o("a", 0), o("b", 1), o("c", 2)];
+  assert.deepStrictEqual(H.reiterSchritte(orte, "b", -1), [{ typ: "feld", art: "ort", ziel: "b", feld: "reihenfolge", wert: 0 },
+    { typ: "feld", art: "ort", ziel: "a", feld: "reihenfolge", wert: 1 }]);
+  assert.deepStrictEqual(H.reiterSchritte(orte, "a", -1), [], "linker Rand");
+  assert.deepStrictEqual(H.reiterSchritte(orte, "c", 1), [], "rechter Rand");
+  assert.deepStrictEqual(H.reiterSchritte(orte, "x", 1), [], "unbekannt");
+  // zwei Handys legten Orte mit gleicher Nummer an / Luecken: danach 0..n-1
+  const krumm = [o("a", 0), o("b", 5), o("c", 5), o("d", undefined)];
+  const s = H.reiterSchritte(krumm, "c", 1);
+  assert.deepStrictEqual(s.map((v) => v.ziel + "=" + v.wert), ["b=1", "d=2", "c=3"]);
+  for (const v of s) assert.strictEqual(H.pruefe("ort", { reihenfolge: v.wert }), null, "gueltig fuers Modell");
+  // Knoepfe nur im Bearbeiten-Modus und nur wo moeglich
+  const ort = { id: "a", name: "Regal", spalten: 1, reihen: 1 };
+  assert.deepStrictEqual(H.umbauKnoepfe(ort, true, [], { links: false, rechts: true }).filter((k) => k.gruppe === "Reiter").map((k) => k.id), ["reiter+"]);
+  assert.deepStrictEqual(H.umbauKnoepfe(ort, false, [], { links: true, rechts: true }), []);
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

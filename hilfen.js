@@ -774,7 +774,8 @@
   // Reihenfolge; dieselben Bedingungen wie bisher (Raster nur bei mehreren Spalten, "−" nur wenn moeglich,
   // Spalte links/rechts bei Trennwand, Vorlage solange der Ort sie noch nicht hat, v6.24 vorlageFuer).
   // v6.28 neu = Eintraege aus neueOrteFuer (der Aufrufer gibt nur etwas mit, wenn das Geraet schreiben darf).
-  function umbauKnoepfe(o, bearbeiten, neu = []) {
+  // v6.29 reiter = { links, rechts }: ob der Reiter des Orts noch nach links/rechts kann (Tobias 21.11.: Reihenfolge selbst aendern).
+  function umbauKnoepfe(o, bearbeiten, neu = [], reiter = null) {
     if (!bearbeiten || !o) return [];
     const k = [], dazu = (id, gruppe, text, aria) => k.push({ id, gruppe, text, aria: aria || text });
     if (o.spalten >= 2) {
@@ -791,8 +792,20 @@
     const v = vorlageFuer(o);
     if (v) dazu("vorlage", "Vorlage", v.knopf(o));
     dazu("ort", "Ort", "✎ Name und Größe …", "Ort " + o.name + " bearbeiten: Name, Reihen, Spalten");
+    if (reiter && reiter.links) dazu("reiter-", "Reiter", "◀ nach links", "Reiter " + o.name + " eins nach links");
+    if (reiter && reiter.rechts) dazu("reiter+", "Reiter", "nach rechts ▶", "Reiter " + o.name + " eins nach rechts");
     for (const d of neu) dazu("neu:" + d.name, "Neuer Ort", "➕ " + d.name + " anlegen", d.name + " als neuen Ort anlegen");
     return k;
+  }
+
+  // v6.29: Reiter um einen Platz schieben. orte = sichtbare Orte in Anzeige-Reihenfolge. Danach gilt reihenfolge = Position
+  // (0, 1, 2 ...), geschrieben nur, wo sie sich aendert - so loesen sich auch gleiche Nummern (zwei Handys) auf. [] = am Rand.
+  function reiterSchritte(orte, id, richtung) {
+    const i = orte.findIndex((o) => o.id === id), j = i + richtung;
+    if (i < 0 || j < 0 || j >= orte.length) return [];
+    const neu = orte.slice();
+    [neu[i], neu[j]] = [neu[j], neu[i]];
+    return neu.flatMap((o, k) => (o.reihenfolge === k ? [] : [{ typ: "feld", art: "ort", ziel: o.id, feld: "reihenfolge", wert: k }]));
   }
 
   function pruefe(art, werte) {
@@ -802,7 +815,7 @@
 
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, KUECHE, kuechePlaetze, VORLAGEN, vorlageFuer, vorlageSchritte, DECKEL, deckel, etikettZeilen, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
-    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe, NEUE_ORTE, neueOrteFuer, neuerOrtSchritte,
+    eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe, reiterSchritte, NEUE_ORTE, neueOrteFuer, neuerOrtSchritte,
     ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte, gleichesProdukt, teilZiel, teilSchritte, KOCH_PROMPT, kochText,
     STAPEL_MAX, stapelbar, stapelOrdnung, stapelVon, stapelUnklar, nachObenSchritte, stapelDazuSchritte, verlassenSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;

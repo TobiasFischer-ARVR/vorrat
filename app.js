@@ -1,6 +1,6 @@
 // Vorrats-App: Geruest (Abschnitt 1c) und Oberflaeche (Abschnitt 1d).
 "use strict";
-const APP_VERSION = "v6.28"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
+const APP_VERSION = "v6.29"; // UGC #71: im Gleichschritt mit CACHE in service-worker.js pflegen
 
 const haupt = document.getElementById("haupt");
 const leiste = document.getElementById("updateleiste");
@@ -1077,7 +1077,8 @@ function sortierRahmen(svg, ortId) {
 // v6.2 (Tobias 16.11.): Regal-Raster direkt an der Zeichnung vergroessern/verkleinern (nur Orte mit Kisten, also
 // mehreren Spalten; Schubladen-Orte sind feste Moebel). "−" nur, wenn die letzte Reihe/Spalte leer ist.
 function umbauTeil(o, bearbeiten) {
-  const liste = H.umbauKnoepfe(o, bearbeiten, darfSchreiben() ? H.neueOrteFuer(stand.orte) : []);
+  const alle = orteSichtbar(), pos = alle.findIndex((x) => x.id === o.id);
+  const liste = H.umbauKnoepfe(o, bearbeiten, darfSchreiben() ? H.neueOrteFuer(stand.orte) : [], { links: pos > 0, rechts: pos >= 0 && pos < alle.length - 1 });
   if (!liste.length) return null;
   const aendern = (feld, delta) => {
     const jetzt = ortVon(o.id);
@@ -1110,6 +1111,7 @@ function umbauTeil(o, bearbeiten) {
   };
   const tat = { "reihe+": () => aendern("reihen", 1), "reihe-": () => aendern("reihen", -1), "links+": () => linksAendern(1), "links-": () => linksAendern(-1),
     "spalte+": () => aendern("spalten", 1), "spalte-": () => aendern("spalten", -1), vorlage: () => vorlageEinrichten(o.id),
+    "reiter-": () => reiterSchieben(o.id, -1), "reiter+": () => reiterSchieben(o.id, 1),
     ort: () => { const j = ortVon(o.id); if (!j || j.geloescht) return hinweis("Diesen Ort gibt es nicht mehr."); ortDialog(j); } };
   // v6.16: je Gruppe eine Zeile (Beschriftung + Knoepfe). Raster-Knoepfe behalten die Klasse "raster" (Browsertest).
   const gruppen = [];
@@ -2813,6 +2815,13 @@ function fachAufFach(id, zielId) {
 // v6.28: neuer Ort ans Ende (Max ueber alle Orte, auch geloeschte)
 const reihenfolgeNeu = () => Math.min(999, stand.orte.reduce((m, x) => Math.max(m, (x.reihenfolge ?? 0) + 1), 0));
 // v6.28 (Tobias 21.11.): Haengeregal/Kuehlschrank per Knopf, Ort + Faecher in EINEM Schritt (ganz oder gar nicht).
+// v6.29 (Tobias 21.11.): Reiter-Reihenfolge im Bearbeiten-Modus aendern, ein Platz je Tipp, mit Rueckgaengig.
+async function reiterSchieben(id, richtung) {
+  const schritte = H.reiterSchritte(orteSichtbar(), id, richtung);
+  if (!schritte.length) return;
+  if (await tun(schritte)) untenZeigen("Reiter verschoben", "Rückgängig", () => reiterSchieben(id, -richtung));
+}
+
 let ortAnlage = false; // Codex v6.28 R2: Doppeltipp -> zwei Aufrufe vor dem ersten Schreiben -> zwei Orte
 async function neuerOrt(name) {
   if (ortAnlage) return;

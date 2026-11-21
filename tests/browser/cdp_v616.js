@@ -714,9 +714,16 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   pruefe(await js(`!document.querySelector("main button.modusknopf") && document.querySelector("#daumen .stift").textContent === "✎Bearbeiten" && document.querySelector("#daumen .stift").getAttribute("aria-pressed") === "false"`), "v6.19: Schalter „✎ Bearbeiten“ unten in der Leiste, nicht mehr an der Zeichnung");
   await bearb(true);
   pruefe(await js(`stapel.length === 2 && imBearbeiten() && document.querySelector("#daumen .stift").textContent === "✓Fertig" && document.querySelector("#daumen .stift.an") && !!document.querySelector(".zeichenfeld.bearbeiten") && document.querySelector(".zeichenkopf .modus").textContent.includes("Vorrats-Regal")`), "v6.16: Bearbeiten-Modus erkennbar (Fertig, Rahmen, Ortsname), eigene Ebene");
-  pruefe(await js(`[...document.querySelectorAll(".umbau .umbauname")].map((x) => x.textContent).join("|")`) === "Reihen|Spalten|Ort|Neuer Ort", "v6.16: Umbau-Knöpfe gruppiert (Reihen, Spalten, Ort, v6.28 Neuer Ort)");
+  pruefe(await js(`[...document.querySelectorAll(".umbau .umbauname")].map((x) => x.textContent).join("|")`) === "Reihen|Spalten|Ort|Reiter|Neuer Ort", "v6.16: Umbau-Knöpfe gruppiert (Reihen, Spalten, Ort, v6.28 Neuer Ort)");
   await klick(".reiter button", "Gefrierschrank"); await warte(300);
-  pruefe(await js(`imBearbeiten() && !document.querySelector(".knoepfe.raster") && [...document.querySelectorAll(".umbau button")].map((b) => b.textContent).join("|") === "✎ Name und Größe …|➕ Hängeregal anlegen|➕ Kühlschrank anlegen"`), "v6.16: Gefrierschrank im Modus: nur „Name und Größe“ (v6.28: + neue Orte)");
+  pruefe(await js(`imBearbeiten() && !document.querySelector(".knoepfe.raster") && [...document.querySelectorAll(".umbau button")].map((b) => b.textContent).join("|") === "✎ Name und Größe …|nach rechts ▶|➕ Hängeregal anlegen|➕ Kühlschrank anlegen"`), "v6.16: Gefrierschrank im Modus: nur „Name und Größe“ (v6.28: + neue Orte, v6.29: erster Reiter nur ▶)");
+  // v6.29 Reiter-Reihenfolge: ▶ schiebt den Gefrierschrank hinter das Regal, Rückgängig zurück
+  const reiterReihe = () => js(`[...document.querySelectorAll(".reiter button")].slice(0, 3).map((b) => b.textContent).join("|")`);
+  await klick(".umbau button", "nach rechts"); await warte(600);
+  pruefe((await reiterReihe()) === "Vorrats-Regal|Gefrierschrank|Küchenschublade", "v6.29: ▶ Reiter eins nach rechts");
+  pruefe(await js(`[...document.querySelectorAll(".umbau button")].some((b) => b.textContent === "◀ nach links") && imBearbeiten()`), "v6.29: jetzt auch ◀, Modus bleibt");
+  await klick("#unten button", "Rückgängig"); await warte(600);
+  pruefe((await reiterReihe()) === "Gefrierschrank|Vorrats-Regal|Küchenschublade", "v6.29: Rückgängig stellt die Reihenfolge wieder her");
   await klick(".umbau button", "Name und Größe"); await warte(300);
   pruefe(await js(`document.querySelector(".blatt h2").textContent === "Ort bearbeiten" && document.querySelector(".fenster input").value === "Gefrierschrank"`), "v6.16: „Name und Größe“ öffnet den Ort-Dialog");
   await js(`history.back(), 1`); await warte(300);
@@ -1011,7 +1018,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   const medO = (f) => js(`orteSichtbar().find((o) => o.name === "Medizinschrank").${f}`);
   const spalteVon = (n) => js(`stand.faecher.find((f) => !f.geloescht && f.name === ${JSON.stringify(n)}).lage.spalte`);
   await bearb(true);
-  pruefe(await js(`[...document.querySelectorAll(".umbau .umbauname")].map((x) => x.textContent).join("|")`) === "Reihen|Linke Seite|Rechte Seite|Ort|Neuer Ort", "v6.16: Medizinschrank im Modus: Reihen, Linke Seite, Rechte Seite, Ort (v6.28: + Neuer Ort)");
+  pruefe(await js(`[...document.querySelectorAll(".umbau .umbauname")].map((x) => x.textContent).join("|").replace("|Reiter", "")`) === "Reihen|Linke Seite|Rechte Seite|Ort|Neuer Ort", "v6.16: Medizinschrank im Modus: Reihen, Linke Seite, Rechte Seite, Ort (v6.28: + Neuer Ort)");
   await bild("9i-medizin-bearbeiten.png");
   pruefe(await js(`["+ Spalte links", "+ Spalte rechts"].every((t) => [...document.querySelectorAll(".knoepfe.raster button")].some((b) => b.textContent === t))`), "Medizinschrank: „+ Spalte links“ und „+ Spalte rechts“");
   const mag = await spalteVon("Magendarm 1"), ohr = await spalteVon("Ohren");
@@ -1067,7 +1074,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await klick(".reiter button", "Küchenschublade"); await warte(300);
     pruefe(!(await umbauTexte()) && !(await js(`[...document.querySelectorAll("main button")].some((b) => b.textContent.includes("Wie auf dem Foto"))`)), "Vorlage-Knopf im Normalmodus unsichtbar");
     await bearb(true);
-    pruefe((await umbauTexte()) === "🫙 Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)|✎ Name und Größe …|➕ Hängeregal anlegen|➕ Kühlschrank anlegen", "Bearbeiten-Modus Küchenschublade: Knopf „Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)“");
+    pruefe((await umbauTexte()).replace(/\|(◀ nach links|nach rechts ▶)/g, "") === "🫙 Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)|✎ Name und Größe …|➕ Hängeregal anlegen|➕ Kühlschrank anlegen", "Bearbeiten-Modus Küchenschublade: Knopf „Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)“");
 
     // Vorlage anwenden: alte „Schublade“ (mit Inhalt) wandert nach vorne links
     const schub = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Schublade" && f.lage.ort === ${kO}.id).id`);
