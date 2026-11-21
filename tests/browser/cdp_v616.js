@@ -1900,6 +1900,10 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(z)}, feld: "anbruch", wert: { seit: Modell.heuteIso(), rest: 90 } }]).then(() => 1)`);
     await js(`teilVerschieben(${JSON.stringify(q)}, 25, ${JSON.stringify(fb)}).then(() => 1)`); await warte(300);
     pruefe((await ein(q)).rest === 25 && (await ein(z)).rest === 100 && (await unten()).includes("10 % → Teilort – Fach B") && (await unten()).includes("mehr passte nicht"), "Ziel 90 %: nur 10 % verschoben, Rest bleibt in der Quelle, Hinweis „mehr passte nicht“");
+    // Quelle hat weniger als gewaehlt: alles verschoben, Leiste sagt "Packung jetzt leer" (nicht "passte nicht")
+    const q2 = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Restmehl", fach: ${JSON.stringify(fa)}, anbruch: { seit: Modell.heuteIso(), rest: 10 } }, menge: 1 }]).then((v) => v[0].id)`);
+    await js(`teilVerschieben(${JSON.stringify(q2)}, 25, ${JSON.stringify(fb)}).then(() => 1)`); await warte(300);
+    pruefe(!(await ein(q2)).sichtbar && (await unten()).includes("Packung jetzt leer") && !(await unten()).includes("passte nicht"), "Quelle 10 %, ¼ gewählt: alles verschoben, „Packung jetzt leer“");
     const n3 = await js(`liste.length`);
     await js(`teilVerschieben(${JSON.stringify(q)}, 25, ${JSON.stringify(fb)}).then(() => 1)`); await warte(300);
     pruefe(await js(`liste.length`) === n3 && await js(`[...document.querySelectorAll(".hinweis")].some((d) => d.textContent.includes("Am Ziel schon voll"))`), "Ziel voll: Hinweis „Am Ziel schon voll“, nichts geschrieben");
@@ -1950,7 +1954,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     const geteilt = await js(`(async () => { const d = __geteilt; if (!d || !d.files) return null; const f = d.files[0]; return { name: f.name, typ: f.type, text: await f.text() }; })()`);
     pruefe(!!geteilt && geteilt.name === "Vorrat " + (await js(`Modell.heuteIso()`)) + ".txt" && geteilt.typ === "text/plain", "geteilt als Datei „Vorrat JJJJ-MM-TT.txt“ (text/plain)");
     const t = geteilt ? geteilt.text : "";
-    pruefe(t.startsWith("Du bist ein erfahrener Koch") && t.includes("== Teilort ==") && t.includes("Fach A:\n- Teilmehl · offen ¼") && t.includes("Fach B:\n- Teilmehl · offen voll"), "Text: Prompt oben, Orte/Fächer, „Teilmehl · offen ¼“ und „offen voll“");
+    pruefe(t.startsWith("Du bist ein erfahrener Koch") && t.includes("== Teilort ==") && t.includes("Fach A:\n- Teilmehl · offen ¼") && t.includes("Fach B:\n- Restmehl · offen fast leer\n- Teilmehl · offen voll"), "Text: Prompt oben, Orte/Fächer, „Teilmehl · offen ¼“ und „offen voll“");
     pruefe(!t.includes("Testmedizin") && !t.includes("Testpflaster") && !t.includes("gtin:") && !t.includes("pzn:") && !t.includes(await js(`sp.inst`)), "ohne Medizinschrank, ohne Codes und Gerätekennung");
     pruefe(await js(`!document.querySelector(".blatt")`), "Dialog nach dem Teilen zu");
     // ohne Datei-Teilen: Text; ohne Teilen: Zwischenablage

@@ -1485,7 +1485,8 @@ async function teilVerschieben(id, x, zielFach) {
   if (typeof t === "string") { hinweis(t); return false; }
   const fertig = await tun(t.schritte);
   if (!fertig) return false;
-  const rest = x > t.m ? " (mehr passte nicht)" : "";
+  // weniger als gewaehlt: Quelle war leerer (jetzt leer) oder das Ziel ist voll
+  const rest = x <= t.m ? "" : t.m >= (q.anbruch ? q.anbruch.rest : 100) ? " (Packung jetzt leer)" : " (mehr passte nicht)";
   rueckAnbieten(q.name + ": " + (t.m === x ? H.stufeText(x) : t.m + " %") + " → " + fachText(zielFach) + (ziel ? ", dazugezählt" : "") + rest, fertig,
     new Map([q, ziel].filter(Boolean).map((y) => [y.id, y])), q.name + ": Teil zurück");
   return true;
