@@ -1067,7 +1067,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await klick(".reiter button", "Küchenschublade"); await warte(300);
     pruefe(!(await umbauTexte()) && !(await js(`[...document.querySelectorAll("main button")].some((b) => b.textContent.includes("Wie auf dem Foto"))`)), "Vorlage-Knopf im Normalmodus unsichtbar");
     await bearb(true);
-    pruefe((await umbauTexte()) === "🫙 Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)|✎ Name und Größe …", "Bearbeiten-Modus Küchenschublade: Knopf „Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)“");
+    pruefe((await umbauTexte()) === "🫙 Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)|✎ Name und Größe …|➕ Hängeregal anlegen|➕ Kühlschrank anlegen", "Bearbeiten-Modus Küchenschublade: Knopf „Wie auf dem Foto einrichten (14 Dosen, 2 Ablagen)“");
 
     // Vorlage anwenden: alte „Schublade“ (mit Inhalt) wandert nach vorne links
     const schub = await js(`stand.faecher.find((f) => !f.geloescht && f.name === "Schublade" && f.lage.ort === ${kO}.id).id`);
@@ -1384,7 +1384,7 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
   pruefe(await js(`!document.querySelector("#hilfe-fach").hidden`), "Fach: ⓘ zeigt die Erklärung");
   await klick("main button.kachel", "Leistentest"); await warte(400);
   pruefe(await js(`[...document.querySelectorAll(".menueoben button")].map((b) => b.textContent).join("|")`) === "−1 · eins raus|🥣 Anbrechen|↦ Verschieben|✎ Bearbeiten", "Produkt-Menü oben groß: −1 · Anbrechen (v6.23) · Verschieben · Bearbeiten");
-  pruefe(await js(`[...document.querySelectorAll(".menueliste button")].map((b) => b.textContent).join("|")`) === "📷 Foto aufnehmen oder wählen", "Produkt-Menü Liste: Foto");
+  pruefe(await js(`[...document.querySelectorAll(".menueliste button")].map((b) => b.textContent).join("|")`) === "↔ Teil verschieben|📷 Foto aufnehmen oder wählen", "Produkt-Menü Liste: Teil verschieben (v6.28), Foto");
   pruefe(await js(`(() => { const g = document.querySelector(".fenster > :last-child"); return g.classList.contains("menuegefahr") && g.textContent === "🗑 Löschen" && g.querySelector("button").classList.contains("gefahr"); })()`), "🗑 Löschen rot, abgesetzt, ganz unten");
   await bild("9j-menue-produkt.png");
   await klick(".fensterkopf button.schliessen"); await warte(300);
@@ -1829,6 +1829,141 @@ const warte = (ms) => new Promise((r) => setTimeout(r, ms));
     await js(`(baldAlle = false, baldBeimStart = true, zeichnen(), 1)`); await warte(900);
     pruefe(await js(`stapel.length === 1 && baldAlle && !!document.querySelector("main .bald") && !baldBeimStart`), "Start per Meldung (?bald): springt zur ganzen Liste");
     await js(`(localStorage.removeItem(ERINNERUNG_KEY), tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(rid)}, feld: "geloescht", wert: true }]).then(() => 1))`); await warte(300);
+  }
+
+  console.log("19. v6.28: Füllstand in %, Teil verschieben, Hängeregal/Kühlschrank per Knopf, Was kann ich kochen?");
+  {
+    const oberstes = `[...document.querySelectorAll(".blatt")].at(-1)`;
+    const texte = (sel) => js(`[...${oberstes}.querySelectorAll(${JSON.stringify(sel)})].map((b) => b.textContent).join("|")`);
+    const unten = () => js(`document.querySelector("#unten").textContent`);
+    const ein = (id) => js(`(() => { const e = stand.eintraege.find((x) => x.id === ${JSON.stringify(id)}); return e ? { menge: e.menge, sichtbar: e.sichtbar, rest: e.anbruch ? e.anbruch.rest : null, fach: e.fach } : null; })()`);
+    await js(`(localStorage.removeItem("vorrat-fuellstand"), 1)`);
+    const to = await js(`tun([{ typ: "neu", art: "ort", werte: { name: "Teilort", reihen: 1, spalten: 2, reihenfolge: 900 } }]).then((v) => v[0].id)`);
+    const [fa, fb] = await js(`tun([{ typ: "neu", art: "fach", werte: { name: "Fach A", lage: { ort: ${JSON.stringify(to)}, reihe: 0, spalte: 0 } } },
+      { typ: "neu", art: "fach", werte: { name: "Fach B", lage: { ort: ${JSON.stringify(to)}, reihe: 0, spalte: 1 } } }]).then((v) => v.map((x) => x.id))`);
+    const q = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Teilmehl", fach: ${JSON.stringify(fa)} }, menge: 1 }]).then((v) => v[0].id)`);
+    await js(`(oeffne({ art: "fach", id: ${JSON.stringify(fa)} }), 1)`); await warte(400);
+    // B: Anbrechen per Regler, Umschalter gemerkt
+    await klick("main button.kachel", "Teilmehl"); await warte(400);
+    pruefe((await texte(".menueliste button")).includes("↔ Teil verschieben"), "Produkt-Menü (zu): „↔ Teil verschieben“");
+    await klick(".menueoben button", "Anbrechen"); await warte(400);
+    pruefe(await texte(".menuereihe button") === "voll|¾|½|¼|fast leer" && await texte(".menueliste button") === "🎚 In Prozent wählen", "Stufen-Menü: Bruch-Reihe + Umschalter „In Prozent wählen“");
+    await klick(".menueliste button", "In Prozent"); await warte(500);
+    pruefe(await js(`(() => { const r = ${oberstes}.querySelector("input[type=range]"); return !!r && r.min === "5" && r.max === "100" && r.step === "5" && r.value === "100"; })()`) &&
+      await js(`localStorage.getItem("vorrat-fuellstand")`) === "prozent", "%-Modus: Regler 5–100, Schritt 5, steht auf 100; Wahl im Gerät gemerkt");
+    await js(`(() => { const r = ${oberstes}.querySelector("input[type=range]"); r.value = "35"; r.dispatchEvent(new Event("input")); return 1; })()`);
+    pruefe(await js(`${oberstes}.querySelector(".prozentzahl").textContent`) === "35 %", "große Zahlenanzeige folgt dem Regler (35 %)");
+    await bild("19-regler.png");
+    await klick(".menueoben button", "Übernehmen"); await warte(800);
+    pruefe((await ein(q)).rest === 35 && await js(`document.querySelector("main .kachel .fuellstand i").style.width`) === "35%", "angebrochen mit 35 %, Kachel-Leiste 35 %");
+    pruefe((await unten()).includes("geöffnet · 35 %"), "Leiste „Teilmehl geöffnet · 35 %“");
+    await klick("main button.kachel", "Teilmehl"); await warte(400);
+    pruefe(await js(`${oberstes}.querySelector(".offenseit").textContent.endsWith("· 35 %")`) && await texte(".menuereihe button") === "🎚 35 % · ändern", "Menü (offen, %-Modus): „offen seit … · 35 %“, Knopf „🎚 35 % · ändern“");
+    await js(`history.back(), 1`); await warte(400);
+    // Suche zeigt 35 %
+    await js(`history.back(), 1`); await warte(400);
+    await js(`(() => { const i = document.querySelector(".suche input"); i.value = "Teilmehl"; i.dispatchEvent(new Event("input")); return 1; })()`); await warte(200);
+    pruefe(await js(`(() => { const b = document.querySelector(".suche li button"); return !!b && b.querySelector(".was b").textContent === "Teilmehl · offen 35 %" && b.getAttribute("aria-label").includes("angebrochen, 35 Prozent voll"); })()`), "Suche: „Teilmehl · offen 35 %“, aria „35 Prozent voll“");
+    await js(`(() => { const i = document.querySelector(".suche input"); i.value = ""; i.dispatchEvent(new Event("input")); return 1; })()`);
+    await js(`(oeffne({ art: "fach", id: ${JSON.stringify(fa)} }), 1)`); await warte(400);
+    // C: Teil verschieben – %-Modus gemerkt, auf Bruch zurueck, 1/4 ohne Ziel
+    await klick("main button.kachel", "Teilmehl"); await warte(400);
+    await klick(".menueliste button", "Teil verschieben"); await warte(400);
+    pruefe(await js(`!!${oberstes}.querySelector("input[type=range]") && ${oberstes}.textContent.includes("offen, noch 35 %")`), "Teil verschieben öffnet im gemerkten %-Modus, zeigt „offen, noch 35 %“");
+    await klick(".menueliste button", "Als Bruch"); await warte(400);
+    pruefe(await texte(".menuereihe button") === "¾|½|¼" && await js(`localStorage.getItem("vorrat-fuellstand")`) === null, "auf Bruch umgeschaltet: ¾ · ½ · ¼, Wahl gemerkt");
+    await klick(".menuereihe button", "¼"); await warte(400);
+    const zielSetzen = (fach) => js(`(() => { const [o, f] = ${oberstes}.querySelectorAll("select"); o.value = ${JSON.stringify(to)}; o.dispatchEvent(new Event("change"));
+      const opt = [...f.options].map((x) => x.value); f.value = ${JSON.stringify(fach)}; return opt.join(","); })()`);
+    const opts = await zielSetzen(fb);
+    pruefe(!opts.split(",").includes(fa) && opts.split(",").includes(fb), "Ziel-Auswahl ohne das eigene Fach");
+    const n1 = await js(`liste.length`);
+    await klick(".blatt .knoepfe button", "Verschieben"); await warte(800);
+    const neuId = await js(`stand.eintraege.find((e) => e.sichtbar && e.name === "Teilmehl" && e.fach === ${JSON.stringify(fb)})?.id`);
+    pruefe(await js(`liste.length`) === n1 + 2 && (await ein(q)).rest === 10 && neuId && (await ein(neuId)).rest === 25, "¼ ohne Ziel: Quelle 35 → 10 %, neue offene Packung ¼ in Fach B (ein Schritt)");
+    pruefe((await unten()).includes("¼ → Teilort – Fach B") && !(await unten()).includes("dazugezählt"), "Leiste „Teilmehl: ¼ → Teilort – Fach B · Rückgängig“");
+    await klick("#unten button", "Rückgängig"); await warte(800);
+    pruefe((await ein(q)).rest === 35 && !(await ein(neuId)).sichtbar && !(await js(`liste.slice(${n1}).some((v) => v.feld === "geloescht")`)), "Rückgängig: Quelle wieder 35 %, neue Packung weg (nur Mengen, kein geloescht)");
+    // mit Ziel: offene Packung am Ziel -> dazuzaehlen
+    const z = await js(`tun([{ typ: "neu", art: "eintrag", werte: { name: "Teilmehl", fach: ${JSON.stringify(fb)}, anbruch: { seit: Modell.heuteIso(), rest: 60 } }, menge: 1 }]).then((v) => v[0].id)`); await warte(300);
+    await klick("main button.kachel", "Teilmehl"); await warte(400);
+    await klick(".menueliste button", "Teil verschieben"); await warte(400);
+    await klick(".menuereihe button", "¼"); await warte(400);
+    await zielSetzen(fb);
+    const n2 = await js(`liste.length`);
+    await klick(".blatt .knoepfe button", "Verschieben"); await warte(800);
+    pruefe(await js(`liste.length`) === n2 + 2 && (await ein(q)).rest === 10 && (await ein(z)).rest === 85, "¼ mit Ziel: dazugezählt (60 → 85 %), Quelle 35 → 10 %");
+    pruefe((await unten()).includes("dazugezählt"), "Leiste nennt „dazugezählt“");
+    await klick("#unten button", "Rückgängig"); await warte(800);
+    pruefe((await ein(q)).rest === 35 && (await ein(z)).rest === 60, "Rückgängig: beide zurück (35 % / 60 %)");
+    // Ziel fast voll: nur was passt; ganz voll: Hinweis, nichts geschrieben
+    await js(`tun([{ typ: "feld", art: "eintrag", ziel: ${JSON.stringify(z)}, feld: "anbruch", wert: { seit: Modell.heuteIso(), rest: 90 } }]).then(() => 1)`);
+    await js(`teilVerschieben(${JSON.stringify(q)}, 25, ${JSON.stringify(fb)}).then(() => 1)`); await warte(300);
+    pruefe((await ein(q)).rest === 25 && (await ein(z)).rest === 100 && (await unten()).includes("10 % → Teilort – Fach B") && (await unten()).includes("mehr passte nicht"), "Ziel 90 %: nur 10 % verschoben, Rest bleibt in der Quelle, Hinweis „mehr passte nicht“");
+    const n3 = await js(`liste.length`);
+    await js(`teilVerschieben(${JSON.stringify(q)}, 25, ${JSON.stringify(fb)}).then(() => 1)`); await warte(300);
+    pruefe(await js(`liste.length`) === n3 && await js(`[...document.querySelectorAll(".hinweis")].some((d) => d.textContent.includes("Am Ziel schon voll"))`), "Ziel voll: Hinweis „Am Ziel schon voll“, nichts geschrieben");
+    // Zielfach inzwischen geloescht (frischer Stand): nichts geschrieben
+    await js(`(async () => { const v = await tun([{ typ: "neu", art: "fach", werte: { name: "Fach C", lage: { ort: ${JSON.stringify(to)}, reihe: 0, spalte: 1 } } }]); await tun([{ typ: "feld", art: "fach", ziel: v[0].id, feld: "geloescht", wert: true }]); window.__fc = v[0].id; return 1; })()`);
+    const n4 = await js(`liste.length`);
+    await js(`teilVerschieben(${JSON.stringify(q)}, 25, __fc).then(() => 1)`); await warte(300);
+    pruefe(await js(`liste.length`) === n4, "gelöschtes Zielfach: nichts geschrieben");
+    await js(`(document.querySelector("#unten").hidden = true, 1)`);
+    await js(`history.back(), 1`); await warte(400);
+
+    // A: Haengeregal + Kuehlschrank per Knopf
+    await js(`(ortWahl = orteSichtbar()[0].id, zeichnen(), 1)`);
+    await bearb(true);
+    pruefe(await js(`[...document.querySelectorAll(".umbau button")].map((b) => b.textContent).filter((t) => t.startsWith("➕")).join("|")`) === "➕ Hängeregal anlegen|➕ Kühlschrank anlegen", "Bearbeiten-Modus: Knöpfe „➕ Hängeregal anlegen“ und „➕ Kühlschrank anlegen“");
+    const nK = await js(`liste.length`), nD = dialoge.length;
+    await klick(".umbau button", "Kühlschrank anlegen"); await warte(900);
+    const kOrt = `orteSichtbar().find((o) => o.name === "Kühlschrank")`;
+    pruefe(dialoge.length === nD + 1 && dialoge.at(-1).includes("Tür oben"), "Rückfrage vor dem Anlegen (nennt die Türfächer)");
+    pruefe(await js(`liste.length`) === nK + 7 && await js(`(() => { const o = ${kOrt}; return !!o && o.reihen === 3 && o.spalten === 2 && ortWahl === o.id && o.reihenfolge === Math.max(...stand.orte.map((x) => x.reihenfolge ?? 0)); })()`), "Kühlschrank 3 × 2 in einem Schritt (Ort + 6 Fächer), Reiter gewählt, Reihenfolge ans Ende");
+    pruefe(await js(`(() => { const o = ${kOrt}, an = (r, c) => stand.faecher.find((f) => f.lage.ort === o.id && f.lage.reihe === r && f.lage.spalte === c);
+      return [[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]].map(([r, c]) => an(r, c).name + (an(r, c).offen ? "" : "!")).join("|"); })()`) === "Oben|Unten|Gemüsefach|Tür oben|Tür Mitte|Tür unten", "Fächer links Oben/Unten/Gemüsefach, rechts Tür oben/Mitte/unten, alle Ablagen");
+    await bild("19-kuehlschrank.png");
+    await klick(".umbau button", "Hängeregal anlegen"); await warte(900);
+    pruefe(await js(`(() => { const o = orteSichtbar().find((x) => x.name === "Hängeregal"); const f = o && stand.faecher.filter((x) => x.lage.ort === o.id); return !!o && o.reihen === 1 && o.spalten === 1 && f.length === 1 && f[0].name === "Boden" && f[0].offen === true; })()`), "Hängeregal 1 × 1 mit Ablage „Boden“");
+    pruefe(await js(`![...document.querySelectorAll(".umbau button")].some((b) => b.textContent.startsWith("➕")) && ![...document.querySelectorAll(".umbau .umbauname")].some((x) => x.textContent === "Neuer Ort")`), "danach beide Knöpfe weg");
+    await bearb(false);
+
+    // D: Was kann ich kochen?
+    // eigener Sortierkasten-Ort (der Medizinschrank der Grundausstattung ist hier schon umgebaut/leer)
+    await js(`(async () => { const o = await tun([{ typ: "neu", art: "ort", werte: { name: "Testmedizin", reihen: 1, spalten: 1, stil: "sortierkasten", reihenfolge: 950 } }]);
+      const f = await tun([{ typ: "neu", art: "fach", werte: { name: "Pflasterfach", lage: { ort: o[0].id, reihe: 0, spalte: 0 } } }]);
+      await tun([{ typ: "neu", art: "eintrag", werte: { name: "Testpflaster", fach: f[0].id, code: "pzn:00000017" }, menge: 1 }]); return 1; })()`);
+    await js(`(window.__geteilt = null, Object.defineProperty(navigator, "canShare", { configurable: true, value: (d) => !!(d && d.files) }),
+      Object.defineProperty(navigator, "share", { configurable: true, value: async (d) => { if (window.__abbruch) throw new DOMException("x", "AbortError"); window.__geteilt = d; } }), 1)`);
+    await js(`(oeffne({ art: "menue" }), 1)`); await warte(300);
+    pruefe(await js(`[...document.querySelectorAll("main button.zeile")][0].textContent`) === "🍳 Was kann ich kochen?", "☰-Menü: „🍳 Was kann ich kochen?“ ganz oben");
+    await klick("main button.zeile", "Was kann ich kochen"); await warte(400);
+    const haken = await js(`[...${oberstes}.querySelectorAll("label.schalter")].map((l) => l.textContent + "=" + l.querySelector("input").checked).join("|")`);
+    console.log("  Haken: " + haken);
+    pruefe(haken.includes("Testmedizin=false") && haken.includes("Teilort=true") && haken.includes("Kühlschrank=true"), "Haken je Ort, Medizinschrank vorab aus");
+    await bild("19-kochen.png");
+    await js(`(window.__abbruch = true, 1)`);
+    await klick(".blatt .knoepfe button", "Teilen"); await warte(400);
+    pruefe(await js(`!!document.querySelector(".blatt") && !__geteilt && ![...document.querySelectorAll(".hinweis")].some((d) => d.textContent.includes("Teilen ging nicht"))`), "Teilen abgebrochen (AbortError): still, Dialog bleibt offen");
+    await js(`(window.__abbruch = false, 1)`);
+    await klick(".blatt .knoepfe button", "Teilen"); await warte(500);
+    const geteilt = await js(`(async () => { const d = __geteilt; if (!d || !d.files) return null; const f = d.files[0]; return { name: f.name, typ: f.type, text: await f.text() }; })()`);
+    pruefe(!!geteilt && geteilt.name === "Vorrat " + (await js(`Modell.heuteIso()`)) + ".txt" && geteilt.typ === "text/plain", "geteilt als Datei „Vorrat JJJJ-MM-TT.txt“ (text/plain)");
+    const t = geteilt ? geteilt.text : "";
+    pruefe(t.startsWith("Du bist ein erfahrener Koch") && t.includes("== Teilort ==") && t.includes("Fach A:\n- Teilmehl · offen ¼") && t.includes("Fach B:\n- Teilmehl · offen voll"), "Text: Prompt oben, Orte/Fächer, „Teilmehl · offen ¼“ und „offen voll“");
+    pruefe(!t.includes("Testmedizin") && !t.includes("Testpflaster") && !t.includes("gtin:") && !t.includes("pzn:") && !t.includes(await js(`sp.inst`)), "ohne Medizinschrank, ohne Codes und Gerätekennung");
+    pruefe(await js(`!document.querySelector(".blatt")`), "Dialog nach dem Teilen zu");
+    // ohne Datei-Teilen: Text; ohne Teilen: Zwischenablage
+    await js(`(Object.defineProperty(navigator, "canShare", { configurable: true, value: () => false }), 1)`);
+    await klick("main button.zeile", "Was kann ich kochen"); await warte(300);
+    await klick(".blatt .knoepfe button", "Teilen"); await warte(400);
+    pruefe(await js(`!!__geteilt && !__geteilt.files && __geteilt.text.startsWith("Du bist")`), "ohne Datei-Teilen: als Text geteilt");
+    await js(`(window.__ablage = null, Object.defineProperty(navigator, "share", { configurable: true, value: undefined }),
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (x) => { window.__ablage = x; } } }), 1)`);
+    await klick("main button.zeile", "Was kann ich kochen"); await warte(300);
+    await klick(".blatt .knoepfe button", "Teilen"); await warte(400);
+    pruefe(await js(`(__ablage || "").startsWith("Du bist") && [...document.querySelectorAll(".hinweis")].some((d) => d.textContent.includes("Zwischenablage"))`), "ohne Teilen: Zwischenablage + Hinweis");
+    await js(`history.back(), 1`); await warte(300);
   }
 
   console.log(fehler.length ? "Konsole:\n  " + fehler.join("\n  ") : "Konsole: keine Fehler");

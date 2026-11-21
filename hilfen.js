@@ -731,6 +731,33 @@
     return { schritte: [...quelle, dazu], m };
   }
 
+  // ---- v6.28 "Was kann ich kochen?" (Tobias 21.11.): Vorrat als Text fuer eine KI-App (Android-Teilen-Menue) ----
+  // Nur sichtbare Eintraege mit gueltigem Platz, KEINE Codes, Kennungen, Geraetenamen. Markierung mit den Schwellen der App
+  // (baldStufe: rot <= 7, gelb <= 30 Tage).
+  const KOCH_PROMPT = "Du bist ein erfahrener Koch. Schlag mir 5 Gerichte mit diesen Zutaten aus meinem Vorrat vor. " +
+    "Bevorzuge, was bald abläuft oder schon offen ist. Sag bei jedem Gericht, was mir dafür noch fehlt. Salz, Pfeffer, Öl und Wasser setz voraus.";
+  function kochZeile(e, heute) {
+    const st = baldStufe(e.ablauf, heute);
+    return "- " + [e.name.replace(/\s+/g, " ").trim() + (e.bestandPruefen ? " (Menge unklar)" : e.menge >= 2 ? " ×" + e.menge : ""),
+      e.mhd ? "MHD " + deDatum(e.mhd) : e.ablauf ? "essen bis " + deDatum(e.ablauf) : "", anbruchText(e),
+      st === "abgelaufen" ? "ABGELAUFEN" : st ? "läuft bald ab" : ""].filter(Boolean).join(" · ");
+  }
+  // orte = gewaehlte Orte in Anzeige-Reihenfolge; Faecher nach Platz, Eintraege nach Datum (ohne Datum zuletzt), dann Name.
+  function kochText(orte, faecher, eintraege, heute) {
+    const zeilen = [KOCH_PROMPT, "", "Mein Vorrat, Stand " + deDatum(heute) + ":"];
+    for (const o of orte) {
+      const teil = faecher.filter((f) => !f.geloescht && !f.ortKlaeren && f.lage.ort === o.id)
+        .sort((a, b) => a.lage.reihe - b.lage.reihe || a.lage.spalte - b.lage.spalte || a.name.localeCompare(b.name, "de", { numeric: true }))
+        .flatMap((f) => {
+          const es = eintraege.filter((e) => e.sichtbar && !e.ortKlaeren && e.fach === f.id)
+            .sort((a, b) => (a.ablauf || "9").localeCompare(b.ablauf || "9") || a.name.localeCompare(b.name, "de"));
+          return es.length ? [f.name + ":", ...es.map((e) => kochZeile(e, heute))] : [];
+        });
+      if (teil.length) zeilen.push("", "== " + o.name + " ==", ...teil);
+    }
+    return zeilen.join("\n");
+  }
+
   // v6.16: Umbau-Knoepfe unter der Zeichnung - NUR im Bearbeiten-Modus. Liefert { id, gruppe, text, aria } in Anzeige-
   // Reihenfolge; dieselben Bedingungen wie bisher (Raster nur bei mehreren Spalten, "−" nur wenn moeglich,
   // Spalte links/rechts bei Trennwand, Vorlage solange der Ort sie noch nicht hat, v6.24 vorlageFuer).
@@ -764,7 +791,7 @@
   const Hilfen = { bildchen, FRISTEN, FRIST_SCHNELL, fristKategorie, fristVorschlag, BALD, baldStufe, baldAb, fachMarken, fundort, baldText,
     gtinOk, pznOk, verfallAus, leseCode, codeAusEingabe, offName, codesSauber, codesMerken, mhdMonat, mhdJahr, mhdTeile, deDatum, kurzDatum, fachNeu, grundausstattung, grundSchritte, pruefe, paketeZeilen, woSchon, aufteilenSchritte, zusammenSchritte, verbindenSchritte, MEDIZIN, medizinPlaetze, medizinSchritte, KUECHE, kuechePlaetze, VORLAGEN, vorlageFuer, vorlageSchritte, DECKEL, deckel, etikettZeilen, bildUrlOk, offBild, ausschnitt, codeText, bildMasse,
     eigenesFoto, fotoSchritt, fotoWegSchritte, bilderNamen, offDetails, menueTeile, umbauKnoepfe, NEUE_ORTE, neueOrteFuer, neuerOrtSchritte,
-    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte, gleichesProdukt, teilZiel, teilSchritte,
+    ANBRUCH_STUFEN, stufeText, offenZuerst, anbruchText, anbrechenSchritte, leerSchritte, rueckSchritte, gleichesProdukt, teilZiel, teilSchritte, KOCH_PROMPT, kochText,
     STAPEL_MAX, stapelbar, stapelOrdnung, stapelVon, stapelUnklar, nachObenSchritte, stapelDazuSchritte, verlassenSchritte };
   if (typeof module !== "undefined" && module.exports) module.exports = Hilfen;
   else wurzel.Hilfen = Hilfen;

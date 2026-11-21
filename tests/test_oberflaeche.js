@@ -612,4 +612,37 @@ fall("v6.28 neue Orte: Haengeregal + Kuehlschrank in EINEM Schritt, alles Ablage
   assert.ok(!H.umbauKnoepfe(o, true).some((x) => x.gruppe === "Neuer Ort"), "ohne Freigabe (darfSchreiben) keine");
 });
 
+fall("v6.28 kochText: Prompt oben, je Ort/Fach, Menge/MHD/essen bis/offen/Markierung, nur Sichtbares, keine Codes/Kennungen", () => {
+  const h = teilHandy();
+  const [gf, med] = h.tu([{ typ: "neu", art: "ort", werte: { name: "Gefrierschrank", reihen: 2, spalten: 1 } },
+    { typ: "neu", art: "ort", werte: { name: "Medizinschrank", reihen: 1, spalten: 1, stil: "sortierkasten" } }]);
+  const [s1, s2, m1] = h.tu([{ typ: "neu", art: "fach", werte: { name: "Schublade 1", lage: { ort: gf.id, reihe: 0, spalte: 0 } } },
+    { typ: "neu", art: "fach", werte: { name: "Schublade 2", lage: { ort: gf.id, reihe: 1, spalte: 0 } } },
+    { typ: "neu", art: "fach", werte: { name: "Pflaster", lage: { ort: med.id, reihe: 0, spalte: 0 } } }]);
+  const [, , , , weg, minus] = h.tu([
+    { typ: "neu", art: "eintrag", werte: { name: "Erbsen", mhd: "2026-11-25", fach: s1.id, code: MEHL }, menge: 3 },     // rot
+    { typ: "neu", art: "eintrag", werte: { name: "Pizza  Salami", mhd: "2027-03", fach: s1.id }, menge: 1 },           // ok, Leerraum
+    { typ: "neu", art: "eintrag", werte: { name: "Gulasch", eingefroren: "2026-06-01", frist: 6, fach: s2.id, anbruch: { seit: HEUTE, rest: 35 } }, menge: 1 }, // essen bis 01.12., gelb
+    { typ: "neu", art: "eintrag", werte: { name: "Eis", mhd: "2026-10", fach: s2.id }, menge: 2 },                     // abgelaufen
+    { typ: "neu", art: "eintrag", werte: { name: "Weg", fach: s2.id }, menge: 1 },
+    { typ: "neu", art: "eintrag", werte: { name: "Brot", fach: s2.id }, menge: 1 },
+    { typ: "neu", art: "eintrag", werte: { name: "Ibuprofen", fach: m1.id }, menge: 1 }]);
+  h.tu([{ typ: "feld", art: "eintrag", ziel: weg.id, feld: "geloescht", wert: true }, { typ: "menge", art: "eintrag", ziel: minus.id, delta: -3, grund: "entnahme" }]);
+  const s = M.berechne(h.vs), oG = s.orte.find((o) => o.id === gf.id), oM = s.orte.find((o) => o.id === med.id);
+  const t = H.kochText([oG], s.faecher, s.eintraege, HEUTE);
+  assert.strictEqual(t.split("\n")[0], H.KOCH_PROMPT);
+  assert.ok(/5 Gerichte/.test(H.KOCH_PROMPT) && /bald abläuft/.test(H.KOCH_PROMPT) && /fehlt/.test(H.KOCH_PROMPT) && /Salz, Pfeffer, Öl und Wasser/.test(H.KOCH_PROMPT));
+  assert.deepStrictEqual(t.split("\n").slice(1), ["", "Mein Vorrat, Stand 20.11.2026:", "", "== Gefrierschrank ==",
+    "Schublade 1:",
+    "- Erbsen ×3 · MHD 25.11.2026 · läuft bald ab",
+    "- Pizza Salami · MHD 03.2027",
+    "Schublade 2:",
+    "- Eis ×2 · MHD 10.2026 · ABGELAUFEN",
+    "- Gulasch · essen bis 01.12.2026 · offen 35 % · läuft bald ab",
+    "- Brot (Menge unklar)"]);
+  assert.ok(!t.includes("gtin") && !t.includes(h.vs[0].inst) && !t.includes("Weg") && !t.includes("Ibuprofen"), "keine Codes/Kennungen, nichts Geloeschtes, Medizinschrank nicht gewaehlt");
+  assert.ok(H.kochText([oG, oM], s.faecher, s.eintraege, HEUTE).endsWith("== Medizinschrank ==\nPflaster:\n- Ibuprofen"));
+  assert.ok(!H.kochText([oM], s.faecher, s.eintraege.filter((e) => e.fach !== m1.id), HEUTE).includes("=="), "leerer Ort: keine Ueberschrift");
+});
+
 console.log("\n" + faelle + " Faelle bestanden.");

@@ -1486,7 +1486,7 @@ async function teilVerschieben(id, x, zielFach) {
   const fertig = await tun(t.schritte);
   if (!fertig) return false;
   const rest = x > t.m ? " (mehr passte nicht)" : "";
-  rueckAnbieten(q.name + ": " + H.stufeText(t.m) + " → " + fachText(zielFach) + (ziel ? ", dazugezählt" : "") + rest, fertig,
+  rueckAnbieten(q.name + ": " + (t.m === x ? H.stufeText(x) : t.m + " %") + " → " + fachText(zielFach) + (ziel ? ", dazugezählt" : "") + rest, fertig,
     new Map([q, ziel].filter(Boolean).map((y) => [y.id, y])), q.name + ": Teil zurück");
   return true;
 }
@@ -1645,7 +1645,8 @@ function bestandAnsicht() {
 function menueAnsicht() {
   const suche = el("button", { className: "zeile", onclick: async () => { suche.disabled = true; await updateSuchen(); suche.disabled = false; } }, "↻ Nach Update suchen");
   return [kopf("Menü"),
-    stand && [el("h3", null, "Orte"),
+    stand && [el("button", { className: "zeile", onclick: kochDialog }, "🍳 Was kann ich kochen?"), // v6.28
+      el("h3", null, "Orte"),
       orteSichtbar().map((o) => el("button", { className: "zeile", onclick: () => ortDialog(o) }, "✎ " + o.name + " (" + o.reihen + " × " + o.spalten + ")")),
       el("button", { className: "zeile", onclick: () => ortDialog(null) }, "+ Ort anlegen")],
     el("h3", null, "OneDrive"),
@@ -1654,6 +1655,38 @@ function menueAnsicht() {
     el("h3", null, "App"),
     el("button", { className: "zeile", onclick: () => oeffne({ art: "pruefen" }) }, "🔍 Prüfen"),
     suche];
+}
+
+// ---- v6.28 "Was kann ich kochen?" (Tobias 21.11.): Haken je Ort, Medizinschrank (stil sortierkasten) vorab aus ----
+// Liest den angezeigten Stand (nur lesen, nichts wird geschrieben).
+function kochDialog() {
+  const orte = orteSichtbar();
+  const haken = orte.map((o) => el("input", { type: "checkbox", checked: o.stil !== "sortierkasten" }));
+  dialog("🍳 Was kann ich kochen?", [
+    el("p", { className: "klein" }, "Schickt deinen Vorrat samt Frage an eine KI-App (z. B. ChatGPT, Gemini, Claude). Ohne Strichcodes und Gerätenamen."),
+    orte.map((o, i) => el("label", { className: "schalter" }, haken[i], o.name)),
+  ], [["📤 Teilen", async (melde, schliessen) => {
+    const wahl = orte.filter((o, i) => haken[i].checked);
+    if (!wahl.length) return melde("Bitte mindestens einen Ort wählen.");
+    const heute = Modell.heuteIso(), text = H.kochText(wahl, stand.faecher, stand.eintraege, heute);
+    if (!text.includes("\n- ")) return melde("In den gewählten Orten liegt nichts.");
+    if (await textTeilen(text, "Vorrat " + heute + ".txt")) schliessen();
+  }]]);
+}
+// Erst als Datei (text/plain), sonst als Text, sonst Zwischenablage. Abbrechen im Teilen-Menue (AbortError) = still.
+// Kein await vor navigator.share: es braucht den Tipp als Nutzergeste.
+async function textTeilen(text, name) {
+  try {
+    const datei = new File([text], name, { type: "text/plain" });
+    if (navigator.canShare && navigator.canShare({ files: [datei] })) await navigator.share({ files: [datei], title: name });
+    else if (navigator.share) await navigator.share({ title: name, text });
+    else { await navigator.clipboard.writeText(text); hinweis("In die Zwischenablage kopiert – in der KI-App einfügen."); }
+    return true;
+  } catch (x) {
+    if (x && x.name === "AbortError") return false;
+    try { await navigator.clipboard.writeText(text); hinweis("Teilen ging nicht – in die Zwischenablage kopiert."); return true; }
+    catch (_) { hinweis("Teilen ging nicht auf diesem Gerät."); return false; }
+  }
 }
 
 function pruefenAnsicht(ebene) {
